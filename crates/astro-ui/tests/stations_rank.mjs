@@ -24,3 +24,10 @@ const blind = rank(list, null).map(s => s.name);
 assert.equal(blind[0], 'sans-gps', 'sans position du visiteur : la plus libre');
 assert.equal(rank([st('x', { lat: 43.6, lon: 1.44, used: 9, total: 10 }), st('y', { lat: 43.62, lon: 1.45, used: 1, total: 10 })], toulouse)[0].name, 'y', 'à moins de 5 km près, la plus libre');
 console.log('stations_rank : ok');
+// Portail : la porte ouverte à l'arrivée.
+import { door } from '../web/stations.js';
+assert.equal(door('#membre', null), 'member', 'lien « Retrouver ma station » de la connexion');
+assert.equal(door('#nouveau', { url: 'https://a' }), 'new', 'l’adresse prime sur la mémoire');
+assert.equal(door('', { url: 'https://a' }), 'member', 'déjà venu : la porte des membres');
+assert.equal(door('', null), 'new', 'premier passage : la porte des nouveaux');
+console.log('portail : portes OK');

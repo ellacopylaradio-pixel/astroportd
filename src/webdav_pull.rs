@@ -92,6 +92,14 @@ pub struct Source {
     pub remote_path: String,
     /// Dossier du uCloud où ranger la reprise (`/Photos/Import_Fred`).
     pub dest_prefix: String,
+    /// Types de fichiers repris (`images`, `music`, `videos`, `documents`, `archives`) ; vide : tout est repris. Ce qui est d'un
+    /// autre type, ou d'un type inconnu, reste sur le serveur distant.
+    #[serde(default)]
+    pub kinds: Vec<String>,
+    /// Rangement automatique : chaque fichier va dans le dossier de son type (`/Images`, `/Musique`…, comme le rangement du uCloud)
+    /// au lieu du dossier de destination ; un type inconnu reste sous le dossier de destination.
+    #[serde(default)]
+    pub sort: bool,
     /// Adresses privées admises (serveur sur le réseau local). Réservé à la ligne de commande de l'opérateur.
     #[serde(default)]
     pub allow_private: bool,
@@ -211,6 +219,11 @@ fn validate(src: &mut Source) -> Result<(), PullError> {
         src.label = src.url.clone();
     }
     src.label = src.label.chars().filter(|c| !c.is_control()).take(80).collect();
+    src.kinds.sort();
+    src.kinds.dedup();
+    if let Some(bad) = src.kinds.iter().find(|k| !crate::organize::Kind::ALL.iter().any(|a| a.id() == k.as_str())) {
+        return Err(PullError::Invalid(format!("type de fichier inconnu : {bad}")));
+    }
     Ok(())
 }
 
@@ -447,6 +460,8 @@ pub struct PullReport {
     pub changed: usize,
     /// Fichiers plus gros que le plafond.
     pub too_large: usize,
+    /// Fichiers laissés sur le serveur parce que leur type n'est pas dans le filtre de la source.
+    pub filtered: usize,
     /// Octets de clair repris.
     pub bytes: u64,
     /// Le parcours a été borné.
@@ -473,6 +488,11 @@ pub async fn pull<B: BlobStore>(st: &Arc<DavState<B>>, owner: &str, src: &Source
             break;
         }
         progress(snap(n, &report));
+        let kind = crate::organize::classify(file.mime.as_deref().unwrap_or(""), &file.name);
+        if !src.kinds.is_empty() && !kind.is_some_and(|k| src.kinds.iter().any(|x| x == k.id())) {
+            report.filtered += 1;
+            continue;
+        }
         let remote_path = file.dirs.iter().map(String::as_str).chain(std::iter::once(file.name.as_str())).collect::<Vec<_>>().join("/");
         let Some(name) = sanitize_name(&file.name) else {
             report.errors.push((remote_path, "nom de fichier inutilisable".into()));
@@ -483,7 +503,11 @@ pub async fn pull<B: BlobStore>(st: &Arc<DavState<B>>, owner: &str, src: &Source
             report.errors.push((remote_path, "nom de dossier inutilisable".into()));
             continue;
         };
-        let dest_dir = normalize_path(&std::iter::once(src.dest_prefix.as_str()).chain(dirs.iter().map(String::as_str)).collect::<Vec<_>>().join("/")).unwrap_or_else(|_| src.dest_prefix.clone());
+        let base = match kind {
+            Some(k) if src.sort => format!("/{}", k.folder()),
+            _ => src.dest_prefix.clone(),
+        };
+        let dest_dir = normalize_path(&std::iter::once(base.as_str()).chain(dirs.iter().map(String::as_str)).collect::<Vec<_>>().join("/")).unwrap_or_else(|_| base.clone());
         let dest = if dest_dir == "/" { format!("/{name}") } else { format!("{dest_dir}/{name}") };
         // Déjà repris de cette source (où que le fichier soit allé depuis), ou déjà là au chemin de destination (reprise d'une
         // ancienne importation) : dans ce dernier cas on l'adopte, pour que la mémoire survive à un déplacement.
@@ -610,6 +634,12 @@ pub struct Draft {
     /// Dossier de dépôt dans le uCloud (défaut : `/Imports/<libellé>`).
     #[serde(default)]
     pub dest: Option<String>,
+    /// Types repris (vide : tous).
+    #[serde(default)]
+    pub kinds: Vec<String>,
+    /// Ranger chaque fichier dans le dossier de son type.
+    #[serde(default)]
+    pub sort: bool,
 }
 
 /// Les reprises d'un titulaire : sources, passages en cours, derniers bilans.
@@ -622,7 +652,7 @@ pub struct PullService<B: BlobStore> {
 }
 
 fn summary(r: &PullReport, dry_run: bool) -> Value {
-    json!({ "remote": r.remote, "dirs": r.dirs, "imported": r.imported, "skipped": r.skipped, "changed": r.changed, "too_large": r.too_large, "errors": r.errors.len(), "bytes": r.bytes, "capped": r.capped, "stopped": r.stopped, "dry_run": dry_run,
+    json!({ "remote": r.remote, "dirs": r.dirs, "imported": r.imported, "skipped": r.skipped, "changed": r.changed, "too_large": r.too_large, "filtered": r.filtered, "errors": r.errors.len(), "bytes": r.bytes, "capped": r.capped, "stopped": r.stopped, "dry_run": dry_run,
             "first_errors": r.errors.iter().take(5).map(|(p, why)| json!({ "path": p, "why": why })).collect::<Vec<_>>() })
 }
 
@@ -660,7 +690,7 @@ impl<B: BlobStore> PullService<B> {
                 json!({ "state": state, "dry_run": j.dry_run, "started": j.started, "finished": j.finished, "progress": j.progress,
                         "report": j.outcome.as_ref().and_then(|o| o.as_ref().ok()), "error": j.outcome.as_ref().and_then(|o| o.as_ref().err()) })
             });
-            out.push(json!({ "id": s.id, "label": s.label, "url": s.url, "username": s.username, "remote_path": s.remote_path, "dest_prefix": s.dest_prefix, "private_ok": s.allow_private, "job": job, "last": self.last(owner, &s.id).await }));
+            out.push(json!({ "id": s.id, "label": s.label, "url": s.url, "username": s.username, "remote_path": s.remote_path, "dest_prefix": s.dest_prefix, "kinds": s.kinds, "sort": s.sort, "private_ok": s.allow_private, "job": job, "last": self.last(owner, &s.id).await }));
         }
         Ok(json!({ "sources": out }))
     }
@@ -675,7 +705,7 @@ impl<B: BlobStore> PullService<B> {
             Some(x) => x.to_owned(),
             None => format!("/Imports/{}", sanitize_name(&name).unwrap_or_else(|| "source".into())),
         };
-        let draft = Source { id: String::new(), label: d.label, url: d.url, username: d.username, password: d.password, remote_path: d.remote_path, dest_prefix, allow_private: false, created_at: 0 };
+        let draft = Source { id: String::new(), label: d.label, url: d.url, username: d.username, password: d.password, remote_path: d.remote_path, dest_prefix, kinds: d.kinds, sort: d.sort, allow_private: false, created_at: 0 };
         let mut probe = draft.clone();
         validate(&mut probe)?;
         check(&probe).await?;

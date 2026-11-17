@@ -3,7 +3,10 @@
 //! - **`face`** : moteur d'inférence faciale — ONNX local, Brain GPU distant ou arrêt — sans redémarrer le démon. Une
 //!   option de ligne de commande (`--face-engine`, `--face-models`) verrouille ce réglage : l'interface le dit.
 //! - **`kinds`** : matrice du relai par kind (lecture, écriture, projection en base). Couches, de la plus faible à la plus
-//!   forte : défauts du relai, lignes `kind.<n> = read=… write=… project=…` de `station.conf`, réglages du Capitaine.
+//!   forte : défauts du relai, lignes `kind.<n> = read=… write=… project=…` de `station.conf`, **mode de la station**
+//!   (Place publique : profil et notes publiques ouverts à tous), réglages fins du Capitaine.
+//! - **`locks`** : les écluses de la station (écran Écluses) — vue d'ensemble et choix du mode Forteresse / Village / Place
+//!   publique ([`astro_db::station_mode`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -250,6 +253,31 @@ pub struct KindsControl {
     relay: Arc<Relay>,
 }
 
+/// Règles qu'apporte un mode : la Place publique laisse tout le monde publier son profil (kind 0) et des notes publiques
+/// (kind 1) sur le relai ; les autres kinds restent au cercle. Forteresse et Village ne changent pas la matrice (la
+/// Forteresse resserre le **cercle** lui-même : voir `astro-relay::circle`).
+pub fn mode_rules(mode: astro_db::station_mode::Mode) -> BTreeMap<u32, String> {
+    match mode {
+        astro_db::station_mode::Mode::Place => [(0, "write=open"), (1, "write=open")].into_iter().map(|(k, v)| (k, v.to_owned())).collect(),
+        _ => BTreeMap::new(),
+    }
+}
+
+/// `station.conf` puis le mode (qui complète la ligne du fichier sans l'effacer).
+fn with_mode(conf: &BTreeMap<u32, String>, mode: astro_db::station_mode::Mode) -> BTreeMap<u32, String> {
+    let mut out = conf.clone();
+    for (k, spec) in mode_rules(mode) {
+        let merged = out.get(&k).map_or_else(|| spec.clone(), |c| format!("{c} {spec}"));
+        out.insert(k, merged);
+    }
+    out
+}
+
+/// Mode courant de la station (Village par défaut, et si la base ne répond pas).
+pub async fn station_mode(db: &Db) -> astro_db::station_mode::Mode {
+    db.readers().read(|c| Ok(astro_db::station_mode::read(c)?)).await.unwrap_or_default()
+}
+
 async fn captain_rules(db: &Db) -> BTreeMap<u32, String> {
     kv_get(db, "kind_rules").await.and_then(|v| v.as_object().cloned()).map(|m| m.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v.as_str()?.to_owned()))).collect()).unwrap_or_default()
 }
@@ -257,7 +285,7 @@ async fn captain_rules(db: &Db) -> BTreeMap<u32, String> {
 impl KindsControl {
     /// Politique de départ (à donner à `RelayConfig`). Une règle invalide est signalée et la politique par défaut s'applique.
     pub async fn initial_policy(db: &Db, conf_path: &Path) -> Policy {
-        match build_policy(&conf_rules(conf_path), &captain_rules(db).await) {
+        match build_policy(&with_mode(&conf_rules(conf_path), station_mode(db).await), &captain_rules(db).await) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("relai : matrice des kinds invalide ({e}) : politique par défaut appliquée");
@@ -271,19 +299,42 @@ impl KindsControl {
         Self { db, conf: conf_rules(conf_path), relay }
     }
 
+    /// Couches sous le Capitaine : `station.conf` et le mode de la station.
+    async fn lower(&self) -> (BTreeMap<u32, String>, BTreeMap<u32, String>) {
+        let mode = station_mode(&self.db).await;
+        (with_mode(&self.conf, mode), mode_rules(mode))
+    }
+
+    /// Kinds que tout le monde peut publier sur le relai (écriture `open`), parmi les kinds connus et réglés.
+    pub fn open_writes(&self) -> Vec<u32> {
+        let p = self.relay.policy();
+        let mut kinds: Vec<u32> = KIND_LABELS.iter().map(|(k, _)| *k).chain(self.conf.keys().copied()).filter(|k| p.rule(*k).write.name() == "open").collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+        kinds
+    }
+
+    /// Reconstruit la politique après un changement de mode (les réglages fins du Capitaine restent au-dessus).
+    pub async fn apply_mode(&self) -> Result<(), String> {
+        let (lower, _) = self.lower().await;
+        self.relay.set_policy(build_policy(&lower, &captain_rules(&self.db).await)?);
+        Ok(())
+    }
+
     /// Vue pour l'interface.
     pub async fn view(&self) -> Value {
         let captain = captain_rules(&self.db).await;
         let policy = self.relay.policy();
-        let defaults = build_policy(&self.conf, &BTreeMap::new()).unwrap_or_default();
-        let mut kinds: Vec<u32> = KIND_LABELS.iter().map(|(k, _)| *k).chain(self.conf.keys().copied()).chain(captain.keys().copied()).collect();
+        let (lower, by_mode) = self.lower().await;
+        let defaults = build_policy(&lower, &BTreeMap::new()).unwrap_or_default();
+        let mut kinds: Vec<u32> = KIND_LABELS.iter().map(|(k, _)| *k).chain(lower.keys().copied()).chain(captain.keys().copied()).collect();
         kinds.sort_unstable();
         kinds.dedup();
         let rows: Vec<Value> = kinds
             .into_iter()
             .map(|k| {
                 let r = policy.rule(k);
-                let source = if captain.contains_key(&k) { "capitaine" } else if self.conf.contains_key(&k) { "station.conf" } else { "défaut" };
+                let source = if captain.contains_key(&k) { "capitaine" } else if by_mode.contains_key(&k) { "mode" } else if self.conf.contains_key(&k) { "station.conf" } else { "défaut" };
                 json!({ "kind": k, "label": label_of(k), "read": r.read.name(), "write": r.write.name(), "project": r.project, "default": defaults.rule(k).spec(), "source": source })
             })
             .collect();
@@ -297,7 +348,8 @@ impl KindsControl {
     /// `{ "rules": { "<kind>": "read=… write=… project=…" }, "reset": [<kind>…] }` ; applique à chaud.
     pub async fn set(&self, body: &Value) -> Result<Value, String> {
         let mut captain = captain_rules(&self.db).await;
-        let lower = build_policy(&self.conf, &BTreeMap::new())?;
+        let (layers, _) = self.lower().await;
+        let lower = build_policy(&layers, &BTreeMap::new())?;
         for (k, spec) in body["rules"].as_object().into_iter().flatten() {
             let kind: u32 = k.parse().map_err(|_| format!("« {k} » n'est pas un numéro de kind"))?;
             let spec = spec.as_str().ok_or("règle attendue sous forme de texte (read=… write=… project=…)")?;
@@ -314,7 +366,7 @@ impl KindsControl {
         if captain.len() > 200 {
             return Err("trop de règles (200 au plus)".into());
         }
-        let policy = build_policy(&self.conf, &captain)?; // valide AVANT d'enregistrer ou d'appliquer
+        let policy = build_policy(&layers, &captain)?; // valide AVANT d'enregistrer ou d'appliquer
         let stored: serde_json::Map<String, Value> = captain.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
         kv_put(&self.db, "kind_rules", &Value::Object(stored)).await?;
         self.relay.set_policy(policy);
@@ -344,6 +396,8 @@ pub struct Admin {
     pub mesh: Option<AdminFn>,
     /// Capitaines : suivre, services des amis réciproques, accès à chaud.
     pub captains: Option<AdminFn>,
+    /// Écluses : vue d'ensemble et mode d'ouverture de la station.
+    pub locks: Option<Arc<crate::locks::Locks>>,
 }
 
 /// Un service local répond-il ? Une connexion TCP qui s'établit en 600 ms. Ne dit rien de ce qu'il y a derrière (un port
@@ -437,6 +491,13 @@ impl Admin {
                     ("face", Some(b)) => me.face.set(&b).await,
                     ("kinds", None) => Ok(me.kinds.view().await),
                     ("kinds", Some(b)) => me.kinds.set(&b).await,
+                    ("locks", body) => {
+                        let l = me.locks.as_ref().ok_or("écluses non câblées sur cette station")?;
+                        match body {
+                            None => l.view().await,
+                            Some(b) => l.set(&b).await,
+                        }
+                    }
                     ("mesh", body) => match &me.mesh {
                         Some(f) => f(section, body).await,
                         None => Err("maillage non câblé sur cette station".to_owned()),

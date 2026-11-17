@@ -56,7 +56,7 @@ pub async fn resolve_files(db: &Db, owner: &str, paths: &[String]) -> Result<Vec
                 })?;
                 for row in rows {
                     let row = row?;
-                    // Le coffre de mots de passe ne part jamais, même en désignant `/` ou `/Coffre`.
+                    // Le coffre de mots de passe ne part jamais, même en désignant `/` ou `/_/Coffre`.
                     if !astro_dav::vfs::is_vault(&row.0) {
                         out.push(row);
                     }
@@ -321,16 +321,16 @@ mod tests {
         let cid = "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e";
         db.writer()
             .execute(
-                "INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, sha_plain, data) VALUES (?1, '/Coffre/perso.kdbx', '/Coffre', 'file', ?2, 'application/x-keepass2', 10, 1, ?3, '{}')",
+                "INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, sha_plain, data) VALUES (?1, '/_/Coffre/perso.kdbx', '/_/Coffre', 'file', ?2, 'application/x-keepass2', 10, 1, ?3, '{}')",
                 vec![owner.clone().into(), cid.to_owned().into(), "ee".repeat(32).into()],
             )
             .await
             .unwrap();
         // Désigné seul, par son dossier ou par la racine : le coffre n'est jamais résolu.
-        assert!(sharing.send(&owner, &["/Coffre/perso.kdbx".into()], &[hex(&CAROL)]).await.unwrap_err().contains("aucun fichier"));
-        assert!(sharing.send(&owner, &["/Coffre".into()], &[hex(&CAROL)]).await.is_err());
+        assert!(sharing.send(&owner, &["/_/Coffre/perso.kdbx".into()], &[hex(&CAROL)]).await.unwrap_err().contains("aucun fichier"));
+        assert!(sharing.send(&owner, &["/_/Coffre".into()], &[hex(&CAROL)]).await.is_err());
         let all = resolve_files(&db, &owner, &["/".to_owned()]).await.unwrap();
-        assert!(all.iter().all(|(p, _)| !p.starts_with("/Coffre")) && all.len() == 2, "{all:?}");
+        assert!(all.iter().all(|(p, _)| !p.starts_with("/_/Coffre")) && all.len() == 2, "{all:?}");
         assert!(outbox.0.lock().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }

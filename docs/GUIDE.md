@@ -7,7 +7,7 @@
 - [**Partie 1 — Mettre la station en service**](#partie-1) : [1. Avant de commencer](#etape-0) · [2. Installer astroportd](#etape-1) · [3. Donner une identité à la station (Y-Level)](#etape-2) · [4. Choisir sa constellation](#etape-3) · [5. Démarrer la station](#etape-4) · [6. Créer votre compte de Capitaine, puis ceux des membres](#etape-5) · [7. Vérifier que tout va bien](#etape-6) · [8. Entrer dans l'interface web](#etape-7) · [9. Le cockpit du Capitaine](#etape-7b)
 - [**Partie 2 — Ce que la station offre à vos membres**](#partie-2) : [FaceCloud](#etape-8) · [Inviter quelqu'un à recevoir des photos](#etape-8quater) · [La clé de secours](#secours) · [Contacts, agenda et Mon compte](#etape-8b) · [Messages privés, et une personne dans plusieurs UPlanet](#etape-8bis-j) · [Appeler en visio](#visio) · [Le coffre de mots de passe (KeePass)](#etape-8bis-b) · [Le site public](#etape-8bis-m) · [Un jeton par appareil (téléphones, tablettes, ordinateurs)](#etape-8bis-f) · [Reprendre ses fichiers d'un autre serveur (Nextcloud, ownCloud…)](#etape-8bis-d) · [Ranger son uCloud par type](#etape-8bis-e) · [Connexion par PASS, compte sans email, signature déléguée](#etape-8quinquies) · [Sur un smartphone](#sur-un-smartphone)
 - [**Partie 3 — Les Ẑen de la station**](#partie-3) : [Hébergement facturé et partage de la semaine](#etape-8bis-g) · [Ma UPlanet](#etape-8c) · [Les Ẑen](#etape-8bis-l) · [La PAF de la machine et les nouvelles machines](#la-paf-de-la-machine-et-les-nouvelles-machines) · [Relier une UPlanet à OpenCollective](#relier-une-uplanet-opencollective) · [Ğ1Billet](#1billet-des-billets-papier-en-en)
-- [**Partie 4 — Relier, ouvrir, administrer**](#partie-4) : [Être trouvé](#annuaire) · [Relier sa station aux autres Capitaines](#etape-9) · [Options du Capitaine](#etape-8ter) · [Une adresse pour chaque station et chaque MULTIPASS (DNSLink)](#etape-9b) · [Les anciens clients (zelkova, coracle) sur astroportd](#etape-8bis-h) · [Plusieurs astroportd sur une machine](#plusieurs-astroportd-sur-une-machine-un-seul-bassin-de-fichiers) · [Plusieurs UPlanet dans un seul processus](#etape-8bis-i) · [En cas de problème](#etape-10)
+- [**Partie 4 — Relier, ouvrir, administrer**](#partie-4) : [Être trouvé](#annuaire) · [Relier sa station aux autres Capitaines](#etape-9) · [Les écluses de la station](#ecluses) · [Options du Capitaine](#etape-8ter) · [Une adresse pour chaque station et chaque MULTIPASS (DNSLink)](#etape-9b) · [Les anciens clients (zelkova, coracle) sur astroportd](#etape-8bis-h) · [Plusieurs astroportd sur une machine](#plusieurs-astroportd-sur-une-machine-un-seul-bassin-de-fichiers) · [Plusieurs UPlanet dans un seul processus](#etape-8bis-i) · [En cas de problème](#etape-10)
 
 <a id="partie-1"></a>
 
@@ -26,7 +26,9 @@ Neuf étapes, à suivre dans l'ordre. À la fin, votre station tourne, vous avez
 | `qo-op.com` | Le portail de la coopérative : adhésion, soutien, offres d'hébergement et d'accompagnement | Sociétaires, partenaires |
 | `votre-station.exemple.org` | Votre station : l'application de vos membres (photos, proches, messages, compte) et votre cockpit | Vos membres et vous |
 
-Une station n'est pas un portail : ne faites pas pointer le nom de la coopérative sur l'écran de connexion d'une seule station.
+**Le nom de la coopérative pointe vers la porte, jamais vers une station.** Chaque station sert la même porte d'entrée, **`/stations`** : « Je suis nouveau » mène à la station la plus proche qui a de la place, « J'ai déjà un MULTIPASS » retrouve la station du membre (par son email ou sa clé) et l'y envoie. Le code PASS ne se tape que sur sa propre station : la connexion demande d'abord l'identifiant, et un membre d'une autre station est conduit chez lui sans qu'on lui demande son PASS. Si sa station est éteinte, la porte le dit et propose de rétablir son compte ailleurs.
+
+> **Détails techniques.** `GET /api/v1/locate?q=<email | npub | hex>` (public, lisible depuis toute origine, 20 recherches par minute et par adresse) répond `here`, `elsewhere` (avec l'adresse publique de la station d'accueil, lue dans sa balise 30850) ou `unknown`. Rien de neuf n'est révélé : l'email et la station d'accueil sont déjà dans le DID kind 30800 du membre. Pour le nom de la coopérative, redirigez-le vers `https://<une station>/stations` ; si cette station s'éteint, changez la redirection vers une autre : toutes servent la même porte.
 
 **Les mots du guide, en clair.**
 
@@ -451,6 +453,10 @@ C'est ce que vos membres utiliseront le plus. Vous déposez vos photos dans votr
 
 Deux cercles : vos **amis N¹** (ceux que vous suivez *et* qui vous suivent) reçoivent le partage automatique ; pour tous les autres, vous créez un **lien secret**.
 
+**Ce qui part tout seul, et ce qui attend votre accord.** Une photo ne part seule chez un ami que s'il y est reconnu avec certitude **et seul avec vous** : dès qu'une autre personne y paraît nettement (un inconnu, ou un autre ami), elle attend votre accord, en un clic, dans **Mes proches**. Un passant flou à l'arrière-plan ne compte pas. Tant que votre propre visage n'est pas nommé, la station ne vous reconnaît pas : vos photos à deux attendent alors aussi un clic. La même règle vaut quand vous **reliez une personne à sa clé** : ses anciennes photos de groupe ne partent pas d'un coup. Chaque membre peut enfin couper l'envoi automatique (case « Envoi auto… » de **Mes proches**) : tout attend alors son accord.
+
+> **Avant de relier des amis.** Suivre quelqu'un qui vous suit (ami N¹) ouvre le partage automatique de vos photos où il paraît seul avec vous, la garde de votre sauvegarde et du troisième morceau de votre clé de secours. Ne reliez que des personnes de confiance.
+
 ![Parcours FaceCloud : photos, visages, album, amis N¹, lien secret.](img/facecloud-partage.svg)
 
 ### 🖥️ Terminal (CLI)
@@ -624,12 +630,14 @@ Ouvrez `https://votre-nouvelle-station/restore`, **scannez le QR** (si votre nav
 
 Le carnet d'adresses et l'agenda du téléphone quittent Google et Apple pour la station, où ils sont chiffrés et sauvegardés chez vos amis comme le reste de vos fichiers.
 
-**Carnet d'adresses (CardDAV).** Chaque compte a un carnet synchronisable avec « Contacts » d'Android (DAVx⁵) et d'iPhone. Les fiches sont des fichiers `.vcf` chiffrés du dossier `/Contacts` de votre uCloud (donc répliqués, sauvegardés et comptés dans votre quota), servis en CardDAV (RFC 6352) :
+**Le tiroir système `_`.** Mots de passe, contacts et agenda ne sont pas des « fichiers » comme vos photos : ils vivent à part, dans le dossier **`_`** de votre uCloud (`/_/Coffre`, `/_/Contacts`, `/_/Calendrier`). Rien de ce tiroir n'est analysé par la reconnaissance des visages, mis en miniature, montré dans la bibliothèque, rangé automatiquement ni publié. Une station d'avant ce tiroir y déplace d'elle-même, au démarrage, les anciens dossiers `/Coffre`, `/Contacts` et `/Calendrier` (les applications de contacts et d'agenda n'ont rien à changer ; un client KeePass branché sur l'ancienne adresse doit pointer vers `/dav/_/Coffre/…`).
+
+**Carnet d'adresses (CardDAV).** Chaque compte a un carnet synchronisable avec « Contacts » d'Android (DAVx⁵) et d'iPhone. Les fiches sont des fichiers `.vcf` chiffrés du dossier `/_/Contacts` de votre uCloud (donc répliqués, sauvegardés et comptés dans votre quota), servis en CardDAV (RFC 6352) :
 
 - **Serveur** : `https://<station>/dav/` (la découverte `/.well-known/carddav` est prise en charge) ; **identifiant** : votre email ; **mot de passe** : votre jeton (écran *Mon compte*).
 - Limites connues : `sync-collection` est pris en charge (jeton = numéro du journal des changements, suppressions comprises, gardé 30 jours ; un jeton plus ancien renvoie le client à une synchronisation complète) ; `addressbook-query` renvoie tout le carnet sans filtrer.
 
-**Agenda (CalDAV).** Même principe pour l'agenda : « Agenda » d'Android (DAVx⁵), d'iPhone ou Thunderbird se synchronise avec le dossier `/Calendrier` de votre uCloud. Chaque événement, tâche ou note est un fichier `.ics` **chiffré, répliqué avec vos sauvegardes et jamais publié sur Nostr** (rien de public par défaut).
+**Agenda (CalDAV).** Même principe pour l'agenda : « Agenda » d'Android (DAVx⁵), d'iPhone ou Thunderbird se synchronise avec le dossier `/_/Calendrier` de votre uCloud. Chaque événement, tâche ou note est un fichier `.ics` **chiffré, répliqué avec vos sauvegardes et jamais publié sur Nostr** (rien de public par défaut).
 
 - **Serveur** : le même `https://<station>/dav/` (découverte `/.well-known/caldav` et `calendar-home-set` du principal) ; mêmes identifiants. Un seul agenda par compte, nommé « Agenda ».
 - Limites connues : `calendar-query` renvoie tout l'agenda sans appliquer le filtre de dates ni développer les récurrences (le client le fait) ; pas d'invitations entre participants ; pas de création d'agendas supplémentaires. `sync-collection` est pris en charge, avec le même journal que le carnet.
@@ -673,12 +681,12 @@ Dans **Proches › Conversations**, le bouton 📹 en haut d'une conversation ap
 
 ## Le coffre de mots de passe (KeePass)
 
-Votre uCloud accueille un **coffre KeePass** (`.kdbx`) dans le dossier `/Coffre`. Le fichier est chiffré par **votre** mot de passe maître, que la station ne connaît pas : l'hébergeur, le Capitaine et les amis qui gardent votre sauvegarde n'en voient qu'un fichier opaque. Il est répliqué avec vos sauvegardes et comptabilisé dans votre quota. **Il n'est jamais partageable** : ni lien d'invité, ni envoi à un ami, même en désignant le dossier racine.
+Votre uCloud accueille un **coffre KeePass** (`.kdbx`) dans le dossier `/_/Coffre`. Le fichier est chiffré par **votre** mot de passe maître, que la station ne connaît pas : l'hébergeur, le Capitaine et les amis qui gardent votre sauvegarde n'en voient qu'un fichier opaque. Il est répliqué avec vos sauvegardes et comptabilisé dans votre quota. **Il n'est jamais partageable** : ni lien d'invité, ni envoi à un ami, même en désignant le dossier racine.
 
 **Deux coffres, deux niveaux de confiance.**
 
-- **`Coffre/perso.kdbx`** : tout ce qui compte (banque, impôts, santé). Il n'est lu que par vos applications.
-- **`Coffre/agents.kdbx`** : seulement les comptes que vous choisissez de confier à un assistant (BRO ou un agent que vous déclarez). Créez d'abord `perso.kdbx`, puis **copiez-y les entrées** à déléguer vers `agents.kdbx` (dans KeePassXC, ouvrez les deux bases et déplacez ou copiez l'entrée de l'une à l'autre). Une entrée copiée n'est plus liée à l'original : changer un mot de passe se fait aux deux endroits.
+- **`/_/Coffre/perso.kdbx`** : tout ce qui compte (banque, impôts, santé). Il n'est lu que par vos applications.
+- **`/_/Coffre/agents.kdbx`** : seulement les comptes que vous choisissez de confier à un assistant (BRO ou un agent que vous déclarez). Créez d'abord `perso.kdbx`, puis **copiez-y les entrées** à déléguer vers `agents.kdbx` (dans KeePassXC, ouvrez les deux bases et déplacez ou copiez l'entrée de l'une à l'autre). Une entrée copiée n'est plus liée à l'original : changer un mot de passe se fait aux deux endroits.
 
 *Les agents (BRO ou un autre) passent par le serveur MCP décrit plus bas : ils **demandent**, vous décidez. L'ouverture de `agents.kdbx` par la station n'est pas encore faite.*
 
@@ -686,7 +694,7 @@ Votre uCloud accueille un **coffre KeePass** (`.kdbx`) dans le dossier `/Coffre`
 
 | Plateforme | Application | Branchement |
 |---|---|---|
-| Android | Keepass2Android | *Ouvrir un fichier › WebDAV*, adresse `https://<station>/dav/Coffre/perso.kdbx` |
+| Android | Keepass2Android | *Ouvrir un fichier › WebDAV*, adresse `https://<station>/dav/_/Coffre/perso.kdbx` |
 | iPhone | Strongbox | *Ajouter une base › WebDAV* |
 | Ordinateur | KeePassXC | monter `/dav/` comme lecteur réseau (WebDAV du gestionnaire de fichiers), ou télécharger le fichier à la main |
 
@@ -736,7 +744,8 @@ Chaque membre a un **site web** : tout ce qui se trouve dans le dossier **`/Publ
 - **Chiffrement.** Les fichiers restent chiffrés au repos comme tout l'uCloud ; la station ne les déchiffre qu'à la demande, et seulement pour ce dossier. Un fichier hors de `/Public` n'est jamais lisible par cette adresse, quel que soit le chemin demandé (`..`, fichiers cachés `.nom` refusés).
 > **Détails techniques.** - **Isolation.** Le code d'une page (scripts compris) est celui de son auteur : chaque réponse porte une politique `sandbox` (origine opaque, sans `allow-same-origin`), `nosniff` et `no-referrer`. Une page publique n'atteint ni la session ni l'API de la station.
 
-- **Publier depuis l'explorateur.** Dans **uCloud › Dossiers**, cochez des fichiers ou dossiers puis **« Publier »** : un panneau (dans la page) dit ce qui va devenir public et demande confirmation, puis la station les **déplace** dans `/Public` (rien n'est copié ; un nom déjà pris n'est jamais écrasé). Dans `/Public`, le même bouton devient **« Retirer de Public »** : les éléments vont dans `/Retirés de Public`, visibles de vous seul. Le coffre n'est jamais publié.
+- **Publier depuis l'explorateur.** Dans **uCloud › Dossiers**, cochez des fichiers ou dossiers puis **« Publier »** : un panneau (dans la page) dit ce qui va devenir public et demande confirmation, puis la station les **déplace** dans `/Public` (rien n'est copié ; un nom déjà pris n'est jamais écrasé). Dans `/Public`, le même bouton devient **« Retirer de Public »** : les éléments vont dans `/Retirés de Public`, visibles de vous seul. Le tiroir système (coffre, contacts, agenda) n'est jamais publié.
+- **Vigie « vie privée ».** Un fichier de `/Public` est servi **tel quel**, métadonnées comprises : une photo de téléphone y garde souvent la position GPS de l'endroit où elle a été prise (votre domicile…). Chaque nuit à 20h12, la station repère dans `/Public` les **photos géolocalisées** et les **fichiers sensibles** (coffre de mots de passe, fiche de contact, agenda, clé) et **prévient** le membre ; l'accueil affiche « 🔒 … fichier(s) de Public en disent trop » tant qu'ils y sont. Elle ne modifie rien : retirez le fichier de Public, ou republiez la photo sans sa position (une image envoyée comme image de profil ou par un client Nostr est, elle, réencodée sans aucune métadonnée). Le Capitaine ne voit que le nombre de membres prévenus, jamais les fichiers.
 - **Image de profil depuis /Public.** Dans **Mon compte › Profil**, « Choisir dans mes fichiers publics » affiche les images de `/Public` ; un clic en fait l'image ou le bandeau du profil (la station la relit elle-même, aucun autre dossier n'est accepté). Le bandeau sert aussi de fond aux Ğ1Billets.
 - **Visites.** La carte « Mon site public » compte les pages vues (aujourd'hui, 7 et 90 jours, pages les plus vues). Seule une **page** (HTML ou liste de dossier) compte, pas une image ni une feuille de style. Le compteur ne garde **aucune adresse IP ni identifiant de visiteur** : un compte, un jour, une page, un nombre ; 90 jours de mémoire, 200 pages distinctes par jour au plus.
 > **Détails techniques.** - **Plusieurs stations derrière le même DNS.** Un enregistrement DNS en tourniquet (`*.<zone>` vers plusieurs stations) fonctionne : une station qui reçoit `https://<nom>.<zone>/` (ou `/site/<nom>/`) pour un membre qu'elle n'héberge pas le **redirige** (307) vers la station qui l'héberge, à l'adresse `…/site/<nom>/…`. Elle la trouve par la station d'accueil du DID du membre (`home_station`) et l'adresse publique que chaque station annonce dans son résumé de santé nocturne (tag `url` du kind 30850, répliqué par la constellation). Une station neuve est donc connue au plus tard le lendemain de sa première nuit ; sans adresse connue, la page répond 404 plutôt que de deviner.
@@ -1116,6 +1125,37 @@ Le choix part de l'annuaire des balises (Power-Score, position) et ne retient qu
 Le Capitaine voit dans **Ma station › Santé** (le cockpit, [étape 9](#etape-7b)) l'état de la constellation, l'économie de la station et les comptes hébergés ; les cartes **Ollama** et **ComfyUI** de *Réseau › Réglages › Tunnels* n'apparaissent que si le service répond sur la machine.
 
 Le territoire se lit sur la carte UPlanet : chaque dalle de 0,01° (environ 1 km²) a sa propre identité, et les stations voisines forment le territoire.
+
+<a id="ecluses"></a>
+
+## Les écluses de la station : ce qui entre, ce qui sort
+
+Une station relie plusieurs espaces, du plus intime au plus ouvert. L'écran **Réseau › Écluses** les dessine comme un canal à six bassins, avec, entre deux bassins, une porte : **verte**, le flux passe ; **orange**, il passe sur accord ou en lecture seule ; **rouge**, rien ne passe. Sous chaque bassin, le nombre de personnes qui s'y trouvent, pour **votre** station.
+
+| Bassin | Qui y est | Ce qui y passe |
+|---|---|---|
+| 🔐 Coffre (`/_/Coffre`) | le membre seul | mots de passe : sauvegardés chiffrés chez un ami, jamais partagés |
+| ☁️ uCloud chiffré | les membres hébergés | fichiers, contacts et agenda (`/_/Contacts`, `/_/Calendrier`) |
+| 🤝 Amis réciproques (N¹ mutuel) | ceux qu'un membre suit **et** qui le suivent | photos où l'ami est seul avec le membre, garde de la sauvegarde et d'un morceau de la clé de secours, tunnels « amis » |
+| 👥 Cercle (N¹ + N²) | suivis à sens unique et amis d'amis | écrire sur le relai, être copié ici (crawl) ; jamais rien de privé |
+| 🌐 ORIGIN / ✨ ẐEN | les stations de la constellation | ORIGIN : réseau ouvert (Kubo possible) ; ẐEN : réseau privé, on n'y entre qu'avec la `swarm.key` |
+| 🌍 Public | tout le monde | profils, notes publiques, dossiers `/Public` (surveillés par la vigie de 20h12) |
+
+**Trois modes, un geste.** Choisir un mode en montre d'abord l'**aperçu** sur le canal (les portes bougent) ; « Appliquer ce mode » seul change la station, sans redémarrage.
+
+| | 🏰 Forteresse | 🏡 Village (défaut) | 🎪 Place publique |
+|---|---|---|---|
+| Cercle du relai | hébergés + amis **réciproques** | + suivis et amis d'amis | comme Village |
+| Copie (crawl) | amis seulement | + amis d'amis | + amis d'amis |
+| Inscriptions libres, restaurations | fermées (les invitations d'un membre restent possibles) | selon la station | selon la station |
+| Photos (FaceCloud) | toutes attendent un accord | envoyées seules quand l'ami est seul avec le membre | comme Village |
+| Profil et notes publiques sur le relai | cercle | cercle | **tout le monde** peut publier |
+
+Les portes fermées en ligne de commande (`--no-register`, `--no-crawl`) le restent quel que soit le mode, et l'écran le dit. Les réglages fins (service par service dans **Tunnels et accès**, kind par kind dans la matrice du relai) gardent le dernier mot sur le mode.
+
+**Comprendre « Suivre ».** Suivre quelqu'un le fait entrer dans le **cercle** : il peut écrire sur le relai, ses publications sont copiées ici, rien de privé ne part vers lui. Quand deux personnes **se suivent l'une l'autre**, elles deviennent **amis réciproques** : c'est ce lien-là qui ouvre les photos, la sauvegarde et la clé de secours. Un **ami d'ami** (N²) peut écrire sur le relai, sauf en Forteresse, et ne reçoit jamais rien de privé.
+
+> **Détails techniques.** Le mode est une valeur `kv` (`scope = 'station'`, `key = 'mode'`, voir `astro_db::station_mode`) lue **en SQL** là où chaque écluse se décide : le cercle du relai (`astro-relay::circle`, rafraîchi aussitôt), les cibles du crawl (`astro-sync::crawl`), le partage automatique (`astro_facecloud::review::auto_share`), les entrées libres (`Registrar::open_to_strangers`). La Place publique ajoute une couche `write=open` aux kinds 0 et 1, entre `station.conf` et les réglages du Capitaine. API : `GET/POST /api/v1/station/admin/locks` (`{ "mode": "forteresse" | "village" | "place" }`). Entre plans d'une même machine, le bassin de blobs commun ne laisse sortir par un plan que les blobs que **sa** base référence, et `bridge-copy` refuse le passage d'un plan privé vers ORIGIN (`--cross-swarm` entre deux plans privés).
 
 <a id="etape-8ter"></a>
 

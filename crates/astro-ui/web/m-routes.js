@@ -28,6 +28,7 @@ const R = [
   ['/members', 'm-members.js', 'station', 'members', null, null, 'Membres'],
   ['/mesh', 'm-mesh.js', 'station', 'net', 'Essaim', null, 'Essaim et pairs'],
   ['/planes', 'm-planes.js', 'station', 'net', 'Constellations', null, 'Constellations'],
+  ['/locks', 'm-locks.js', 'station', 'net', 'Écluses', null, 'Écluses'],
   ['/options', 'm-options.js', 'station', 'net', 'Réglages', null, 'Réglages'],
   ['/coop', 'm-coop.js', 'station', 'eco', 'Régie', null, 'Régie'],
 ];

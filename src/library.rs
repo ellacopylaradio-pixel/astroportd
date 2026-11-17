@@ -7,8 +7,10 @@ use serde_json::{Value, json};
 
 /// Colonnes d'un élément affiché : chemin, type MIME, taille, mtime, date de prise de vue, date retenue, miniature, lat, lon, empreinte.
 const COLS: &str = "e.path, e.mime, e.size, e.mtime, e.taken_at, COALESCE(e.taken_at, e.mtime) AS t, json_extract(e.data, '$.thumb'), e.lat, e.lon, e.phash, e.sha_plain";
-/// Fichiers réels d'un compte (pas les dossiers, pas les entrées sans contenu).
-const FILES: &str = "e.owner_hex = ?1 AND e.type = 'file' AND e.cid IS NOT NULL";
+/// Fichiers réels d'un compte (pas les dossiers, pas les entrées sans contenu), hors tiroir système `/_` (coffre, carnet,
+/// agenda : ce ne sont ni des photos, ni des documents à retrouver dans la bibliothèque). Plage `['/_/', '/_0')` : `_` est
+/// un joker de `LIKE`, et la plage suit l'index.
+const FILES: &str = "e.owner_hex = ?1 AND e.type = 'file' AND e.cid IS NOT NULL AND NOT (e.path >= '/_/' AND e.path < '/_0')";
 /// Plafond d'empreintes comparées pour les doublons visuels (borne la mémoire et le temps).
 const MAX_PHASH: usize = 30_000;
 /// Distance de Hamming maximale entre deux empreintes pour parler de « même image ».

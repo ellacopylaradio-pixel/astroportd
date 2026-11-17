@@ -65,7 +65,7 @@ async fn dirs(b: &Bench) -> Vec<String> {
 }
 
 async fn fill(b: &Bench) {
-    for d in ["/Imports", "/Imports/A", "/Imports/B", "/Coffre", "/Contacts", "/Partages", "/Partages/De_bob", "/.cache", "/Images"] {
+    for d in ["/Imports", "/Imports/A", "/Imports/B", "/_", "/_/Coffre", "/_/Contacts", "/Partages", "/Partages/De_bob", "/.cache", "/Images"] {
         put_dir(b, d).await;
     }
     put(b, "/Imports/A/photo1.jpg", "image/jpeg", 1000, JUNE_2003).await;
@@ -76,8 +76,8 @@ async fn fill(b: &Bench) {
     put(b, "/Imports/B/backup.zip", "application/zip", 500, NOV_2018).await;
     put(b, "/Imports/B/mystery.xyz", "application/octet-stream", 9, NOV_2018).await;
     put(b, "/top.txt", "text/plain", 5, NOV_2018).await;
-    put(b, "/Coffre/perso.kdbx", "application/x-keepass2", 7, NOV_2018).await;
-    put(b, "/Contacts/x.vcf", "text/vcard", 7, NOV_2018).await;
+    put(b, "/_/Coffre/perso.kdbx", "application/x-keepass2", 7, NOV_2018).await;
+    put(b, "/_/Contacts/x.vcf", "text/vcard", 7, NOV_2018).await;
     put(b, "/Partages/De_bob/p.jpg", "image/jpeg", 7, NOV_2018).await;
     put(b, "/.cache/x.jpg", "image/jpeg", 7, NOV_2018).await;
     put(b, "/Images/already.jpg", "image/jpeg", 7, NOV_2018).await;
@@ -116,7 +116,7 @@ async fn the_preview_counts_what_would_move_and_protects_what_must_stay() {
     // Réglages : un seul type, un seul dossier, dossier protégé refusé.
     let only = organize::plan(&b.dav.db, &hex(&ALICE), &Options { scope: "/Imports/B".into(), kinds: vec!["music".into()], ..Options::default() }).await.unwrap();
     assert_eq!(only.moves, [("/Imports/B/song.mp3".to_owned(), "/Musique/song.mp3".to_owned())]);
-    for bad in [Options { scope: "/Coffre".into(), ..Options::default() }, Options { scope: "/.cache".into(), ..Options::default() }, Options { kinds: vec![], ..Options::default() }] {
+    for bad in [Options { scope: "/_/Coffre".into(), ..Options::default() }, Options { scope: "/.cache".into(), ..Options::default() }, Options { kinds: vec![], ..Options::default() }] {
         assert!(organize::plan(&b.dav.db, &hex(&ALICE), &bad).await.is_err(), "{bad:?}");
     }
 }
@@ -165,10 +165,10 @@ async fn a_run_moves_entries_keeps_faces_prunes_empty_folders_and_can_be_undone(
     assert_eq!((report.moved, report.errors.len(), report.stopped), (7, 0, false), "{report:?}");
     assert!(seen.last().is_some_and(|p| p.done == 7 && p.total == 7 && p.moved == 7), "{seen:?}");
 
-    assert_eq!(files(&b).await, ["/.cache/x.jpg", "/Archives/backup.zip", "/Coffre/perso.kdbx", "/Contacts/x.vcf", "/Documents/doc.pdf", "/Documents/top.txt", "/Images/already.jpg", "/Images/photo1.jpg", "/Images/photo2.JPG", "/Imports/B/mystery.xyz", "/Musique/song.mp3", "/Partages/De_bob/p.jpg", "/Vidéos/film.mkv"]);
+    assert_eq!(files(&b).await, ["/.cache/x.jpg", "/Archives/backup.zip", "/Documents/doc.pdf", "/Documents/top.txt", "/Images/already.jpg", "/Images/photo1.jpg", "/Images/photo2.JPG", "/Imports/B/mystery.xyz", "/Musique/song.mp3", "/Partages/De_bob/p.jpg", "/Vidéos/film.mkv", "/_/Coffre/perso.kdbx", "/_/Contacts/x.vcf"]);
     // /Imports/A est vide : supprimé ; /Imports/B garde son fichier inconnu ; les dossiers protégés restent.
     let d = dirs(&b).await;
-    assert!(!d.contains(&"/Imports/A".to_owned()) && d.contains(&"/Imports/B".to_owned()) && d.contains(&"/Coffre".to_owned()) && d.contains(&"/Images".to_owned()), "{d:?}");
+    assert!(!d.contains(&"/Imports/A".to_owned()) && d.contains(&"/Imports/B".to_owned()) && d.contains(&"/_/Coffre".to_owned()) && d.contains(&"/Images".to_owned()), "{d:?}");
     assert_eq!(report.pruned, 1);
     // Les entrées ont gardé leur blob : seul le chemin change.
     let cid: String = b.dav.db.readers().read(|c| Ok(c.query_row("SELECT cid FROM ucloud_entries WHERE path = '/Documents/doc.pdf'", [], |r| r.get(0))?)).await.unwrap();

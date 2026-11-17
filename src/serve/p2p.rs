@@ -71,7 +71,7 @@ pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays
         if !a.no_mdns {
             println!("P2P : stations du réseau local cherchées par mDNS (--no-mdns pour couper)");
         }
-        p2p_guards.push(Box::new(serve_blobs(&handle, local.clone(), ServeOpts::default())?));
+        p2p_guards.push(Box::new(serve_blobs(&handle, local.clone(), blob_serve_opts(a))?));
         let mut specs: Vec<String> = a.p2p_expose.clone();
         // Les trois services partagés entre Capitaines : SSH, ComfyUI, Ollama (chacun derrière la politique des tunnels).
         for (name, target) in [("ssh", &a.p2p_ssh), ("comfyui", &a.p2p_comfyui), ("ollama", &a.p2p_ollama)] {
@@ -102,6 +102,31 @@ pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays
         p2p_handle = Some(handle);
     }
     Ok((p2p_guards, p2p_handle, role))
+}
+
+/// Réglages du serveur de blobs. Seul dans son dossier, un plan sert tout ce qu'il contient ; dans un **bassin partagé**
+/// (`--pool-peer`), il ne sert que ce que sa propre base référence : le nœud ORIGIN (réseau ouvert) ne laisse jamais
+/// sortir le chiffré d'une UPlanet privée voisine, même à qui connaîtrait son CID. Base illisible : rien ne sort.
+pub(super) fn blob_serve_opts(a: &ServeArgs) -> ServeOpts {
+    if a.pool_peers.is_empty() {
+        return ServeOpts::default();
+    }
+    let db = Arc::new(a.db.clone());
+    let gate = astro_p2p::blob::CidGate(Arc::new(move |cid: String| {
+        let db = db.clone();
+        Box::pin(async move {
+            let found = tokio::task::spawn_blocking(move || astro_dav::pool::referenced_in(&db, &cid).map_err(|e| (cid, e))).await;
+            match found {
+                Ok(Ok(yes)) => yes,
+                Ok(Err((cid, why))) => {
+                    eprintln!("bassin de blobs : base illisible, blob {cid} non servi ({why})");
+                    false
+                }
+                Err(_) => false,
+            }
+        })
+    }));
+    ServeOpts { gate: Some(gate), ..ServeOpts::default() }
 }
 
 /// Le relai est aussi offert au maillage par une écoute locale (`/x/strfry-<PeerID>`, le nom de DRAGON) : c'est le transport

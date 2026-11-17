@@ -34,6 +34,7 @@ export default {
 "Aucun autre Capitaine connu pour l'instant.": "No other Captain known yet.",
 "Un ami réciproque vous montre ce qu'il vous partage ; c'est sa station qui décide.": "A mutual friend shows you what they share with you; their station decides.",
 "Régler mes partages": "Set my shares",
+"Ce que « Suivre » ouvre": "What “Follow” opens",
 "Maillage et Capitaines amis": "Mesh and friend Captains",
 "(vous)": "(you)",
 "vue": "seen",

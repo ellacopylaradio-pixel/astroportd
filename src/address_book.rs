@@ -2,7 +2,7 @@
 //! avec le **profil Nostr** (kind 0) de l'ami qu'elle désigne, et **« Ma fiche »** : le profil Nostr du titulaire et sa propre fiche
 //! réunis en une seule vue.
 //!
-//! Les fiches restent des fichiers vCard chiffrés (`/Contacts/*.vcf`, accessibles en CardDAV depuis un téléphone) : ce module les lit et
+//! Les fiches restent des fichiers vCard chiffrés (`/_/Contacts/*.vcf`, accessibles en CardDAV depuis un téléphone) : ce module les lit et
 //! les écrit **sans jamais effacer ce qu'il ne gère pas** (photo incorporée, `X-NOSTR-PUBKEY`, `UID`…). L'index de recherche
 //! (`contact_cards`) est une projection reconstructible, tenue par [`crate::identity_links`].
 //!
@@ -145,14 +145,14 @@ pub struct AddressBook<B: BlobStore> {
 }
 
 impl<B: BlobStore> AddressBook<B> {
-    /// Carnet sur les fiches de `/Contacts` ; `account` publie le profil Nostr du titulaire (« Ma fiche »).
+    /// Carnet sur les fiches de `/_/Contacts` ; `account` publie le profil Nostr du titulaire (« Ma fiche »).
     pub fn new(db: Arc<Db>, dav: Arc<DavState<B>>, links: Arc<IdentityLinks<B>>, account: Option<Arc<AccountService>>) -> Self {
         Self { db, dav, links, account }
     }
 
     fn safe_path(path: &str) -> Result<(), BookError> {
-        let ok = path.starts_with("/Contacts/") && path.ends_with(".vcf") && !path.contains("..") && !path[10..].contains('/') && path.len() < 200;
-        if ok { Ok(()) } else { Err(BookError::Invalid("fiche attendue : /Contacts/<nom>.vcf".into())) }
+        let ok = carddav::card_file(path).is_some_and(|n| n.ends_with(".vcf") && !n.contains("..")) && path.len() < 200;
+        if ok { Ok(()) } else { Err(BookError::Invalid("fiche attendue : /_/Contacts/<nom>.vcf".into())) }
     }
 
     async fn read(&self, owner: &str, path: &str) -> Result<String, BookError> {

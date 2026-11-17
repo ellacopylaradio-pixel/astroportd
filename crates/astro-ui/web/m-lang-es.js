@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire es, phrases communes. Les écrans de `parts` ont aussi m-lang-es-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account billets call contacts coop files mesh options planes sync';
+export const parts = 'account billets call contacts coop files locks mesh options planes sync';
 export default {
 "Aller au contenu": "Ir al contenido",
 "Tableau de bord": "Panel",
@@ -18,6 +18,15 @@ export default {
 "Pas de compte ?": "¿Sin cuenta?",
 "Créer mon MULTIPASS": "Crear mi MULTIPASS",
 "Stations proches": "Estaciones cercanas",
+"Email ou clé": "Email o clave",
+"Votre code PASS (4 à 6 chiffres) ou le jeton de la station.": "Su código PASS (4 a 6 cifras) o el token de la estación.",
+"Pas votre station ?": "¿No es su estación?",
+"Retrouver ma station": "Encontrar mi estación",
+"Continuer": "Continuar",
+"Votre espace est sur {0}. Votre code PASS ne se tape que là-bas.": "Su espacio está en {0}. Escriba su código PASS solo allí.",
+"Aller sur ma station": "Ir a mi estación",
+"Aucun MULTIPASS trouvé pour cet identifiant, ni ici ni sur les stations que nous connaissons.": "No se encontró ningún MULTIPASS para este identificador, ni aquí ni en las estaciones que conocemos.",
+"Identifiant ou jeton refusé.": "Identificador o token rechazado.",
 "Se connecter": "Entrar",
 "Fermer": "Cerrar",
 "Copier": "Copiar",
@@ -93,6 +102,7 @@ export default {
 "Délier": "Desvincular",
 "Messagerie": "Mensajería",
 "Cette personne n'est pas joignable d'ici pour le moment.": "No se puede contactar a esta persona desde aquí por ahora.",
+"Si vous vous suivez l'un l'autre, ses photos où elle est seule avec vous lui seront envoyées ; une photo de groupe attend votre accord.": "Si se siguen mutuamente, las fotos donde aparece sola con usted se le enviarán; una foto de grupo espera su permiso.",
 "Fiche reliée": "Ficha vinculada",
 "Fiche déliée": "Ficha desvinculada",
 "Contact": "Contacto",
@@ -327,6 +337,8 @@ export default {
 "Options et tunnels": "Opciones y túneles",
 "Pour vous": "Para usted",
 "{0} photo(s) de {1} attendent votre accord pour lui être envoyées": "{0} foto(s) de {1} esperan su permiso para enviárselas",
+"{0} fichier(s) de Public en disent trop (lieu, mot de passe, contacts…)": "{0} archivo(s) de Public revelan demasiado (lugar, contraseña, contactos…)",
+"Voir": "Ver",
 "{0} visage(s) à confirmer": "{0} rostro(s) por confirmar",
 "{0} visage(s) à nommer": "{0} rostro(s) por nombrar",
 "Trier en 1 clic": "Ordenar en 1 toque",
@@ -362,6 +374,7 @@ export default {
 "Retour": "Volver",
 "Rubrique": "Sección",
 "Régie": "Tesorería",
+"Écluses": "Esclusas",
 "Réglages": "Ajustes",
 "Essaim": "Enjambre",
 "Détails techniques": "Detalles técnicos",

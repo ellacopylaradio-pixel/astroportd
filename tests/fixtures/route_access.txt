@@ -63,6 +63,7 @@ GET /api/v1/station/oc/donations anon=401 member=403
 GET /api/v1/station/paf anon=401 member=403
 GET /api/v1/station/planes anon=401 member=403
 GET /api/v1/station/welcome anon=401 member=403
+GET /api/v1/locate anon=400 member=400
 GET /api/v1/stations anon=200 member=200
 GET /api/v1/ucloud/duplicates anon=401 member=200
 GET /api/v1/ucloud/list anon=401 member=200
@@ -117,6 +118,7 @@ POST /api/v1/devices anon=401 member=400
 POST /api/v1/devices/revoke anon=401 member=422
 POST /api/v1/faces/assign anon=401 member=422
 POST /api/v1/faces/delete-photos anon=401 member=422
+POST /api/v1/faces/auto-share anon=401 member=422
 POST /api/v1/faces/forget anon=401 member=422
 POST /api/v1/faces/pending-shares/confirm anon=401 member=422
 POST /api/v1/faces/thumbs anon=401 member=422

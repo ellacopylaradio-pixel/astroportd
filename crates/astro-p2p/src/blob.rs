@@ -46,6 +46,18 @@ pub enum FetchError {
     Store(#[from] BlobError),
 }
 
+/// Écluse du serveur : rend `true` si ce CID peut sortir. Un plan qui partage son dossier de blobs avec d'autres plans
+/// (bassin commun) ne sert que les blobs que **sa** base référence : le chiffré d'une UPlanet privée ne sort jamais par
+/// le nœud d'un plan voisin, même à qui connaîtrait son CID (étanchéité I1).
+#[derive(Clone)]
+pub struct CidGate(pub Arc<dyn Fn(String) -> futures_util::future::BoxFuture<'static, bool> + Send + Sync>);
+
+impl std::fmt::Debug for CidGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CidGate")
+    }
+}
+
 /// Réglages du serveur de blobs.
 #[derive(Debug, Clone)]
 pub struct ServeOpts {
@@ -53,11 +65,13 @@ pub struct ServeOpts {
     pub allow: Option<HashSet<PeerId>>,
     /// Taille maximale servie.
     pub max_blob_bytes: u64,
+    /// CID autorisés à sortir ; `None` = tout ce que contient le magasin (dossier propre au plan).
+    pub gate: Option<CidGate>,
 }
 
 impl Default for ServeOpts {
     fn default() -> Self {
-        Self { allow: None, max_blob_bytes: 1 << 30 }
+        Self { allow: None, max_blob_bytes: 1 << 30, gate: None }
     }
 }
 
@@ -80,9 +94,9 @@ pub fn serve_blobs<B: BlobStore>(handle: &P2pHandle, store: Arc<B>, opts: ServeO
             if opts.allow.as_ref().is_some_and(|a| !a.contains(&peer)) {
                 continue;
             }
-            let (store, max) = (store.clone(), opts.max_blob_bytes);
+            let (store, max, gate) = (store.clone(), opts.max_blob_bytes, opts.gate.clone());
             tokio::spawn(async move {
-                let _ = serve_one(stream, store.as_ref(), max).await;
+                let _ = serve_one(stream, store.as_ref(), max, gate).await;
             });
         }
     });
@@ -113,7 +127,7 @@ async fn read_request(stream: &mut libp2p::Stream) -> std::io::Result<Option<Req
     Ok(None)
 }
 
-async fn serve_one<B: BlobStore>(mut stream: libp2p::Stream, store: &B, max: u64) -> std::io::Result<()> {
+async fn serve_one<B: BlobStore>(mut stream: libp2p::Stream, store: &B, max: u64, gate: Option<CidGate>) -> std::io::Result<()> {
     let (cid, head_only) = match read_request(&mut stream).await? {
         Some(Request::Get(cid)) => (cid, false),
         Some(Request::Has(cid)) => (cid, true),
@@ -125,6 +139,13 @@ async fn serve_one<B: BlobStore>(mut stream: libp2p::Stream, store: &B, max: u64
     if !cid.starts_with("bafkrei") || !is_cid(&cid) {
         stream.write_all(&[BAD_REQUEST]).await?;
         return stream.close().await;
+    }
+    // Hors écluse : « absent », comme un blob inconnu (rien ne révèle qu'un plan voisin le détient).
+    if let Some(CidGate(allowed)) = &gate {
+        if !allowed(cid.clone()).await {
+            stream.write_all(&[NOT_FOUND]).await?;
+            return stream.close().await;
+        }
     }
     let Ok((mut reader, len)) = store.open(&cid).await else {
         stream.write_all(&[NOT_FOUND]).await?;

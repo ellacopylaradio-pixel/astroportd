@@ -180,18 +180,20 @@ impl<C: RelayClient> Crawler<C> {
         all
     }
 
-    /// Clés à synchroniser : MULTIPASS hébergés ∪ N1 ∪ N2 ∪ clés demandées non expirées ([`WANTED_SCOPE`]), triées.
+    /// Clés à synchroniser : MULTIPASS hébergés ∪ N1 ∪ N2 ∪ clés demandées non expirées ([`WANTED_SCOPE`]), triées. En
+    /// Forteresse (mode de la station), pas de N².
     pub async fn targets(&self) -> Result<Vec<String>, SyncError> {
         Ok(self
             .db
             .readers()
             .read(|c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare(&format!(
                     "SELECT hex FROM identities WHERE hosted = 1 \
-                     UNION SELECT pubkey FROM social_graph WHERE level IN (1, 2) \
+                     UNION SELECT pubkey FROM social_graph WHERE level = 1 OR (level = 2 AND NOT {}) \
                      UNION SELECT key FROM kv WHERE scope = 'crawl_wanted' AND length(key) = 64 AND CAST(value AS INTEGER) > CAST(strftime('%s','now') AS INTEGER) \
                      ORDER BY 1",
-                )?;
+                    astro_db::station_mode::FORTRESS_SQL
+                ))?;
                 Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?)
             })
             .await?)

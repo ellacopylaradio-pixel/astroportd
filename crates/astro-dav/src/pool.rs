@@ -21,18 +21,24 @@ pub fn referenced_in(db: &Path, cid: &str) -> Result<bool, String> {
     }
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| format!("{} : {e}", db.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare(COLUMNS_SQL).map_err(|e| format!("{} : {e}", db.display()))?;
+    referenced_by(&conn, cid).map_err(|e| format!("{} : {e}", db.display()))
+}
+
+/// Le blob `cid` est-il référencé par la base ouverte `conn` ? Sert aussi au serveur de blobs d'un plan qui partage le
+/// bassin : il ne sert que ce que **sa** base référence, jamais le blob né dans un plan voisin (étanchéité I1).
+pub fn referenced_by(conn: &Connection, cid: &str) -> Result<bool, String> {
+    let mut stmt = conn.prepare(COLUMNS_SQL).map_err(|e| e.to_string())?;
     let cols = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
     for (table, column) in cols {
         let sql = format!("SELECT 1 FROM \"{table}\" WHERE \"{column}\" = ?1 LIMIT 1");
-        if conn.query_row(&sql, [cid], |_| Ok(())).map(|()| true).or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(false) } else { Err(e) }).map_err(|e| format!("{} : {e}", db.display()))? {
+        if conn.query_row(&sql, [cid], |_| Ok(())).map(|()| true).or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(false) } else { Err(e) }).map_err(|e| e.to_string())? {
             return Ok(true);
         }
     }
     conn.query_row("SELECT 1 FROM ucloud_entries WHERE json_extract(data, '$.thumb.cid') = ?1 LIMIT 1", [cid], |_| Ok(()))
         .map(|()| true)
         .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(false) } else { Err(e) })
-        .map_err(|e| format!("{} : {e}", db.display()))
+        .map_err(|e| e.to_string())
 }
 
 /// Un des pairs référence-t-il `cid` ? Une erreur de lecture compte comme « oui » (on garde) et est dite sur stderr.

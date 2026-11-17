@@ -119,11 +119,15 @@ impl DbCircle {
             .read(|c| {
                 let hosted: HashSet<String> =
                     c.prepare("SELECT hex FROM identities WHERE hosted = 1")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+                // Forteresse (mode de la station) : pas de N², et un N¹ n'entre que s'il suit le membre en retour.
+                let fortress = astro_db::station_mode::FORTRESS_SQL;
                 let others: HashSet<String> = c
-                    .prepare(
-                        "SELECT DISTINCT pubkey FROM social_graph WHERE level IN (1, 2) \
-                         AND owner_hex IN (SELECT hex FROM identities WHERE hosted = 1)",
-                    )?
+                    .prepare(&format!(
+                        "SELECT DISTINCT g.pubkey FROM social_graph g WHERE g.owner_hex IN (SELECT hex FROM identities WHERE hosted = 1) \
+                         AND ((g.level = 2 AND NOT {fortress}) OR (g.level = 1 AND (NOT {fortress} OR EXISTS ( \
+                           SELECT 1 FROM nostr_events e JOIN nostr_tags t ON t.event_id = e.seq \
+                           WHERE e.kind = 3 AND e.pubkey = g.pubkey AND t.name = 'p' AND t.value = g.owner_hex))))",
+                    ))?
                     .query_map([], |r| r.get(0))?
                     .collect::<Result<_, _>>()?;
                 let mut n1: HashMap<String, HashSet<String>> = HashMap::new();

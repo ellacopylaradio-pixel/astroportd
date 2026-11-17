@@ -777,6 +777,12 @@ init_args=()
 [ -n "$EMAIL" ] && init_args+=(--email "$EMAIL")
 [ -n "$DOMAIN" ] && init_args+=(--domain "$DOMAIN")
 
+# Interactif et sans position donnée : on propose de la deviner (un seul appel à ip-api.com, refusé par défaut).
+if [ -z "$LAT" ] && [ "$LOCATE" != 1 ] && [ "$YES" != 1 ] && [ -r /dev/tty ] && [ ! -f "${DATA}/station.conf" ]; then
+  printf '  Deviner la position de la station d'\''après votre IP (une requête à ip-api.com) ? Sinon, l'\''assistant la demandera. [o/N] ' > /dev/tty
+  read -r _loc < /dev/tty || _loc="n"
+  case "${_loc:-n}" in o|O|oui|Oui) LOCATE=1 ;; esac
+fi
 # Position : donnée par --lat/--lon, ou devinée d'après l'IP avec --locate (rien n'est envoyé sans ce choix explicite).
 if [ -z "$LAT" ] && [ "$LOCATE" = 1 ]; then
   if command -v curl >/dev/null 2>&1; then

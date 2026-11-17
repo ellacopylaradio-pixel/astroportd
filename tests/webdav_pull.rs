@@ -152,7 +152,7 @@ async fn nextcloud(hostile: bool) -> (String, Arc<Fake>, String) {
 }
 
 fn source(url: &str, remote: &str, dest: &str) -> Source {
-    Source { id: "src1".into(), label: "Nextcloud d'essai".into(), url: url.into(), username: "fred".into(), password: PASS.into(), remote_path: remote.into(), dest_prefix: dest.into(), allow_private: true, created_at: 0 }
+    Source { id: "src1".into(), label: "Nextcloud d'essai".into(), url: url.into(), username: "fred".into(), password: PASS.into(), remote_path: remote.into(), dest_prefix: dest.into(), kinds: Vec::new(), sort: false, allow_private: true, created_at: 0 }
 }
 
 async fn paths(b: &Bench) -> Vec<String> {
@@ -208,6 +208,42 @@ async fn a_nextcloud_tree_is_pulled_as_is_and_the_pass_can_be_replayed_even_afte
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_source_can_keep_only_some_types_and_file_each_one_in_its_type_folder() {
+    let b = bench("kinds").await;
+    let (url, _, _) = nextcloud(false).await;
+    let owner = hex(&ALICE);
+
+    // Musique seule, rangée dans /Musique : le reste n'est ni repris ni compté comme échec.
+    let mut src = source(&url, "", "/Imports/Tout");
+    src.kinds = vec!["music".into()];
+    src.sort = true;
+    let r = pull::pull(&b.dav, &owner, &src, &PullOptions::default(), |_| {}).await.unwrap();
+    assert_eq!((r.imported, r.filtered, r.errors.len()), (1, 3, 0), "{r:?}");
+    assert_eq!(paths(&b).await, ["/Musique/Musique/morceau.mp3"], "dossier du type, puis l'arborescence distante");
+
+    // Images et documents, sans rangement : sous le dossier de dépôt, tel quel.
+    let mut src = source(&url, "Photos", "/Imports/Photos");
+    src.id = "src2".into();
+    src.kinds = vec!["images".into()];
+    let r = pull::pull(&b.dav, &owner, &src, &PullOptions::default(), |_| {}).await.unwrap();
+    assert_eq!((r.imported, r.filtered), (2, 1), "le texte est écarté : {r:?}");
+
+    // Avec rangement : /Images, et un type inconnu resterait sous le dossier de dépôt.
+    let mut src = source(&url, "Photos", "/Imports/Rangees");
+    src.id = "src3".into();
+    src.sort = true;
+    let r = pull::pull(&b.dav, &owner, &src, &PullOptions { dry_run: false, ..PullOptions::default() }, |_| {}).await.unwrap();
+    assert_eq!(r.errors.len(), 0, "{r:?}");
+    let got = paths(&b).await;
+    assert!(got.iter().any(|p| p.starts_with("/Documents/") && p.ends_with("notes d'été.txt")), "{got:?}");
+
+    // Type inconnu refusé à l'enregistrement.
+    let mut bad = source("https://x.example/dav", "", "/Imports/X");
+    bad.kinds = vec!["films".into()];
+    assert!(Sources::new(b.dav.db.clone(), b.keys.clone()).add(&owner, bad).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_hostile_server_cannot_write_outside_the_destination_nor_receive_the_credentials() {
     let b = bench("hostile").await;
     let (url, probe, _) = nextcloud(true).await;
@@ -253,7 +289,7 @@ async fn sources_are_stored_encrypted_and_the_interface_never_reaches_private_ad
         Source { url: "https://u:p@x.example/dav".into(), ..source("", "", "/Imports/X") },
         Source { remote_path: "a/../../b".into(), ..source("https://x.example/dav", "", "/Imports/X") },
         source("https://x.example/dav", "", "/"),
-        source("https://x.example/dav", "", "/Coffre/vol"),
+        source("https://x.example/dav", "", "/_/Coffre/vol"),
         Source { username: "a:b".into(), ..source("https://x.example/dav", "", "/Imports/X") },
     ] {
         assert!(sources.add(&owner, bad.clone()).await.is_err(), "{bad:?}");

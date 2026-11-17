@@ -7,7 +7,7 @@
 //! - **Jeton** : `ag1_<16 premiers hex du compte>_<64 hex aléatoires>`, montré une seule fois. Seule son empreinte est gardée.
 //! - **MCP** (JSON-RPC 2.0 sur `POST /mcp`, jeton en `Bearer`) : `demander_acces` et `statut_acces`. Un agent ne reçoit **jamais**
 //!   un secret : il reçoit « en attente », « accordé », « refusé » ou « expiré ». Le membre décide dans l'interface.
-//! - **Ce que ce module ne fait pas encore** : ouvrir `Coffre/agents.kdbx` et remettre l'identifiant à un navigateur. Un accord
+//! - **Ce que ce module ne fait pas encore** : ouvrir `/_/Coffre/agents.kdbx` et remettre l'identifiant à un navigateur. Un accord
 //!   accordé n'est qu'une autorisation datée, tracée dans le journal (`audit.agent`) et dans l'activité du membre.
 
 use std::collections::HashMap;

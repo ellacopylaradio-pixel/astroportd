@@ -1,3 +1,9 @@
+## astroportd 1.3.1 — Ğ1Billet par UPlanet, imports WebDAV triés, test navigateur réparé
+
+- **Ğ1Billet** : « ORIGIN » sur les billets de l'UPlanet ORIGIN, nom de l'UPlanet sur les autres. Nouveau choix « Fond et logo » : profil Nostr (défaut), Eugro ou Astroport ; Eugro remplace le profil s'il n'a pas d'images. Images embarquées dans le binaire.
+- **Sources WebDAV externes** : filtre par type (images, musique, vidéos, documents, archives) et rangement automatique (`/Images`, `/Musique`…), en web et en CLI (`pull-webdav add --kinds … --sort`). Les fichiers non repris sont comptés « laissés ».
+- **Test navigateur** (`tests/browser/smoke_ui.py`) remis d'équerre avec la navigation et la connexion actuelles.
+
 ## astroportd 1.3.0 — navigation refondue, fiche de bienvenue, guide mis à jour
 
 - **Navigation par espaces** : table de routes unique (`m-routes.js`). Mon espace : Accueil · Fichiers · Proches · Moi (barre du bas sur téléphone). Ma station (Capitaine, bouton en haut à droite) : Santé · Membres · Réseau · Économie. Sous-onglets et retour calculés depuis la table ; les anciennes adresses (`#/station`, `#/chiffres`) redirigent.

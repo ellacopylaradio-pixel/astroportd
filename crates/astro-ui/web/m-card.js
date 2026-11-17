@@ -108,7 +108,8 @@ export default async function card(K, { path, me, blank, groups, onSaved, onClos
   const target = h('input', { placeholder: t('email du MULTIPASS ou npub…'), 'aria-label': t('email du MULTIPASS ou npub…'), autocomplete: 'off' });
   const link = isMe ? null : h('div', { class: 'ab-f' }, h('label', {}, t('Lien avec un MULTIPASS')), h('div', { class: 'ab-row' }, target,
     h('button', { type: 'button', class: 'ghost', onclick: async () => { try { await api('/api/v1/contacts/link', { method: 'POST', body: { path: d.path, target: target.value.trim() } }); K.toast(t('Fiche reliée'), 1); onSaved(d.path, true); } catch (e) { K.toast(e.message); } } }, t('Relier')),
-    d.pubkey && d.via === 'vcard' ? h('button', { type: 'button', class: 'ghost', onclick: async () => { try { await api('/api/v1/contacts/link', { method: 'POST', body: { path: d.path, target: null } }); K.toast(t('Fiche déliée'), 1); onSaved(d.path, true); } catch (e) { K.toast(e.message); } } }, t('Délier')) : null));
+    d.pubkey && d.via === 'vcard' ? h('button', { type: 'button', class: 'ghost', onclick: async () => { try { await api('/api/v1/contacts/link', { method: 'POST', body: { path: d.path, target: null } }); K.toast(t('Fiche déliée'), 1); onSaved(d.path, true); } catch (e) { K.toast(e.message); } } }, t('Délier')) : null),
+    h('p', { class: 'muted' }, t('Si vous vous suivez l\'un l\'autre, ses photos où elle est seule avec vous lui seront envoyées ; une photo de groupe attend votre accord.')));
 
   const keys = null; // « Écrire » est dans l'en-tête, à côté de « Appeler »
 

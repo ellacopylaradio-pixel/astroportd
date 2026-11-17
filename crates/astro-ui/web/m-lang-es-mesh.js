@@ -33,6 +33,7 @@ export default {
 "Capitaines": "Capitanes",
 "Aucun autre Capitaine connu pour l'instant.": "Ningún otro Capitán conocido por ahora.",
 "Un ami réciproque vous montre ce qu'il vous partage ; c'est sa station qui décide.": "Un amigo recíproco le muestra lo que comparte con usted; su estación decide.",
+"Ce que « Suivre » ouvre": "Lo que abre «Seguir»",
 "Régler mes partages": "Ajustar mis recursos",
 "Maillage et Capitaines amis": "Malla y Capitanes amigos",
 "(vous)": "(usted)",

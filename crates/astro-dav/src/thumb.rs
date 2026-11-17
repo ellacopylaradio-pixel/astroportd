@@ -301,7 +301,8 @@ pub struct BackfillStats {
 }
 
 const BACKFILL_WHERE: &str = "e.owner_hex = ?1 AND e.type = 'file' AND e.cid IS NOT NULL AND e.mime LIKE 'image/%' AND e.lat IS NULL AND e.taken_at IS NULL \
-                              AND json_extract(e.data, '$.exif_scanned') IS NULL AND COALESCE(e.size, 0) <= ?2";
+                              AND json_extract(e.data, '$.exif_scanned') IS NULL AND COALESCE(e.size, 0) <= ?2 \
+                              AND NOT (e.path >= '/_/' AND e.path < '/_0')";
 
 /// Rattrape le GPS et la date de prise de vue des photos reçues **avant** que la station ne les lise à l'envoi : au plus
 /// `limit` fichiers par passage (déchiffrés un à un). Chaque fichier lu est marqué (`exif_scanned`), qu'il porte un EXIF ou

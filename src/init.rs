@@ -357,7 +357,8 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
     };
     println!("   Secrets    : {how}");
     println!("   IPFSNODEID : {}", report.peer_id);
-    println!("   Ğ1         : {}", report.g1_pubkey);
+    println!("   Ğ1         : {}", report.g1_ss58);
+    println!("   Ğ1 (v1)    : {}", report.g1_pubkey);
     println!("   Nostr (HEX): {}", report.nostr_hex);
     if a.no_ssh {
         println!("   SSH        : non touché (--no-ssh) : le lien SSH ⇔ IPFS n'est pas établi");
@@ -369,7 +370,7 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
     }
 
     // 3. Position (20h12 solaire). Un `init` rejoué garde ce qui avait été saisi (station.conf), sauf nouvelle valeur.
-    println!("\n② Position de la station (pour le 20h12 solaire vrai)");
+    println!("\n② Position de la station : le 20h12 solaire vrai, et les flux locaux (UMAP, SECTOR, REGION) montrés aux MULTIPASS\n   avec les « bonnes nouvelles » : les publications les plus aimées autour de la station");
     let previous = read_conf(&home.join("station.conf"));
     let prev = |k: &str| previous.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap_or_default();
     let coords = match a.lat.zip(a.lon) {
@@ -377,9 +378,16 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
         None if !prev("lat").is_empty() && !prev("lon").is_empty() => parse_coord(&prev("lat"), "latitude", 90.0).ok().zip(parse_coord(&prev("lon"), "longitude", 180.0).ok()),
         None => {
             let (la, lo) = (ask.ask("Latitude (ex. 43.60, vide pour ignorer)", ""), ask.ask("Longitude (ex. 1.44)", ""));
-            if la.is_empty() || lo.is_empty() { None } else { Some((parse_coord(&la, "latitude", 90.0)?, parse_coord(&lo, "longitude", 180.0)?)) }
+            if la.is_empty() || lo.is_empty() {
+                println!("   ↪ position non renseignée : le 20h12 sera calculé sans elle et les MULTIPASS n'auront pas de flux locaux ; à compléter plus tard (astroportd init --lat X --lon Y)");
+                None
+            } else { Some((parse_coord(&la, "latitude", 90.0)?, parse_coord(&lo, "longitude", 180.0)?)) }
         }
     };
+    if let Some((la, lo)) = coords {
+        let cells = crate::beacon::cells(la, lo);
+        println!("   Cellules locales : {}", cells.iter().map(|(n, v)| format!("{n} {v}")).collect::<Vec<_>>().join("  ·  "));
+    }
     // Fils de calcul de l'inférence locale : l'option l'emporte, sinon ce que le précédent `init` avait retenu (0 = au choix d'ONNX Runtime).
     let threads = |arg: usize, key: &str| if arg > 0 { arg } else { prev(key).parse().unwrap_or(0) };
     let (face_threads, embed_threads) = (threads(a.face_threads, "face_threads"), threads(a.embed_threads, "embed_threads"));
@@ -570,11 +578,41 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
     } else {
         serve_start
     };
-    if a.systemd {
-        let unit = systemd_unit::render(&unit_desc, &start);
-        let path = systemd_unit::unit_path(&user_home);
-        write_private(&path, &unit)?;
-        println!("\n④ Unité systemd écrite : {} (mode {})\n   systemctl --user daemon-reload && systemctl --user enable --now astroportd\n   (loginctl enable-linger $USER pour qu'elle démarre sans session ouverte)", path.display(), if want == systemd_unit::Mode::Planes { "planes" } else { "serve" });
+    // Unité systemd : écrite sur demande (--systemd), proposée à l'interactif, et TOUJOURS remise à jour si elle existe déjà
+    // (sinon un `init` rejoué avec une autre position laisserait l'ancien `--lat/--lon` dans `ExecStart`).
+    let unit_path = systemd_unit::unit_path(&user_home);
+    let unit_state = systemd_unit::state_of(&unit_path);
+    let write_unit = a.systemd
+        || matches!(unit_state, systemd_unit::UnitState::Serve | systemd_unit::UnitState::Planes)
+        || (unit_state == systemd_unit::UnitState::Absent
+            && ask.interactive
+            && ask.ask("Installer la station en service systemd (démarrage automatique) ? (O/n)", "o").to_lowercase().starts_with('o'));
+    if unit_state == systemd_unit::UnitState::Foreign && !a.systemd {
+        println!("\n④ Unité systemd : {} lance autre chose que astroportd serve/planes : laissée telle quelle (--systemd pour la remplacer)", unit_path.display());
+    } else if write_unit {
+        let existing = std::fs::read_to_string(&unit_path).ok();
+        // Unité existante et pas --systemd : on ne change que `ExecStart` et `Description`, les réglages du Capitaine restent.
+        let unit = match (&existing, a.systemd) {
+            (Some(old), false) => systemd_unit::rewrite(old, &start, Some(&unit_desc)),
+            _ => systemd_unit::render(&unit_desc, &start),
+        };
+        let mode_name = if want == systemd_unit::Mode::Planes { "planes" } else { "serve" };
+        if existing.as_deref().map(str::trim_end) == Some(unit.trim_end()) {
+            println!("\n④ Unité systemd à jour : {} (mode {mode_name})", unit_path.display());
+        } else {
+            write_private(&unit_path, &unit)?;
+            let reloaded = std::process::Command::new("systemctl").args(["--user", "daemon-reload"]).status().is_ok_and(|s| s.success());
+            println!("\n④ Unité systemd {} : {} (mode {mode_name}){}", if existing.is_some() { "mise à jour" } else { "écrite" }, unit_path.display(), if reloaded { ", rechargée (daemon-reload)" } else { "" });
+            if !reloaded {
+                println!("   systemctl --user daemon-reload");
+            }
+            let active = std::process::Command::new("systemctl").args(["--user", "is-active", "--quiet", "astroportd"]).status().is_ok_and(|s| s.success());
+            if existing.is_some() && active {
+                println!("   La station tourne avec l'ancienne configuration : systemctl --user restart astroportd");
+            } else if existing.is_none() {
+                println!("   systemctl --user enable --now astroportd\n   (loginctl enable-linger $USER pour qu'elle démarre sans session ouverte)");
+            }
+        }
     }
 
     println!("\n── Station prête ({}) ──", if mode == Mode::Zen { "constellation ẐEN" } else { "constellation ORIGIN" });

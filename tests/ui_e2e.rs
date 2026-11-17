@@ -817,10 +817,10 @@ async fn the_address_book_is_synced_listed_per_owner_and_linkable() {
     assert_eq!(b.get("/api/v1/contacts", &bob).await.1["contacts"].as_array().unwrap().len(), 0);
     // Création depuis une personne, liaison manuelle, erreurs typées.
     let (s, c) = b.post("/api/v1/contacts/from-person", &alice, json!({ "name": "Nina" })).await;
-    assert_eq!((s, c["path"].as_str()), (StatusCode::OK, Some("/Contacts/Nina.vcf")));
+    assert_eq!((s, c["path"].as_str()), (StatusCode::OK, Some("/_/Contacts/Nina.vcf")));
     assert_eq!(b.post("/api/v1/contacts/from-person", &alice, json!({ "name": "nina" })).await.0, StatusCode::CONFLICT);
-    assert_eq!(b.post("/api/v1/contacts/link", &alice, json!({ "path": "/Contacts/Nina.vcf", "target": "bob@example.org" })).await.0, StatusCode::OK);
-    assert_eq!(b.post("/api/v1/contacts/link", &alice, json!({ "path": "/Contacts/Nina.vcf", "target": "inconnu@example.org" })).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(b.post("/api/v1/contacts/link", &alice, json!({ "path": "/_/Contacts/Nina.vcf", "target": "bob@example.org" })).await.0, StatusCode::OK);
+    assert_eq!(b.post("/api/v1/contacts/link", &alice, json!({ "path": "/_/Contacts/Nina.vcf", "target": "inconnu@example.org" })).await.0, StatusCode::NOT_FOUND);
     assert_eq!(b.post("/api/v1/contacts/link", &alice, json!({ "path": "/Photos/x.jpg" })).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(b.get("/api/v1/contacts", "Basic bm9wZTpub3Bl").await.0, StatusCode::UNAUTHORIZED);
 }

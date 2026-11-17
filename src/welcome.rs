@@ -158,7 +158,7 @@ impl<B: BlobStore> Welcome<B> {
             Err(e) => {
                 let _ = self.reserve(token, -1).await;
                 return Err(match e {
-                    RegisterError::Closed | RegisterError::Full | RegisterError::NoCaptain => InviteError::Unavailable(e.to_string()),
+                    RegisterError::Closed | RegisterError::Full | RegisterError::NoCaptain | RegisterError::Fortress => InviteError::Unavailable(e.to_string()),
                     RegisterError::RateLimited(_) => InviteError::RateLimited(e.to_string()),
                     RegisterError::Invalid(m) => InviteError::Invalid(m),
                     RegisterError::Conflict(_) => InviteError::Conflict("cette adresse a déjà un MULTIPASS ici : connectez-vous avec, la discussion vous attend".into()),

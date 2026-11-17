@@ -566,30 +566,38 @@ CREATE TABLE IF NOT EXISTS dav_changes (
   at        INTEGER NOT NULL DEFAULT (unixepoch())
 ) STRICT;
 CREATE INDEX IF NOT EXISTS dav_changes_owner ON dav_changes(owner_hex, seq);
-CREATE TRIGGER IF NOT EXISTS dav_changes_ai AFTER INSERT ON ucloud_entries
-  WHEN new.type = 'file' AND new.parent = '/Contacts' AND new.path LIKE '%.vcf' BEGIN
+-- Carnet et agenda vivent dans le tiroir système `/_` : les déclencheurs sont recréés à chaque ouverture (DROP puis CREATE),
+-- pour qu'une base d'avant le tiroir suive les nouvelles places.
+DROP TRIGGER IF EXISTS dav_changes_ai;
+CREATE TRIGGER dav_changes_ai AFTER INSERT ON ucloud_entries
+  WHEN new.type = 'file' AND new.parent = '/_/Contacts' AND new.path LIKE '%.vcf' BEGIN
   INSERT INTO dav_changes(owner_hex, path) VALUES (new.owner_hex, new.path);
 END;
-CREATE TRIGGER IF NOT EXISTS dav_changes_au AFTER UPDATE OF path, cid ON ucloud_entries
-  WHEN (old.parent = '/Contacts' AND old.path LIKE '%.vcf') OR (new.parent = '/Contacts' AND new.path LIKE '%.vcf') BEGIN
-  INSERT INTO dav_changes(owner_hex, path) SELECT old.owner_hex, old.path WHERE old.path <> new.path AND old.parent = '/Contacts' AND old.path LIKE '%.vcf';
-  INSERT INTO dav_changes(owner_hex, path) SELECT new.owner_hex, new.path WHERE new.type = 'file' AND new.parent = '/Contacts' AND new.path LIKE '%.vcf';
+DROP TRIGGER IF EXISTS dav_changes_au;
+CREATE TRIGGER dav_changes_au AFTER UPDATE OF path, cid ON ucloud_entries
+  WHEN (old.parent = '/_/Contacts' AND old.path LIKE '%.vcf') OR (new.parent = '/_/Contacts' AND new.path LIKE '%.vcf') BEGIN
+  INSERT INTO dav_changes(owner_hex, path) SELECT old.owner_hex, old.path WHERE old.path <> new.path AND old.parent = '/_/Contacts' AND old.path LIKE '%.vcf';
+  INSERT INTO dav_changes(owner_hex, path) SELECT new.owner_hex, new.path WHERE new.type = 'file' AND new.parent = '/_/Contacts' AND new.path LIKE '%.vcf';
 END;
-CREATE TRIGGER IF NOT EXISTS dav_changes_ad AFTER DELETE ON ucloud_entries
-  WHEN old.type = 'file' AND old.parent = '/Contacts' AND old.path LIKE '%.vcf' BEGIN
+DROP TRIGGER IF EXISTS dav_changes_ad;
+CREATE TRIGGER dav_changes_ad AFTER DELETE ON ucloud_entries
+  WHEN old.type = 'file' AND old.parent = '/_/Contacts' AND old.path LIKE '%.vcf' BEGIN
   INSERT INTO dav_changes(owner_hex, path) VALUES (old.owner_hex, old.path);
 END;
-CREATE TRIGGER IF NOT EXISTS dav_changes_ics_ai AFTER INSERT ON ucloud_entries
-  WHEN new.type = 'file' AND new.parent = '/Calendrier' AND new.path LIKE '%.ics' BEGIN
+DROP TRIGGER IF EXISTS dav_changes_ics_ai;
+CREATE TRIGGER dav_changes_ics_ai AFTER INSERT ON ucloud_entries
+  WHEN new.type = 'file' AND new.parent = '/_/Calendrier' AND new.path LIKE '%.ics' BEGIN
   INSERT INTO dav_changes(owner_hex, path) VALUES (new.owner_hex, new.path);
 END;
-CREATE TRIGGER IF NOT EXISTS dav_changes_ics_au AFTER UPDATE OF path, cid ON ucloud_entries
-  WHEN (old.parent = '/Calendrier' AND old.path LIKE '%.ics') OR (new.parent = '/Calendrier' AND new.path LIKE '%.ics') BEGIN
-  INSERT INTO dav_changes(owner_hex, path) SELECT old.owner_hex, old.path WHERE old.path <> new.path AND old.parent = '/Calendrier' AND old.path LIKE '%.ics';
-  INSERT INTO dav_changes(owner_hex, path) SELECT new.owner_hex, new.path WHERE new.type = 'file' AND new.parent = '/Calendrier' AND new.path LIKE '%.ics';
+DROP TRIGGER IF EXISTS dav_changes_ics_au;
+CREATE TRIGGER dav_changes_ics_au AFTER UPDATE OF path, cid ON ucloud_entries
+  WHEN (old.parent = '/_/Calendrier' AND old.path LIKE '%.ics') OR (new.parent = '/_/Calendrier' AND new.path LIKE '%.ics') BEGIN
+  INSERT INTO dav_changes(owner_hex, path) SELECT old.owner_hex, old.path WHERE old.path <> new.path AND old.parent = '/_/Calendrier' AND old.path LIKE '%.ics';
+  INSERT INTO dav_changes(owner_hex, path) SELECT new.owner_hex, new.path WHERE new.type = 'file' AND new.parent = '/_/Calendrier' AND new.path LIKE '%.ics';
 END;
-CREATE TRIGGER IF NOT EXISTS dav_changes_ics_ad AFTER DELETE ON ucloud_entries
-  WHEN old.type = 'file' AND old.parent = '/Calendrier' AND old.path LIKE '%.ics' BEGIN
+DROP TRIGGER IF EXISTS dav_changes_ics_ad;
+CREATE TRIGGER dav_changes_ics_ad AFTER DELETE ON ucloud_entries
+  WHEN old.type = 'file' AND old.parent = '/_/Calendrier' AND old.path LIKE '%.ics' BEGIN
   INSERT INTO dav_changes(owner_hex, path) VALUES (old.owner_hex, old.path);
 END;
 

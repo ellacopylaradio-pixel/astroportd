@@ -7,6 +7,7 @@
 
 pub mod events;
 mod reader;
+pub mod station_mode;
 mod replay;
 mod writer;
 

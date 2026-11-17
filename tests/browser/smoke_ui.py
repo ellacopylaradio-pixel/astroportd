@@ -39,6 +39,7 @@ ADMIN = dict(face=dict(mode='off', label=None, locked=None, onnx_compiled=True, 
              kinds=dict(kinds=[dict(kind=1, label='Note publique', read='public', write='circle', project=True, default='read=public write=circle project=on', source='défaut'), dict(kind=7, label='Réaction (+N = Ẑen)', read='circle', write='circle', project=True, default='read=circle write=circle project=on', source='défaut')],
                         choices=dict(read=['public', 'addressed', 'friends', 'circle', 'deny'], write=['circle', 'open', 'deny']), fixed={'1059': 'x', '22242': 'y'}))
 ADMIN.update(tunnels=None, tasks=None, assist=dict(services=['ssh'], friends=[], incoming=[], outgoing=[]))  # réglages facultatifs de m-options.js : absents, l'écran s'en passe sans erreur
+ADMIN['locks'] = dict(mode='village', plane=dict(origin=True, kubo=True, pool_peers=1, p2p=True), gates=dict(register=True, register_cli=True, crawl=True, n2=True, mutual_only=False, photos_auto=True, open_writes=[]), people=dict(hosted=4, n1=9, n1_mutual=5, n2=37, n2_known=37), faces=dict(auto_off_members=1), public=dict(files=12, gps=2, sensitive=1, members=1))
 ACCOUNT = dict(hex='aa' * 32, npub='npub1test', email='alice@example.org', role='multipass', g1pub='G1TEST', home_station='Qm:ab', lang='fr', langs=['fr', 'en', 'es'], profile=dict(name='Alice', about='Bonjour', picture=None),
                dav=dict(url='/dav', login='alice@example.org'), token_generation=0, keys_exportable=True, has_g1_key=True, relays=[dict(url='wss://s.example', read=True, write=True)])
 CONTACTS = dict(contacts=[dict(path='/Contacts/Lea.vcf', name='Léa Martin', emails=['lea@example.org'], pubkey='ab' * 32, via='vcard', g1pub=None, warning=None, hosted_here=None, friends=True, faces=12, faces_linked=12),
@@ -82,6 +83,15 @@ class H(BaseHTTPRequestHandler):
         if p == '/': return self.send(200, (WEB / 'index.html').read_bytes(), 'text/html')
         if p == '/register': return self.send(200, (WEB / 'register.html').read_bytes(), 'text/html')
         if p == '/api/v1/register': return self.send(200, dict(open=True, constellation='ORIGIN', accounts=1, max_accounts=500))
+        if p == '/stations': return self.send(200, (WEB / 'stations.html').read_bytes(), 'text/html')
+        if p == '/api/v1/stations': return self.send(200, dict(stations=[dict(station='ici', name='Station ici', self=True, open=True, used=1, total=500, at=1790000000, lat=43.6, lon=1.44), dict(station='tls', name='Toulouse', open=True, used=3, total=50, url='https://toulouse.invalid', join='https://toulouse.invalid/register', at=1790000000, lat=43.61, lon=1.45)]))
+        if p == '/api/v1/locate':
+            q = self.path.split('q=', 1)[1] if 'q=' in self.path else ''; here = f'http://127.0.0.1:{self.server.server_address[1]}'
+            STATE.setdefault('locate', []).append(q)
+            if q.startswith('alice'): return self.send(200, dict(where='here'))
+            if q.startswith('bob'): return self.send(200, dict(where='elsewhere', url=here, station='bob-station.example'))
+            if q.startswith('eve'): return self.send(200, dict(where='elsewhere', url='https://eteinte.invalid', station='eteinte.invalid'))
+            return self.send(200, dict(where='unknown'))
         if p == '/restore': return self.send(200, (WEB / 'restore.html').read_bytes(), 'text/html')
         if p == '/claim': return self.send(200, (WEB / 'claim.html').read_bytes(), 'text/html')
         if p.startswith('/i/'): return self.send(200, (WEB / 'invite.html').read_bytes(), 'text/html')
@@ -94,7 +104,7 @@ class H(BaseHTTPRequestHandler):
             f = WEB / p[4:]
             return self.send(200, f.read_bytes(), MIME.get(f.suffix, 'application/octet-stream')) if f.is_file() else self.send(404, b'x', 'text/plain')
         if p == '/api/v1/me':
-            if not (self.headers.get('Authorization') or '').startswith(('Basic ', 'Nostr ')): return self.send(401, dict(error='authentification requise'))
+            if not (self.headers.get('Authorization') or '').startswith(('Basic ', 'Nostr ')): self.send(401, dict(error='authentification requise'))
             return self.send(200, dict(hex='aa' * 32, email='alice@example.org', captain=True, ai=STATE.get('ai', True)))
         if p == '/api/v1/me/ai': return self.send(200, dict(ollama_url=None, provider=None, has_key=False, model=None, declared=STATE.get('ai', True)))
         if p == '/api/v1/station/coop': return self.send(200, COOP)
@@ -102,6 +112,7 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/presence': return self.send(200, dict(reachable=True, friends=[]))
         if p == '/api/v1/faces': return self.send(200, dict(enabled=False, unknown=0, suggestions=[]))
         if p == '/api/v1/account': return self.send(200, ACCOUNT)
+        if p == '/api/v1/account/images': return self.send(200, dict(images=[], used=0, quota=1000000))
         if p == '/api/v1/contacts': return self.send(200, CONTACTS)
         if p == '/api/v1/me/links': return self.send(200, dict(plane='origin', siblings=['zen1'], keys=[dict(plane='origin', hex='aa' * 32, via='fiche'), dict(plane='zen1', hex='ee' * 32, via='station')]))
         if p == '/api/v1/friends': return self.send(200, dict(friends=[dict(hex='ab' * 32, label='Léa', hosted=False), dict(hex='cd' * 32, label='Marc', hosted=True)]))
@@ -145,7 +156,7 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/pull': return self.send(200, dict(sources=[dict(id='s1', label='Mon Nextcloud', url='https://nc.example/remote.php/dav/files/fred', username='fred', remote_path='Photos', dest_prefix='/Imports/Mon Nextcloud', private_ok=False,
             job=dict(state='running', dry_run=False, started=1, finished=None, progress=dict(done=40, total=100, imported=30, skipped=8, errors=2), report=None, error=None), last=None)]))
         if p == '/api/v1/backup': return self.send(200, dict(mine=None, friends=[], hosting=[], share=None))
-        if p == '/api/v1/faces/pending-shares': return self.send(200, dict(pending=[]))
+        if p == '/api/v1/faces/pending-shares': return self.send(200, dict(pending=[], auto_share=True))
         if p == '/api/v1/activity': return self.send(200, b': ok\n\n', 'text/event-stream')
         self.send(404, dict(error='simulé : ' + p))
     def do_DELETE(self):
@@ -178,6 +189,7 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/admin/dnslink': return self.send(200, dict(ok=False, error='This credential is not valid') if body['values'].get('OVH_APP_SECRET') == 'faux' else dict(ok=True, zone='coop.example'))
         if p == '/api/v1/station/restart': return self.send(200, dict(restarting=True))
         if p == '/api/v1/station/planes/service': STATE['unit'] = 'planes'; return self.send(200, dict(state='switched', unit='/h/u', command='x', backup='/h/u.bak-1', carried=[], carried_to=None, to_carry=[], unreadable=False))
+        if p == '/api/v1/station/admin/locks': ADMIN['locks']['mode'] = body['mode']; return self.send(200, ADMIN['locks'])
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/register': return self.send(200, dict(email='lea-x7k2p9@uplanet.local', token='JT', pass_='123456', salt='S', pepper='P', nsec='nsec1x', npub='npub1x', hex='cd' * 32, g1pub='G', nostrns='/ipns/k', constellation='ORIGIN', lang='fr', guest=True, card=CARD, card_svg=QR, **{'pass': '123456'}))
         if p == '/api/v1/restore/ask': return self.send(200, dict(status='none'))  # secours par les gardiens : rien à attendre dans ce scénario
@@ -307,6 +319,59 @@ with sync_playwright() as pw:
     page.click('button:has-text("Appliquer la matrice")'); page.wait_for_timeout(500)
     sent = [b for p_, b in STATE['posts'] if p_ == '/api/v1/station/admin/kinds']
     check(sent and sent[-1] == dict(rules={'7': 'read=circle write=deny project=on'}), 'seule la ligne modifiée de la matrice est envoyée : ' + str(sent[-1:]))
+    # Écluses : le canal suit le mode montré ; l'aperçu ne change rien tant qu'on n'a pas appliqué.
+    page.set_viewport_size(dict(width=1100, height=900)); page.goto(f'http://127.0.0.1:{port}/#/locks'); page.wait_for_selector('svg.lk-canal'); page.wait_for_timeout(400)
+    canal = lambda: page.evaluate("[document.querySelector('.lk-canal').dataset.mode, document.querySelector('.lk-canal').dataset.reach, [...document.querySelectorAll('.lk-gate')].map(g => g.getAttribute('class').split(' ')[1])]")
+    check(canal() == ['village', '5', ['lk-shut', 'lk-open', 'lk-open', 'lk-open', 'lk-filter']], 'Village : les bateaux vont jusqu\'au public, coffre fermé : ' + str(canal()))
+    check('5 ami(s) qui suivent en retour' in page.inner_text('main') and 'Kubo branché' in page.inner_text('main'), 'les chiffres et l\'état de la station sont affichés')
+    page.screenshot(path=str(OUT / 'locks-village.png'), full_page=True)
+    page.click('button.lk-mode[data-mode=forteresse]'); page.wait_for_timeout(900)
+    check(canal() == ['forteresse', '2', ['lk-shut', 'lk-filter', 'lk-shut', 'lk-filter', 'lk-filter']] and 'Aperçu' in page.inner_text('.lk-apply'), 'aperçu Forteresse : les portes bougent, rien n\'est envoyé : ' + str(canal()))
+    check(not [b for p_, b in STATE['posts'] if p_ == '/api/v1/station/admin/locks'], 'l\'aperçu n\'appelle pas la station')
+    page.screenshot(path=str(OUT / 'locks-forteresse-apercu.png'), full_page=True)
+    page.click('button:has-text("Appliquer ce mode")'); page.wait_for_timeout(500)
+    sent = [b for p_, b in STATE['posts'] if p_ == '/api/v1/station/admin/locks']
+    check(sent == [dict(mode='forteresse')] and page.locator('.lk-mode.lk-now[data-mode=forteresse]').count() == 1, 'appliquer envoie le mode choisi : ' + str(sent))
+    page.emulate_media(color_scheme='dark'); page.click('button.lk-mode[data-mode=place]'); page.wait_for_timeout(900)
+    page.screenshot(path=str(OUT / 'locks-place-sombre.png'), full_page=True)
+    page.emulate_media(color_scheme='light')
+    page.set_viewport_size(dict(width=400, height=900)); page.wait_for_timeout(400)
+    check(page.evaluate("document.querySelector('main').scrollWidth") <= 400, 'Écluses à 400 px : aucun débordement horizontal de l\'écran')
+    page.screenshot(path=str(OUT / 'locks-400.png'), full_page=True)
+    page.set_viewport_size(dict(width=1100, height=800))
+    # Connexion en deux temps : l'identifiant d'abord ; un membre d'une autre station y est mené sans jamais taper son PASS ici.
+    cl = br.new_context(viewport=dict(width=1100, height=800), service_workers='block'); pl = cl.new_page()
+    pl.on('console', lambda m: errors.append(m.text) if m.type == 'error' and '401' not in m.text and 'ERR_NAME_NOT_RESOLVED' not in m.text else None)  # station « éteinte » fictive : son nom ne se résout pas
+    pl.goto(f'http://127.0.0.1:{port}/'); pl.wait_for_selector('#login[open]')
+    check(pl.inner_text('#login-h') == f'127.0.0.1:{port}' and pl.locator('#login-2').is_hidden(), 'la connexion nomme la station et ne demande d\'abord que l\'identifiant')
+    pl.fill('#login-f input[name=u]', 'bob@ailleurs.org'); pl.click('#login-ok'); pl.wait_for_selector('#login-x:not([hidden])')
+    check('bob-station.example' in pl.inner_text('#login-x') and pl.locator('#login-2').is_hidden() and pl.get_attribute('#login-x a.btn', 'href').endswith('/?u=bob%40ailleurs.org'), 'compte ailleurs : on y mène le membre, le champ PASS reste caché')
+    pl.screenshot(path=str(OUT / 'login-ailleurs.png'))
+    pl.fill('#login-f input[name=u]', 'zoe@nulle-part.org'); pl.click('#login-ok'); pl.wait_for_timeout(300)
+    check('Aucun MULTIPASS' in pl.inner_text('#login-x') and pl.locator('#login-2').is_hidden(), 'compte inconnu : réponse neutre et chemins utiles')
+    pl.fill('#login-f input[name=u]', 'alice@example.org'); pl.click('#login-ok'); pl.wait_for_selector('#login-2:not([hidden])')
+    check(pl.locator('#login-x').is_hidden() and pl.inner_text('#login-ok') == 'Se connecter', 'compte ici : le PASS est demandé')
+    check(not [b for p_, b in STATE['posts'] if p_ == '/api/v1/account/unlock'], 'aucun PASS n\'est parti pendant ces recherches')
+    pl.goto(f'http://127.0.0.1:{port}/?u=bob%40ailleurs.org'); pl.wait_for_selector('#login[open]')
+    check(pl.input_value('#login-f input[name=u]') == 'bob@ailleurs.org', 'arrivé depuis une autre station : l\'email est déjà rempli')
+    # Portail /stations : deux portes ; « déjà membre » retrouve sa station, et dit quand elle ne répond pas.
+    pl.goto(f'http://127.0.0.1:{port}/stations#membre'); pl.wait_for_selector('#member:not([hidden])')
+    check(pl.get_attribute('#door-member', 'aria-selected') == 'true' and pl.locator('#new').is_hidden(), '#membre ouvre la porte des membres')
+    pl.fill('#who', 'bob@ailleurs.org'); pl.click('#find button[type=submit]'); pl.wait_for_selector('#trip.is-go')
+    check('bob-station.example' in pl.inner_text('#trip') and pl.get_attribute('#trip-act a', 'href').endswith('/?u=bob%40ailleurs.org'), 'station retrouvée et joignable : un bouton y mène')
+    pl.click('#trip-act a'); pl.wait_for_timeout(300); pl.goto(f'http://127.0.0.1:{port}/stations'); pl.wait_for_selector('#last:not([hidden])')
+    check(pl.get_attribute('#door-member', 'aria-selected') == 'true', 'déjà venu : la porte des membres s\'ouvre avec la dernière station')
+    pl.fill('#who', 'eve@ailleurs.org'); pl.click('#find button[type=submit]'); pl.wait_for_selector('#trip.is-off', timeout=8000)
+    check('à l’abri' in pl.inner_text('#trip') and pl.locator('#trip-act a[href="/restore"]').count() == 1, 'station éteinte : message rassurant, réessayer ou rétablir')
+    pl.set_viewport_size(dict(width=400, height=900)); pl.wait_for_timeout(200)
+    check(pl.evaluate('document.scrollingElement.scrollWidth') <= 400, 'portail à 400 px : aucun débordement')
+    pl.screenshot(path=str(OUT / 'portail-400.png'), full_page=True)
+    pl.click('#door-new'); pl.wait_for_timeout(300)
+    check(pl.locator('#member').is_hidden() and pl.locator('#list a.btn').first.inner_text() == 'Rejoindre', 'porte des nouveaux : rejoindre une station')
+    pl.set_viewport_size(dict(width=1100, height=800)); pl.click('#door-member'); pl.wait_for_timeout(200)
+    check(pl.locator('#list a.btn').first.inner_text() == 'Ouvrir', 'porte des membres : ouvrir sa station depuis la liste')
+    pl.screenshot(path=str(OUT / 'portail-membre.png'), full_page=True)
+    cl.close()
     # Mon compte : jeton changé (la session suit), export des clés derrière une confirmation, profil.
     page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#ac-name'); page.wait_for_timeout(200)
     page.click('#ac-t-securite'); page.wait_for_timeout(100)  # Mon compte est en onglets : Moi · Mes appareils · Ma sécurité
@@ -332,7 +397,7 @@ with sync_playwright() as pw:
     ctx2.add_init_script("localStorage.setItem('basic', btoa('alice@example.org:jeton')); localStorage.setItem('lang', 'en')")
     p2.goto(f'http://127.0.0.1:{port}/#/account'); p2.wait_for_selector('#ac-name'); p2.wait_for_timeout(400)
     nav = p2.inner_text('nav')
-    check('Home' in nav and 'My account' in nav and 'Accueil' not in nav, 'la navigation est traduite en anglais : ' + nav.replace('\n', ' | '))
+    check('Home' in nav and 'Me' in nav and 'Accueil' not in nav, 'la navigation est traduite en anglais : ' + nav.replace('\n', ' | '))
     check('Display name' in p2.inner_text('main'), 'l\'écran Mon compte est traduit')
     p2.click('#ac-t-securite'); p2.wait_for_timeout(100); check('Export my keys' in p2.inner_text('main'), 'l\'onglet sécurité est traduit')
     check(p2.get_attribute('html', 'lang') == 'en', 'l\'attribut lang du document suit')
@@ -359,8 +424,7 @@ with sync_playwright() as pw:
     page.click('button:has-text("Terminer la sélection")')
     page.reload(); page.wait_for_selector('.ab-list li button'); page.click('.ab-item:has-text("Léa Martin")'); page.wait_for_selector('.ab-card'); page.wait_for_timeout(300)
     check(page.input_value('#f-name') == 'Léa Martin' and page.locator('.ab-diff table tbody tr').count() == 2, 'la fiche affiche ses champs et la comparaison avec le profil Nostr')
-    ks = page.inner_text('.ab-keys')
-    check('origin' in ks and 'zen1' in ks and 'lien signé des deux clés' in ks and page.locator('.ab-keys a.btn').count() == 1 and page.get_attribute('.ab-keys a.btn', 'href') == '#/chat?peer=' + 'ab' * 32, "la fiche liste la clé de chaque UPlanet ; « Écrire » n'est actif que pour l'UPlanet courante")
+    check(page.locator('.ck-acts a.btn').count() == 1 and page.get_attribute('.ck-acts a.btn', 'href') == '#/chat?peer=' + 'ab' * 32, "« Écrire » (en-tête de la fiche) ouvre la conversation avec la clé de l'UPlanet courante")
     page.locator('.ab-diff tr:has-text("Nom") button:has-text("Prendre")').click(); page.wait_for_timeout(400)
     taken = [b for p_, b in STATE['posts'] if p_ == '/api/v1/book/take']
     check(taken and taken[-1] == dict(path='/Contacts/Lea.vcf', keys=['name']), 'on prend UNE valeur du profil, pas tout : ' + str(taken[-1:]))
@@ -406,7 +470,7 @@ with sync_playwright() as pw:
     # La page publique du lien, en français puis en anglais, sans compte.
     for loc, title, btn in (('fr-FR', 'alice vous envoie des photos', 'Recevoir mes photos'), ('en-US', 'alice sent you photos', 'Get my photos')):
         c3 = br.new_context(viewport=dict(width=390, height=800), locale=loc, service_workers='block'); p3 = c3.new_page()
-        p3.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None); p3.on('pageerror', lambda e: errors.append(str(e)))
+        p3.on('console', lambda m: errors.append(m.text) if m.type == 'error' and '401' not in m.text else None); p3.on('pageerror', lambda e: errors.append(str(e)))
         p3.goto(f'http://127.0.0.1:{port}/i/{TOKEN}'); p3.wait_for_selector('#f:not([hidden])'); p3.wait_for_timeout(300)
         check(p3.inner_text('#title') == title, f'la page du lien ({loc}) annonce l\'expéditeur : ' + p3.inner_text('#title'))
         check(p3.locator('#thumbs img').count() == 2 and p3.evaluate("[...document.images].every(i => i.naturalWidth > 0)"), 'deux vignettes floutées chargées')
@@ -419,7 +483,7 @@ with sync_playwright() as pw:
             p3.screenshot(path=str(OUT / 'invite-page.png'))
         c3.close()
     # Envoi par la messagerie de l'expéditeur : liens mailto / sms / WhatsApp préremplis (la station n'envoie jamais de courrier).
-    page.goto(f'http://127.0.0.1:{port}/#/contacts'); page.wait_for_selector('table')
+    page.goto(f'http://127.0.0.1:{port}/#/contacts'); page.wait_for_selector('button:has-text("Synchroniser et inviter")'); page.click('button:has-text("Synchroniser et inviter")'); page.wait_for_selector('table')
     page.locator('table tbody tr:has-text("Paul") button:text-is("Inviter")').click(); page.wait_for_selector('main a.btn:text-is("WhatsApp")')
     page.wait_for_timeout(600)  # la liste se redessine une seconde fois (rechargement des invitations) : on attend qu'elle se stabilise
     page.wait_for_function("document.querySelectorAll('main a.btn').length >= 3")
@@ -483,7 +547,7 @@ with sync_playwright() as pw:
     ctx4 = br.new_context(viewport=dict(width=390, height=800), locale='fr-FR', service_workers='block'); p4 = ctx4.new_page()
     p4.on('console', lambda m: errors.append(m.text) if m.type == 'error' and '401' not in m.text else None); p4.on('pageerror', lambda e: errors.append(str(e)))
     p4.goto(f'http://127.0.0.1:{port}/#/account'); p4.wait_for_selector('#login-f', state='visible')
-    p4.fill('input[name=u]', 'alice@example.org'); p4.fill('input[name=p]', '000000'); p4.click('#login-f button[value=ok]'); p4.wait_for_timeout(400)
+    p4.fill('input[name=u]', 'alice@example.org'); p4.click('#login-f button[value=ok]'); p4.wait_for_selector('#login-2', state='visible'); p4.fill('input[name=p]', '000000'); p4.click('#login-f button[value=ok]'); p4.wait_for_timeout(400)
     check('4 essai(s) restant(s)' in p4.inner_text('#login-e'), 'un PASS faux affiche les essais restants : ' + p4.inner_text('#login-e'))
     p4.fill('input[name=p]', '123456'); p4.click('#login-f button[value=ok]'); p4.wait_for_selector('#ac-name'); p4.wait_for_timeout(300)
     sent = [b for p_, b in STATE['posts'] if p_ == '/api/v1/account/unlock']
@@ -498,7 +562,7 @@ with sync_playwright() as pw:
     ctx4.close()
     # Inscription sans email : la case remplace l'adresse par un alias facultatif.
     p5 = br.new_context(viewport=dict(width=390, height=800), locale='fr-FR', service_workers='block').new_page()
-    p5.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None); p5.on('pageerror', lambda e: errors.append(str(e)))
+    p5.on('console', lambda m: errors.append(m.text) if m.type == 'error' and '401' not in m.text else None); p5.on('pageerror', lambda e: errors.append(str(e)))
     p5.goto(f'http://127.0.0.1:{port}/register'); p5.wait_for_selector('#f:not([hidden])')
     p5.check('#guest'); p5.fill('#alias', 'léa'); p5.click('#go'); p5.wait_for_selector('#done:not([hidden])')
     sent = [b for p_, b in STATE['posts'] if p_ == '/api/v1/register']
@@ -508,7 +572,7 @@ with sync_playwright() as pw:
     check(p5.is_visible('#qr svg') and CARD in p5.inner_text('#card') and p5.is_visible('#print'), 'la clé de secours est remise en texte et en QR imprimable')
     # Rétablir son compte sur cette station depuis la carte : le champ est vidé dès la réponse, le nouveau PASS est remis.
     p6 = br.new_context(viewport=dict(width=390, height=800), locale='fr-FR', service_workers='block').new_page()
-    p6.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None); p6.on('pageerror', lambda e: errors.append(str(e)))
+    p6.on('console', lambda m: errors.append(m.text) if m.type == 'error' and '401' not in m.text else None); p6.on('pageerror', lambda e: errors.append(str(e)))
     p6.goto(f'http://127.0.0.1:{port}/restore'); p6.wait_for_selector('#f:not([hidden])')
     check(not p6.is_visible('#scan'), 'sans lecteur de QR du navigateur, seul le collage est proposé')
     p6.fill('#card', CARD); p6.click('#go'); p6.wait_for_selector('#done:not([hidden])')
@@ -524,9 +588,9 @@ with sync_playwright() as pw:
     STATE['chat'] = [dict(id='a', mine=False, at=1790000000, text='Salut, tu viens samedi ?', state='ok')]; STATE['chat_read'] = False
     page.goto(f'http://127.0.0.1:{port}/#/chat'); page.wait_for_selector('.ab-list li button'); page.wait_for_timeout(300)
     check('Léa' in page.inner_text('.ab-list') and page.query_selector('.ab-list .ch-badge') is not None, 'la conversation apparaît avec son compteur de non lus')
-    check(page.query_selector('nav a[data-r=chat] .ch-badge') is not None, 'la pastille de non lus est dans le menu')
+    check(page.query_selector('nav a[data-r=people] .ch-badge') is not None, 'la pastille de non lus est dans le menu (Proches)')
     page.click('.ab-list li button'); page.wait_for_selector('.ch-msg'); page.wait_for_timeout(300)
-    check('zen1' in page.inner_text('.ab-list') and 'origin' in page.inner_text('.ab-list'), "la conversation indique ses canaux : une UPlanet par clé de la personne")
+    check('zen1' not in page.inner_text('.ab-list') and 'origin' not in page.inner_text('.ab-list'), 'la conversation ne montre ni constellation ni clé au membre')
     check('Salut, tu viens samedi ?' in page.inner_text('.ch-thread') and 'Chiffré de bout en bout' in page.inner_text('.ch-head'), 'le fil affiche le message reçu et la mention de chiffrement')
     check(page.query_selector('nav a[data-r=chat] .ch-badge') is None, "ouvrir la conversation retire la pastille")
     page.fill('.ch-form textarea', 'Oui, avec plaisir !'); page.press('.ch-form textarea', 'Enter'); page.wait_for_selector('.ch-msg.mine'); page.wait_for_timeout(300)
@@ -536,8 +600,8 @@ with sync_playwright() as pw:
     page.goto(f'http://127.0.0.1:{port}/#/chat?peer=' + 'ab' * 32); page.wait_for_selector('.ch-msg'); page.wait_for_timeout(200)
     check('Oui, avec plaisir !' in page.inner_text('.ch-thread'), "le lien depuis une fiche ouvre directement la conversation")
     # Mes UPlanet : les clés dans les autres plans et l'annonce publique, sur demande seulement.
-    page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#announce-links'); page.wait_for_timeout(200)
-    check('zen1' in page.inner_text('main') and 'Mes constellations' in page.inner_text('main'), 'Mon compte liste mes clés dans les autres constellations')
+    page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#announce-links', state='attached'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#announce-links'); page.wait_for_timeout(200)
+    check('Mes autres comptes' in page.inner_text('main') and 'zen1' not in page.inner_text('main'), 'Mon compte parle de « mes autres comptes », sans constellation ni clé')
     before = len([1 for p_, _ in STATE['posts'] if p_ == '/api/v1/me/links'])
     check(before == 0, "l'annonce ne part jamais d'elle-même : rien n'est publié à l'ouverture de l'écran")
     page.click('#announce-links'); page.wait_for_timeout(150)  # clic armé : le premier clic explique, rien n'est annoncé
@@ -607,14 +671,14 @@ with sync_playwright() as pw:
     check(any(p_ == '/api/v1/station/restart' for p_, _ in STATE['posts']), 'planes : le second clic demande le redémarrage')
     # BRO : masqué tant que le MULTIPASS n'a déclaré ni Ollama ni clé d'API ; la déclaration (Mon compte) le fait apparaître.
     STATE['ai'] = False
-    page.goto(f'http://127.0.0.1:{port}/#/account'); page.reload(); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
+    page.goto(f'http://127.0.0.1:{port}/#/account'); page.reload(); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
     check(page.locator('nav a[data-r=bro]').is_hidden(), "sans IA déclarée, l'onglet BRO n'apparaît pas")
-    page.goto(f'http://127.0.0.1:{port}/#/bro'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
+    page.goto(f'http://127.0.0.1:{port}/#/bro'); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
     check(page.evaluate('location.hash') == '#/account', "ouvrir #/bro sans IA renvoie vers Mon compte")
-    page.fill('#ai-url', 'http://127.0.0.1:11434'); page.click('section:has(#ai-url) button:has-text("Enregistrer")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(500)
+    page.fill('#ai-url', 'http://127.0.0.1:11434'); page.click('section:has(#ai-url) button:has-text("Enregistrer")'); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(500)
     saved = [b for p_, b in STATE['posts'] if p_ == '/api/v1/me/ai']
     check(saved and saved[-1]['ollama_url'] == 'http://127.0.0.1:11434' and 'api_key' not in saved[-1], "l'adresse d'Ollama est enregistrée, sans clé inventée")
-    check(page.locator('nav a[data-r=bro]').is_visible(), "une fois l'IA déclarée, l'onglet BRO apparaît")
+    check(page.locator('a.fab[href="#/bro"]').is_visible(), "une fois l'IA déclarée, le bouton ✨ de l'assistant apparaît")
     # Bibliothèque : fil du temps jour par jour, carte du monde hors ligne avec ses groupes, doublons sans options superflues.
     page.goto(f'http://127.0.0.1:{port}/#/library'); page.wait_for_selector('#lib-tab-time'); page.wait_for_timeout(700)
     check(page.locator('.stream h3.sticky').count() >= 1 and page.locator('.stream h4').count() >= 2, "l'affichage sur le temps groupe les photos par jour : " + str(page.locator('.stream h4').all_inner_texts()[:2]))
@@ -663,7 +727,7 @@ with sync_playwright() as pw:
     check(len(signed) >= 2 and len(nonces) == len(signed) and len(set(nonces)) == len(nonces) and all(len(n) >= 16 for n in nonces), f"chaque événement signé par l'extension porte un nonce unique ({len(signed)} événements)")
     ext.close()
     # Style (Aurore par défaut, Sobre, Kraft) et mode clair/sombre : choisis dans l'en-tête, retenus par l'appareil.
-    page.emulate_media(color_scheme='light'); page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#style')
+    page.emulate_media(color_scheme='light'); page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#style')
     check(page.evaluate("document.documentElement.dataset.style") == 'aurore', 'le style par défaut est Aurore')
     page.select_option('#style', 'kraft')
     check(page.evaluate("[document.documentElement.dataset.style, localStorage.getItem('style')]") == ['kraft', 'kraft'], 'le style choisi est appliqué et retenu')

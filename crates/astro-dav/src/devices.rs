@@ -16,8 +16,6 @@ use crate::vfs::{self, mkdir_p_tx, normalize_path, vfs_tx};
 
 /// Appareils par compte au plus.
 pub const MAX_DEVICES: usize = 16;
-/// Dossiers qu'un appareil ne peut jamais recevoir comme racine.
-const RESERVED: [&str; 5] = ["Coffre", "Contacts", "Calendrier", "Partages", "Sauvegardes"];
 
 /// Ce qu'un appareil peut faire dans son dossier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,9 +125,8 @@ fn sha(token: &str) -> String {
 /// Dossier racine acceptable : normalisé, pas `/`, ni un dossier réservé, ni caché.
 fn check_root(raw: &str) -> Result<String, DeviceError> {
     let root = normalize_path(raw).map_err(|_| DeviceError::Invalid("dossier invalide".into()))?;
-    let first = root.trim_start_matches('/').split('/').next().unwrap_or("");
-    if root == "/" || RESERVED.iter().any(|r| r.eq_ignore_ascii_case(first)) || root.split('/').any(|s| s.starts_with('.')) {
-        return Err(DeviceError::Invalid("choisir un sous-dossier du uCloud (ni la racine, ni le coffre, les contacts, l'agenda, les partages, les sauvegardes, ni un dossier caché)".into()));
+    if root == "/" || vfs::is_reserved_root(&root) || root.split('/').any(|s| s.starts_with('.')) {
+        return Err(DeviceError::Invalid("choisir un sous-dossier du uCloud (ni la racine, ni le tiroir système _ : coffre, contacts, agenda ; ni les partages, les sauvegardes, ni un dossier caché)".into()));
     }
     Ok(root)
 }
@@ -230,7 +227,7 @@ mod tests {
     #[test]
     fn roots_must_be_ordinary_subfolders() {
         assert_eq!(check_root("/Photos/Téléphone/").unwrap(), "/Photos/Téléphone");
-        for bad in ["/", "", "/Coffre", "/coffre/x", "/Contacts", "/Calendrier/a", "/Partages", "/Sauvegardes", "/.cache", "/Photos/.cachés", "/a/../.."] {
+        for bad in ["/", "", "/_", "/_/Coffre", "/_/coffre/x", "/_/Contacts", "/_/Calendrier/a", "/Partages", "/sauvegardes", "/.cache", "/Photos/.cachés", "/a/../.."] {
             assert!(check_root(bad).is_err(), "{bad}");
         }
     }

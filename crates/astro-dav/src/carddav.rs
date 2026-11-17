@@ -1,6 +1,6 @@
 //! CardDAV (RFC 6352) : le carnet d'adresses de chaque compte, synchronisable avec « Contacts » d'Android (DAVx⁵) et d'iOS.
 //!
-//! Les fiches sont de simples fichiers `.vcf` du dossier `/Contacts` du uCloud : chiffrées (UENC), répliquées, comptées
+//! Les fiches sont de simples fichiers `.vcf` du dossier `/_/Contacts` du uCloud (tiroir système) : chiffrées (UENC), répliquées, comptées
 //! dans le quota, et visibles aussi par un client WebDAV ordinaire. Ce module n'est qu'une façade de protocole :
 //!
 //! | URL (sous le montage) | rôle |
@@ -8,7 +8,7 @@
 //! | `/principals/<login>/` | principal : `addressbook-home-set` |
 //! | `/addressbooks/<login>/` | dossier d'accueil des carnets |
 //! | `/addressbooks/<login>/contacts/` | le carnet (`getctag`, rapports `addressbook-multiget` / `addressbook-query`) |
-//! | `/addressbooks/<login>/contacts/<nom>.vcf` | une fiche ↔ `/Contacts/<nom>.vcf` |
+//! | `/addressbooks/<login>/contacts/<nom>.vcf` | une fiche ↔ `/_/Contacts/<nom>.vcf` |
 //!
 //! `<login>` est l'email du compte (ou sa clé Nostr s'il n'en a pas) : on n'ouvre jamais le carnet d'un autre.
 //! `sync-collection` (RFC 6578) s'appuie sur le journal `dav_changes` (alimenté par des triggers SQL, suppressions
@@ -34,7 +34,13 @@ use crate::vfs::{self, Entry, EntryKind};
 use crate::xml::{self, escape};
 
 /// Dossier du uCloud qui porte le carnet.
-pub const CONTACTS_DIR: &str = "/Contacts";
+pub const CONTACTS_DIR: &str = "/_/Contacts";
+
+/// Nom de fichier si `path` est une entrée **directe** du carnet (`/_/Contacts/<nom>`), sinon `None`.
+#[must_use]
+pub fn card_file(path: &str) -> Option<&str> {
+    path.strip_prefix(CONTACTS_DIR).and_then(|r| r.strip_prefix('/')).filter(|n| !n.is_empty() && !n.contains('/'))
+}
 const NS: &str = "xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\" xmlns:CS=\"http://calendarserver.org/ns/\" xmlns:A=\"urn:ietf:params:xml:ns:caldav\"";
 pub(crate) const XML: [(header::HeaderName, &str); 1] = [(header::CONTENT_TYPE, "application/xml; charset=utf-8")];
 
@@ -76,7 +82,7 @@ fn is_card(e: &Entry) -> bool {
     e.kind == EntryKind::File && e.path.to_ascii_lowercase().ends_with(".vcf")
 }
 
-/// Fiches `.vcf` du dossier `/Contacts` d'un compte.
+/// Fiches `.vcf` du dossier `/_/Contacts` d'un compte.
 pub async fn list_cards<B: BlobStore>(st: &DavState<B>, owner: &str) -> Vec<Entry> {
     let o = owner.to_owned();
     let listed = st.db.readers().read(move |c| Ok(vfs::list_children(c, &o, CONTACTS_DIR).unwrap_or_default())).await.unwrap_or_default();
@@ -437,10 +443,7 @@ async fn put_card<B: BlobStore>(st: &DavState<B>, auth: &Auth, file: &str, req: 
         }
     }
     let o = owner.clone();
-    if let Err(e) = vfs::vfs_tx(&st.db, move |tx| match vfs::mkdir_tx(tx, &o, CONTACTS_DIR, now_secs()) {
-        Ok(()) | Err(vfs::VfsError::Exists) => Ok(()),
-        Err(e) => Err(e),
-    })
+    if let Err(e) = vfs::vfs_tx(&st.db, move |tx| vfs::mkdir_p_tx(tx, &o, CONTACTS_DIR, now_secs()))
     .await
     {
         return reply(StatusCode::INTERNAL_SERVER_ERROR, &format!("dossier des contacts : {e}"));

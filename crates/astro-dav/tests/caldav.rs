@@ -61,7 +61,7 @@ async fn events_are_created_read_updated_and_deleted_with_etags() {
     assert_eq!(call(&b.app, "DELETE", &url, Some(&alice()), &[], Body::empty()).await.status().as_u16(), 204);
     assert_eq!(call(&b.app, "GET", &url, Some(&alice()), &[], Body::empty()).await.status().as_u16(), 404);
     // Le dossier de l'agenda est un dossier du uCloud : un client WebDAV ordinaire le voit.
-    assert_eq!(call(&b.app, "PROPFIND", "/dav/Calendrier/", Some(&alice()), &[("depth", "1")], Body::empty()).await.status().as_u16(), 207);
+    assert_eq!(call(&b.app, "PROPFIND", "/dav/_/Calendrier/", Some(&alice()), &[("depth", "1")], Body::empty()).await.status().as_u16(), 207);
 }
 
 #[tokio::test]

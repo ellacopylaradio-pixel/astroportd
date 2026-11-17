@@ -94,17 +94,17 @@ async fn cards_are_created_found_by_name_phone_or_group_and_edited_without_losin
 
     // Une fiche venue d'un téléphone garde sa photo et sa clé Nostr quand on la modifie ici.
     let raw = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:tel-1\r\nFN:Bea\r\nPHOTO;ENCODING=b;TYPE=JPEG:AAAA\r\nX-NOSTR-PUBKEY:{}\r\nEND:VCARD\r\n", hex(&BEA));
-    ingest::ingest(&b.dav, &me, "/Contacts", "Bea.vcf", Some("text/vcard"), std::io::Cursor::new(raw.into_bytes())).await.unwrap();
-    let mut f = vcard::read_fields(&card_text(&b, "/Contacts/Bea.vcf").await);
+    ingest::ingest(&b.dav, &me, "/_/Contacts", "Bea.vcf", Some("text/vcard"), std::io::Cursor::new(raw.into_bytes())).await.unwrap();
+    let mut f = vcard::read_fields(&card_text(&b, "/_/Contacts/Bea.vcf").await);
     f.title = "Boulangère".into();
     f.phones.push(Typed { kind: "work".into(), value: "05 61 00 00 00".into() });
-    b.book.save(&me, Some("/Contacts/Bea.vcf"), &f).await.unwrap();
-    let text = card_text(&b, "/Contacts/Bea.vcf").await;
+    b.book.save(&me, Some("/_/Contacts/Bea.vcf"), &f).await.unwrap();
+    let text = card_text(&b, "/_/Contacts/Bea.vcf").await;
     assert!(text.contains("PHOTO;ENCODING=b;TYPE=JPEG:AAAA") && text.contains(&format!("X-NOSTR-PUBKEY:{}", hex(&BEA))) && text.contains("UID:tel-1"), "{text}");
-    let d = b.book.get(&me, "/Contacts/Bea.vcf").await.unwrap();
+    let d = b.book.get(&me, "/_/Contacts/Bea.vcf").await.unwrap();
     assert_eq!((d["fields"]["title"].as_str(), d["pubkey"].as_str()), (Some("Boulangère"), Some(hex(&BEA).as_str())), "le lien avec le MULTIPASS survit à la modification");
     // La photo incorporée à la fiche est montrée (lecture seule) ; une fiche sans photo répond `null`.
-    assert_eq!(b.book.photo(&me, "/Contacts/Bea.vcf").await.unwrap()["uri"], "data:image/jpeg;base64,AAAA");
+    assert_eq!(b.book.photo(&me, "/_/Contacts/Bea.vcf").await.unwrap()["uri"], "data:image/jpeg;base64,AAAA");
     assert!(b.book.photo(&me, &path).await.unwrap()["uri"].is_null());
     // Changer la photo : image réduite et ré-encodée en JPEG dans la fiche ; une donnée qui n'est pas une image est refusée.
     {
@@ -112,25 +112,25 @@ async fn cards_are_created_found_by_name_phone_or_group_and_edited_without_losin
         let mut png = Vec::new();
         image::DynamicImage::ImageRgb8(image::RgbImage::new(600, 400)).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
         let uri = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png));
-        b.book.set_photo(&me, "/Contacts/Bea.vcf", Some(&uri)).await.unwrap();
-        let shown = b.book.photo(&me, "/Contacts/Bea.vcf").await.unwrap()["uri"].as_str().unwrap().to_owned();
+        b.book.set_photo(&me, "/_/Contacts/Bea.vcf", Some(&uri)).await.unwrap();
+        let shown = b.book.photo(&me, "/_/Contacts/Bea.vcf").await.unwrap()["uri"].as_str().unwrap().to_owned();
         assert!(shown.starts_with("data:image/jpeg;base64,") && shown != "data:image/jpeg;base64,AAAA", "{shown}");
-        let text = card_text(&b, "/Contacts/Bea.vcf").await;
+        let text = card_text(&b, "/_/Contacts/Bea.vcf").await;
         assert_eq!(text.matches("PHOTO").count(), 1, "une seule photo dans la fiche");
         for bad in ["data:image/png;base64,AAAA", "data:text/html;base64,AAAA", "https://x/y.png", "data:image/png,AAAA"] {
-            assert!(matches!(b.book.set_photo(&me, "/Contacts/Bea.vcf", Some(bad)).await, Err(BookError::Invalid(_))), "{bad}");
+            assert!(matches!(b.book.set_photo(&me, "/_/Contacts/Bea.vcf", Some(bad)).await, Err(BookError::Invalid(_))), "{bad}");
         }
-        assert_eq!(b.book.photo_choices(&me, "/Contacts/Bea.vcf").await.unwrap()["faces"], json!([]));
-        b.book.set_photo(&me, "/Contacts/Bea.vcf", None).await.unwrap();
-        assert!(b.book.photo(&me, "/Contacts/Bea.vcf").await.unwrap()["uri"].is_null());
+        assert_eq!(b.book.photo_choices(&me, "/_/Contacts/Bea.vcf").await.unwrap()["faces"], json!([]));
+        b.book.set_photo(&me, "/_/Contacts/Bea.vcf", None).await.unwrap();
+        assert!(b.book.photo(&me, "/_/Contacts/Bea.vcf").await.unwrap()["uri"].is_null());
     }
     // Suppression en lot : chaque échec est dit sans arrêter les autres.
     let (x, y) = (b.book.save(&me, None, &fields("Lot Un")).await.unwrap()["path"].as_str().unwrap().to_owned(), b.book.save(&me, None, &fields("Lot Deux")).await.unwrap()["path"].as_str().unwrap().to_owned());
-    let r = b.book.delete_many(&me, &[x, "/Contacts/absente.vcf".into(), y]).await.unwrap();
+    let r = b.book.delete_many(&me, &[x, "/_/Contacts/absente.vcf".into(), y]).await.unwrap();
     assert_eq!((r["deleted"].as_i64(), r["failed"].as_array().map(Vec::len)), (Some(2), Some(1)));
     assert!(matches!(b.book.delete_many(&me, &[]).await, Err(BookError::Invalid(_))));
     // Chemins hostiles et fiche sans nom refusés.
-    for bad in ["/Contacts/../x.vcf", "/etc/passwd", "/Contacts/a/b.vcf", "/Contacts/x.txt"] {
+    for bad in ["/_/Contacts/../x.vcf", "/etc/passwd", "/_/Contacts/a/b.vcf", "/_/Contacts/x.txt"] {
         assert!(matches!(b.book.get(&me, bad).await, Err(BookError::Invalid(_))), "{bad}");
     }
     assert!(matches!(b.book.save(&me, Some(&path), &fields("  ")).await, Err(BookError::Invalid(_))));

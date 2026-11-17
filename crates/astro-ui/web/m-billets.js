@@ -25,6 +25,7 @@ export default async function billets(box, K) {
   const count = h('select', { id: 'bs-count' }, [6, 5, 4, 3, 2, 1].map(n => h('option', { value: n }, String(n))));
   const amount = num('bs-amount', 10, 0, 10000);
   const days = h('select', { id: 'bs-days' }, DAYS.map(([d, l]) => h('option', { value: d }, t(l))));
+  const style = h('select', { id: 'bs-style' }, [['profile', 'Mon profil Nostr (Eugro à défaut)'], ['eugro', 'Eugro'], ['astroport', 'Astroport']].map(([v, l]) => h('option', { value: v }, t(l))));
   const back = h('input', { id: 'bs-return', type: 'checkbox', disabled: '' });
   const total = h('p', { class: 'muted', role: 'status' });
   const err = h('p', { class: 'err', role: 'alert' });
@@ -34,7 +35,7 @@ export default async function billets(box, K) {
   go.onclick = async () => {
     err.textContent = ''; go.disabled = true;
     try {
-      const r = await K.api('/api/v1/billet/issue', { method: 'POST', body: { count: Number(count.value), amount_zen: Number(amount.value) || 0, valid_days: Number(days.value) || null, return_to_issuer: back.checked, origin: location.origin } });
+      const r = await K.api('/api/v1/billet/issue', { method: 'POST', body: { count: Number(count.value), amount_zen: Number(amount.value) || 0, valid_days: Number(days.value) || null, return_to_issuer: back.checked, style: style.value, origin: location.origin } });
       show(r); loadList();
     } catch (e) { err.textContent = t(e.message); } finally { go.disabled = false; }
   };
@@ -43,7 +44,8 @@ export default async function billets(box, K) {
     h('div', { class: 'bs-form' },
       h('label', { for: 'bs-count' }, t('Nombre de billets')), count,
       h('label', { for: 'bs-amount' }, t('Valeur de chaque billet (ẑ)')), amount,
-      h('label', { for: 'bs-days' }, t('Durée de validité')), days),
+      h('label', { for: 'bs-days' }, t('Durée de validité')), days,
+      h('label', { for: 'bs-style' }, t('Fond et logo')), style),
     h('p', {}, h('label', {}, back, ' ', t('Si le billet n’est pas encaissé à la date de fin, sa valeur revient sur mon portefeuille'))),
     h('p', { class: 'muted' }, t('Avec le retour automatique, la station garde deux des trois parts (chiffrées, pour elle seule) : elle peut renvoyer la valeur à la date de fin, mais elle garde le billet en dépôt jusque-là.')),
     total, err, h('p', {}, go));
@@ -75,7 +77,7 @@ export default async function billets(box, K) {
     const cards = r.billets.map(b => h('article', { class: 'bs-bill' + (st.background ? ' bs-img' : ''), ...{} },
       h('div', { class: 'bs-strip' }, svg(b.qr_p2, 'bs-qr'), h('span', {}, t('SOUS LE PLI'))),
       h('div', { class: 'bs-main' },
-        h('div', { class: 'bs-head' }, st.icon ? h('img', { class: 'bs-icon', src: st.icon, alt: '' }) : null, h('strong', {}, 'Ğ1Billet'), h('span', {}, host)),
+        h('div', { class: 'bs-head' }, st.icon ? h('img', { class: 'bs-icon' + (st.logo_wide ? ' wide' : ''), src: st.icon, alt: '' }) : null, h('strong', {}, 'Ğ1Billet'), r.plane ? h('b', { class: 'bs-plane' }, r.plane) : null, h('span', {}, host)),
         h('div', { class: 'bs-amt' }, `${b.amount_zen} Ẑen`),
         h('div', { class: 'bs-qrs' }, h('figure', {}, svg(b.qr_p1, 'bs-qr big'), h('figcaption', {}, t('À scanner'))), h('figure', {}, svg(b.qr_verify, 'bs-qr'), h('figcaption', {}, t('Vérifier'))) ),
         h('div', { class: 'bs-foot' }, short(b.g1pub), b.expires_at ? ` · ${t('valable jusqu’au {0}', new Date(b.expires_at * 1000).toLocaleDateString())}` : '', b.return_to_issuer ? ` · ${t('retour à l’émetteur')}` : ''))));

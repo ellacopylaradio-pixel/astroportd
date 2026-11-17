@@ -150,7 +150,7 @@ async fn ingest_with<B: BlobStore, R: AsyncRead + Unpin>(st: &Arc<DavState<B>>, 
     if let Some(hook) = &st.on_upload {
         hook(owner, &path, &mime);
     }
-    if crate::thumb::is_thumbable(&mime) {
+    if crate::thumb::is_thumbable(&mime) && !crate::vfs::is_system(&path) {
         let (st, owner, path) = (st.clone(), owner.to_owned(), path.clone());
         tokio::spawn(async move {
             if let Err(e) = crate::thumb::generate(&st, &owner, &path).await {

@@ -123,7 +123,7 @@ async fn modes_tokens_accounts_and_revocation_are_enforced() {
 async fn folders_names_and_the_number_of_devices_are_validated() {
     let b = bench("dev-valid").await;
     let owner = hex(&ALICE);
-    for bad in ["/", "", "/Coffre", "/Contacts/x", "/Calendrier", "/Partages", "/Sauvegardes", "/.cache", "/a/../.."] {
+    for bad in ["/", "", "/_/Coffre", "/_/Contacts/x", "/_/Calendrier", "/Partages", "/Sauvegardes", "/.cache", "/a/../.."] {
         assert!(devices::create(&b.db, &owner, "x", bad, Mode::Write).await.is_err(), "{bad}");
     }
     assert!(devices::create(&b.db, &owner, "  ", "/Ok", Mode::Write).await.is_err(), "nom vide");

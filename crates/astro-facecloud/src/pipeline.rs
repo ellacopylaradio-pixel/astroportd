@@ -327,6 +327,9 @@ impl<B: BlobStore, E: FaceEngine, O: Outbox> FaceCloud<B, E, O> {
 
     /// Analyse une photo du VFS : catalogue ses visages et partage avec les amis reconnus.
     pub async fn process_photo(&self, owner: &str, path: &str) -> Result<PhotoReport, FaceError> {
+        if vfs::is_system(path) {
+            return Ok(PhotoReport { status: "skipped".into(), ..PhotoReport::default() }); // tiroir système : jamais analysé
+        }
         let photo = self.photo(owner, path).await?;
         if photo.origin == "facecloud-share" {
             return Ok(PhotoReport { status: "skipped".into(), ..PhotoReport::default() }); // copie reçue : jamais ré-analysée
@@ -356,8 +359,11 @@ impl<B: BlobStore, E: FaceEngine, O: Outbox> FaceCloud<B, E, O> {
     }
 
     /// Envoie tout de suite aux amis reconnus avec certitude (visage net, score ≥ `share_auto_min`) ; les cas ambigus
-    /// attendent la confirmation de l'utilisateur dans `face_share_pending`.
+    /// attendent la confirmation de l'utilisateur dans `face_share_pending`. Deux écluses de plus : le membre peut couper
+    /// l'envoi automatique ([`Self::set_auto_share`]), et une photo où paraît **quelqu'un d'autre** que lui et l'ami
+    /// attend toujours son accord ([`Self::crowded`]).
     async fn dispatch_shares(&self, owner: &str, path: &str, photo: &Photo, report: &mut PhotoReport) -> Result<(), FaceError> {
+        let auto_on = self.auto_share(owner).await?;
         // ami → (envoi direct ?, meilleure détection, meilleur score, visage déjà catalogué ?)
         let mut friends: BTreeMap<String, (bool, f32, f64, bool)> = BTreeMap::new();
         for f in &report.faces {
@@ -377,14 +383,44 @@ impl<B: BlobStore, E: FaceEngine, O: Outbox> FaceCloud<B, E, O> {
         for (friend, (auto, det, score, known)) in friends {
             // Visage déjà catalogué : décidé à un passage précédent (envoi, attente ou nom donné par l'humain). Une
             // photo déjà en attente reste en attente ; sinon c'est une identité validée à la main, on envoie.
-            let direct = auto || (known && !self.is_pending(owner, &friend, &photo.cid).await?);
-            if direct {
+            let pending = known && self.is_pending(owner, &friend, &photo.cid).await?;
+            let sure = auto || (known && !pending);
+            if sure && auto_on && !self.crowded(owner, path, &friend).await? {
                 self.share_with(owner, path, photo, &friend, report).await?;
-            } else if !known {
+            } else if !pending {
                 self.queue_share(owner, path, photo, &friend, det, score, report).await?;
             }
         }
         Ok(())
+    }
+
+    /// La photo montre-t-elle, nettement (détection ≥ `share_det_min`), quelqu'un d'autre que le propriétaire et `friend` ?
+    /// Un inconnu, ou un autre ami : la photo ne part pas toute seule. Le propriétaire dont le visage n'est pas encore
+    /// nommé compte comme un inconnu (prudence : une photo à deux attend alors un clic). Décidé en SQL, sur le catalogue.
+    pub async fn crowded(&self, owner: &str, path: &str, friend: &str) -> Result<bool, FaceError> {
+        let (o, p, f, min) = (owner.to_owned(), path.to_owned(), friend.to_owned(), f64::from(self.config.share_det_min));
+        Ok(self
+            .db
+            .readers()
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM faces WHERE owner_hex = ?1 AND ucloud_path = ?2 AND ref IS NULL AND COALESCE(det_score, 1.0) >= ?4 \
+                     AND (pubkey IS NULL OR pubkey NOT IN (?1, ?3)))",
+                    params![o, p, f, min],
+                    |r| r.get::<_, bool>(0),
+                )?)
+            })
+            .await?)
+    }
+
+    /// Le membre laisse-t-il partir seules les photos de ses amis ? Oui par défaut ; sinon tout attend son accord.
+    pub async fn auto_share(&self, owner: &str) -> Result<bool, FaceError> {
+        crate::review::auto_share(&self.db, owner).await
+    }
+
+    /// Règle l'envoi automatique du membre (`false` : chaque photo attend un clic).
+    pub async fn set_auto_share(&self, owner: &str, on: bool) -> Result<(), FaceError> {
+        crate::review::set_auto_share(&self.db, owner, on).await
     }
 
     async fn is_pending(&self, owner: &str, friend: &str, cid: &str) -> Result<bool, FaceError> {
@@ -476,7 +512,8 @@ impl<B: BlobStore, E: FaceEngine, O: Outbox> FaceCloud<B, E, O> {
 
     /// Partage les photos déjà analysées où figure `friend` (visages rangés avec sa clé) : appelé quand une personne vient
     /// d'être reliée à un MULTIPASS (fiche contact, rapprochement). Chaque envoi reste soumis à la réciprocité N¹ et au
-    /// registre des partages (jamais deux fois). Rend `(partagées, écartées)`.
+    /// registre des partages (jamais deux fois) ; une photo où paraît quelqu'un d'autre, ou un envoi automatique coupé,
+    /// la met en attente d'un clic au lieu de l'envoyer. Rend `(partagées, écartées ou en attente)`.
     pub async fn share_backlog(&self, owner: &str, friend: &str) -> Result<(usize, usize), FaceError> {
         if !self.config.share_enabled || owner == friend {
             return Ok((0, 0));
@@ -492,12 +529,17 @@ impl<B: BlobStore, E: FaceEngine, O: Outbox> FaceCloud<B, E, O> {
             })
             .await?;
         let mut report = PhotoReport::default();
+        let auto_on = self.auto_share(owner).await?;
         for path in &paths {
             let Ok(photo) = self.photo(owner, path).await else { continue };
-            if photo.origin == "facecloud-share" {
-                continue; // copie reçue d'un ami : jamais renvoyée
+            if photo.origin == "facecloud-share" || vfs::is_system(path) {
+                continue; // copie reçue d'un ami (jamais renvoyée), ou tiroir système
             }
-            self.share_with(owner, path, &photo, friend, &mut report).await?;
+            if auto_on && !self.crowded(owner, path, friend).await? {
+                self.share_with(owner, path, &photo, friend, &mut report).await?;
+            } else {
+                self.queue_share(owner, path, &photo, friend, 1.0, 1.0, &mut report).await?;
+            }
         }
         Ok((report.shares.len(), report.skipped.len()))
     }

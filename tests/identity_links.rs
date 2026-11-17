@@ -71,7 +71,7 @@ async fn face(b: &Bench, n: i64, name: &str) {
 }
 
 async fn card(b: &Bench, file: &str, text: &str) {
-    ingest::ingest(&b.dav, &hex(&ALICE), "/Contacts", file, Some("text/vcard"), std::io::Cursor::new(text.as_bytes().to_vec())).await.unwrap();
+    ingest::ingest(&b.dav, &hex(&ALICE), "/_/Contacts", file, Some("text/vcard"), std::io::Cursor::new(text.as_bytes().to_vec())).await.unwrap();
 }
 
 fn vc(name: &str, extra: &str) -> String {
@@ -144,14 +144,14 @@ async fn the_directory_follows_changes_and_deletions_and_reports_bad_cards() {
     assert_eq!(b.links.list(&alice).await.unwrap()["contacts"].as_array().unwrap().iter().find(|c| c["name"] == "Alice Amie").unwrap()["pubkey"], hex(&LEA));
     // Suppression de la fiche : l'index l'oublie.
     let (db, a) = (b.db.clone(), alice.clone());
-    db.writer().transaction(move |tx| astro_dav::vfs::delete_tree_tx(tx, &a, "/Contacts/casse.vcf").map(|_| ()).map_err(|_| astro_db::DbError::Aborted)).await.unwrap();
+    db.writer().transaction(move |tx| astro_dav::vfs::delete_tree_tx(tx, &a, "/_/Contacts/casse.vcf").map(|_| ()).map_err(|_| astro_db::DbError::Aborted)).await.unwrap();
     let r = b.links.sync_owner(&alice).await.unwrap();
     assert_eq!(r.removed, 1);
     assert_eq!(b.links.list(&alice).await.unwrap()["contacts"].as_array().unwrap().len(), 2);
 }
 
 async fn card_replace(b: &Bench, file: &str, text: &str) {
-    ingest::replace(&b.dav, &hex(&ALICE), "/Contacts", file, Some("text/vcard"), std::io::Cursor::new(text.as_bytes().to_vec())).await.unwrap();
+    ingest::replace(&b.dav, &hex(&ALICE), "/_/Contacts", file, Some("text/vcard"), std::io::Cursor::new(text.as_bytes().to_vec())).await.unwrap();
 }
 
 #[tokio::test]
@@ -162,8 +162,8 @@ async fn a_card_is_created_from_a_person_and_linked_by_hand() {
     b.db.writer().execute("INSERT INTO faces(owner_hex, name, pubkey, embed_hash, ts, ucloud_path) VALUES (?1, 'Zoé', ?2, 'h1', 1, '/Photos/z.jpg')", vec![V::Text(alice.clone()), V::Text(hex(&LEA))]).await.unwrap();
     face(&b, 1, "Marc").await;
     let created = b.links.create_from_person(&alice, "Zoé", Some("zoe@example.org"), false).await.unwrap();
-    assert_eq!(created["path"], "/Contacts/Zoé.vcf");
-    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/Contacts/Zoé.vcf").await.unwrap()).unwrap();
+    assert_eq!(created["path"], "/_/Contacts/Zoé.vcf");
+    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/_/Contacts/Zoé.vcf").await.unwrap()).unwrap();
     let c = vcard::parse(text.as_bytes()).unwrap();
     assert_eq!((c.name.as_str(), c.nostr.as_deref(), c.emails.as_slice()), ("Zoé", Some(hex(&LEA).as_str()), ["zoe@example.org".to_owned()].as_slice()));
     assert!(matches!(b.links.create_from_person(&alice, "zoé", None, false).await, Err(LinkError::Conflict(_))), "une seule fiche par nom");
@@ -173,20 +173,20 @@ async fn a_card_is_created_from_a_person_and_linked_by_hand() {
     b.links.create_from_person(&alice, "Marc", None, false).await.unwrap();
     assert_eq!(key_of(&b, "Marc").await, None);
     let before = b.shared.lock().unwrap().len();
-    b.links.link(&alice, "/Contacts/Marc.vcf", Some("bea@example.org")).await.unwrap();
+    b.links.link(&alice, "/_/Contacts/Marc.vcf", Some("bea@example.org")).await.unwrap();
     assert_eq!(key_of(&b, "Marc").await.as_deref(), Some(hex(&BEA).as_str()), "visage relié à la clé de Bea");
     assert_eq!(b.shared.lock().unwrap().len(), before + 1, "partage déclenché");
-    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/Contacts/Marc.vcf").await.unwrap()).unwrap();
+    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/_/Contacts/Marc.vcf").await.unwrap()).unwrap();
     assert_eq!(vcard::parse(text.as_bytes()).unwrap().nostr.as_deref(), Some(hex(&BEA).as_str()), "la fiche garde la clé : elle suit le carnet sur le téléphone");
     // Refus explicites.
-    assert!(matches!(b.links.link(&alice, "/Contacts/Marc.vcf", Some("inconnu@example.org")).await, Err(LinkError::NotFound(_))));
-    assert!(matches!(b.links.link(&alice, "/Contacts/Marc.vcf", Some("alice@example.org")).await, Err(LinkError::Invalid(_))), "pas sa propre clé");
-    assert!(matches!(b.links.link(&alice, "/Contacts/Marc.vcf", Some("pas-une-cle")).await, Err(LinkError::Invalid(_))));
+    assert!(matches!(b.links.link(&alice, "/_/Contacts/Marc.vcf", Some("inconnu@example.org")).await, Err(LinkError::NotFound(_))));
+    assert!(matches!(b.links.link(&alice, "/_/Contacts/Marc.vcf", Some("alice@example.org")).await, Err(LinkError::Invalid(_))), "pas sa propre clé");
+    assert!(matches!(b.links.link(&alice, "/_/Contacts/Marc.vcf", Some("pas-une-cle")).await, Err(LinkError::Invalid(_))));
     assert!(matches!(b.links.link(&alice, "/Photos/x.jpg", None).await, Err(LinkError::Invalid(_))));
-    assert!(matches!(b.links.link(&alice, "/Contacts/absente.vcf", None).await, Err(LinkError::NotFound(_))));
+    assert!(matches!(b.links.link(&alice, "/_/Contacts/absente.vcf", None).await, Err(LinkError::NotFound(_))));
     // Délier retire la clé de la fiche.
-    b.links.link(&alice, "/Contacts/Marc.vcf", None).await.unwrap();
-    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/Contacts/Marc.vcf").await.unwrap()).unwrap();
+    b.links.link(&alice, "/_/Contacts/Marc.vcf", None).await.unwrap();
+    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/_/Contacts/Marc.vcf").await.unwrap()).unwrap();
     assert!(vcard::parse(text.as_bytes()).unwrap().nostr.is_none());
     // La vue liste les fiches et les personnes sans fiche.
     face(&b, 2, "Nina").await;
@@ -209,7 +209,7 @@ async fn faces_follow_their_card_by_uid_through_renames_homonyms_moves_and_delet
     card(&b, "marie1.vcf", &vc("Marie", "EMAIL:marie@example.org\r\n")).await;
     card(&b, "marie2.vcf", &vc("Marie", "UID:urn:uuid:marie-2\r\n")).await;
     b.links.sync_owner(&alice).await.unwrap();
-    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/Contacts/marie1.vcf").await.unwrap()).unwrap();
+    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/_/Contacts/marie1.vcf").await.unwrap()).unwrap();
     let uid1 = vcard::parse(text.as_bytes()).unwrap().uid.unwrap(); // une fiche sans UID en reçoit un
     assert!(text.contains("marie@example.org"), "le reste de la fiche est gardé");
     assert_eq!(b.links.sync_owner(&alice).await.unwrap().indexed, 0, "la fiche réécrite est déjà l'état indexé");
@@ -235,16 +235,16 @@ async fn faces_follow_their_card_by_uid_through_renames_homonyms_moves_and_delet
     assert_eq!(contact_of(&b, 1).await.1, "Marie");
 
     // Déplacer le fichier (même UID, autre chemin) n'est pas une suppression : le lien tient.
-    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/Contacts/marie2.vcf").await.unwrap()).unwrap();
+    let text = String::from_utf8(astro_dav::carddav::read_file(&b.dav, &alice, "/_/Contacts/marie2.vcf").await.unwrap()).unwrap();
     card(&b, "curie.vcf", &text).await;
     let (db, a) = (b.db.clone(), alice.clone());
-    db.writer().transaction(move |tx| astro_dav::vfs::delete_tree_tx(tx, &a, "/Contacts/marie2.vcf").map(|_| ()).map_err(|_| astro_db::DbError::Aborted)).await.unwrap();
+    db.writer().transaction(move |tx| astro_dav::vfs::delete_tree_tx(tx, &a, "/_/Contacts/marie2.vcf").map(|_| ()).map_err(|_| astro_db::DbError::Aborted)).await.unwrap();
     b.links.sync_owner(&alice).await.unwrap();
     assert_eq!(contact_of(&b, 2).await.0.as_deref(), Some("marie-2"));
 
     // Supprimer la fiche délie ses visages ; ils gardent leur nom (« personne reconnue sans fiche »).
     let (db, a) = (b.db.clone(), alice.clone());
-    db.writer().transaction(move |tx| astro_dav::vfs::delete_tree_tx(tx, &a, "/Contacts/curie.vcf").map(|_| ()).map_err(|_| astro_db::DbError::Aborted)).await.unwrap();
+    db.writer().transaction(move |tx| astro_dav::vfs::delete_tree_tx(tx, &a, "/_/Contacts/curie.vcf").map(|_| ()).map_err(|_| astro_db::DbError::Aborted)).await.unwrap();
     b.links.sync_owner(&alice).await.unwrap();
     assert_eq!(contact_of(&b, 2).await, (None, "Marie Curie".into()));
 

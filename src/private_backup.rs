@@ -2,7 +2,7 @@
 //!
 //! - le propriétaire choisit un ami et active l'option ; **l'ami doit accepter**, et fixe le volume qu'il met à disposition ;
 //! - ne partent que les fichiers « privés » : ni sous `/Partages/`, ni jamais envoyés (`ucloud_sharing`), ni dans une
-//!   invitation, ni partagés par FaceCloud ; les contacts (`/Contacts`) en font partie ;
+//!   invitation, ni partagés par FaceCloud ; les contacts (`/_/Contacts`) en font partie ;
 //! - l'ami reçoit le blob **chiffré**, sans la clé : il le range sous `/Sauvegardes/De_<nom>/<cid>`, où il compte dans son
 //!   quota, et ne peut rien lire. Les clés restent dans le trousseau du propriétaire (déjà sauvegardé par son manifeste) ;
 //! - sur la même station tout se fait en base ; sur une autre, par messages NIP-59 portant l'étiquette `astro-backup`

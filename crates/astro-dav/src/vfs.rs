@@ -160,15 +160,78 @@ pub fn guess_mime(path: &str) -> &'static str {
     }
 }
 
-/// Dossier du coffre de mots de passe (`/Coffre/perso.kdbx`, `/Coffre/agents.kdbx`).
-pub const VAULT_DIR: &str = "/Coffre";
+/// Tiroir **système** du uCloud : ce qui n'est pas un « fichier » au sens de la bibliothèque (mots de passe, carnet
+/// d'adresses, agenda) vit sous `/_`, à l'écart des photos et documents. Rien de ce tiroir n'est analysé par FaceCloud,
+/// mis en miniature, montré dans la bibliothèque, publié dans `/Public` ni rangé automatiquement.
+pub const SYSTEM_DIR: &str = "/_";
 
-/// `path` est le coffre ou s'y trouve. Insensible à la casse : un `/coffre` ne doit pas contourner la garde.
+/// Dossier du coffre de mots de passe (`/_/Coffre/perso.kdbx`, `/_/Coffre/agents.kdbx`).
+pub const VAULT_DIR: &str = "/_/Coffre";
+
+/// Dossiers racine réservés : le tiroir système et les dossiers que la station remplit (copies reçues d'amis, sauvegardes
+/// confiées). Ni jeton d'appareil, ni rangement automatique, ni renommage depuis l'interface. **Seule** liste : l'interface
+/// web en tient une copie (`m-files.js`), vérifiée par un test.
+pub const RESERVED_ROOTS: [&str; 3] = ["_", "Partages", "Sauvegardes"];
+
+/// Anciennes places (avant le tiroir `/_`) et nouvelles : la migration du démarrage les déplace une fois.
+pub const MOVED_TO_SYSTEM: [(&str, &str); 3] = [("/Coffre", "/_/Coffre"), ("/Contacts", "/_/Contacts"), ("/Calendrier", "/_/Calendrier")];
+
+/// `path` est le coffre ou s'y trouve. Insensible à la casse : un `/_/coffre` ne doit pas contourner la garde.
 /// Le coffre est sauvegardé chez les amis hébergeurs (opaque, chiffré) mais n'est jamais partagé : ni lien d'invité, ni envoi.
 #[must_use]
 pub fn is_vault(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
-    p == "/coffre" || p.starts_with("/coffre/")
+    p == "/_/coffre" || p.starts_with("/_/coffre/")
+}
+
+/// `path` est le tiroir système ou s'y trouve.
+#[must_use]
+pub fn is_system(path: &str) -> bool {
+    path == SYSTEM_DIR || path.starts_with("/_/")
+}
+
+/// Le premier segment de `path` est-il réservé (tiroir système, `Partages`, `Sauvegardes`) ? Insensible à la casse.
+#[must_use]
+pub fn is_reserved_root(path: &str) -> bool {
+    let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
+    RESERVED_ROOTS.iter().any(|r| r.eq_ignore_ascii_case(first))
+}
+
+/// Déplace une fois les anciens dossiers système de `owner` (`/Coffre`, `/Contacts`, `/Calendrier`) dans `/_`. Rejouable :
+/// une place déjà prise sous `/_` laisse l'ancien dossier tel quel (rien n'est écrasé). Rend les dossiers déplacés.
+pub fn migrate_system_dirs_tx(tx: &Transaction<'_>, owner: &str, now: i64) -> Result<Vec<String>, VfsError> {
+    let mut moved = Vec::new();
+    for (old, new) in MOVED_TO_SYSTEM {
+        if get_entry(tx, owner, old)?.is_none() || get_entry(tx, owner, new)?.is_some() {
+            continue;
+        }
+        mkdir_p_tx(tx, owner, SYSTEM_DIR, now)?;
+        move_tx(tx, owner, old, new, false, now)?;
+        moved.push(new.to_owned());
+    }
+    Ok(moved)
+}
+
+/// Migration du démarrage : chaque compte qui a encore `/Coffre`, `/Contacts` ou `/Calendrier` à la racine les voit
+/// déplacés dans `/_`. Rend les comptes touchés (leur manifeste est à republier, pour que la vérité suive).
+pub async fn migrate_system_dirs(db: &astro_db::Db) -> Result<Vec<String>, VfsError> {
+    let old: Vec<String> = MOVED_TO_SYSTEM.iter().map(|(o, _)| (*o).to_owned()).collect();
+    let owners: Vec<String> = db
+        .readers()
+        .read(move |c| {
+            let mut stmt = c.prepare("SELECT DISTINCT owner_hex FROM ucloud_entries WHERE path IN (?1, ?2, ?3)")?;
+            Ok(stmt.query_map(params![old[0], old[1], old[2]], |r| r.get(0))?.collect::<Result<_, _>>()?)
+        })
+        .await?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let mut touched = Vec::new();
+    for owner in owners {
+        let o = owner.clone();
+        if !vfs_tx(db, move |tx| migrate_system_dirs_tx(tx, &o, now)).await?.is_empty() {
+            touched.push(owner);
+        }
+    }
+    Ok(touched)
 }
 
 /// Bornes `[bas, haut[` de la descendance de `path` : toute chaîne qui commence par `path/` s'y trouve, et rien d'autre (`/` est
@@ -624,6 +687,45 @@ mod tests {
         assert_eq!((parent_of("/a/b"), parent_of("/a"), name_of("/a/b.txt")), ("/a".to_owned(), "/".to_owned(), "b.txt"));
         assert_eq!(guess_mime("/x/Photo.JPG"), "image/jpeg");
         assert_eq!(guess_mime("/x/inconnu"), "application/octet-stream");
+    }
+
+    #[test]
+    fn the_system_drawer_holds_vault_contacts_and_calendar() {
+        for p in ["/_", "/_/Coffre", "/_/Contacts/Léa.vcf", "/_/Calendrier/x.ics"] {
+            assert!(is_system(p) && is_reserved_root(p), "{p}");
+        }
+        for p in ["/__", "/_x/a", "/Photos/_/a", "/Public"] {
+            assert!(!is_system(p), "{p}");
+        }
+        assert!(is_vault("/_/Coffre/perso.kdbx") && is_vault("/_/COFFRE") && !is_vault("/_/Contacts") && !is_vault("/Coffre"));
+        assert!(is_reserved_root("/partages/De_Léa") && !is_reserved_root("/Photos"));
+        // L'interface web tient une copie de la liste : elle doit rester identique.
+        let js = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../astro-ui/web/m-files.js")).unwrap();
+        let line = js.lines().find(|l| l.starts_with("const RESERVED = ")).unwrap();
+        let listed: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+        assert_eq!(listed, RESERVED_ROOTS, "m-files.js doit reprendre vfs::RESERVED_ROOTS");
+    }
+
+    #[tokio::test]
+    async fn the_old_roots_move_once_into_the_system_drawer() {
+        let t = setup("drawer");
+        for d in ["/Coffre", "/Contacts", "/Calendrier", "/Photos"] {
+            let d = d.to_owned();
+            tx(&t, move |x| mkdir_tx(x, OWNER, &d, 5)).await.unwrap();
+        }
+        tx(&t, |x| commit_file_tx(x, OWNER, "/Coffre/perso.kdbx", &file("k1", 10), LIMITS)).await.unwrap();
+        tx(&t, |x| commit_file_tx(x, OWNER, "/Contacts/Léa.vcf", &file("v1", 10), LIMITS)).await.unwrap();
+        // Un autre compte a déjà un /_/Calendrier : son ancien dossier reste tel quel (rien n'est écrasé).
+        tx(&t, |x| mkdir_p_tx(x, "bb", "/_/Calendrier", 5)).await.unwrap();
+        tx(&t, |x| mkdir_tx(x, "bb", "/Calendrier", 5)).await.unwrap();
+
+        assert_eq!(migrate_system_dirs(&t.1).await.unwrap(), vec![OWNER.to_owned()], "seul le compte dont quelque chose a bougé");
+        let at = |o: &'static str, p: &'static str| tx(&t, move |x| get_entry(x, o, p));
+        assert!(at(OWNER, "/_/Coffre/perso.kdbx").await.unwrap().is_some() && at(OWNER, "/_/Contacts/Léa.vcf").await.unwrap().is_some());
+        assert!(at(OWNER, "/Coffre").await.unwrap().is_none() && at(OWNER, "/_/Calendrier").await.unwrap().is_some());
+        assert!(at(OWNER, "/Photos").await.unwrap().is_some(), "les autres dossiers ne bougent pas");
+        assert!(at("bb", "/Calendrier").await.unwrap().is_some(), "place prise : l'ancien dossier reste");
+        assert!(migrate_system_dirs(&t.1).await.unwrap().is_empty(), "rejouable : plus rien à déplacer");
     }
 
     #[tokio::test]

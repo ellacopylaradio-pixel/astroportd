@@ -392,7 +392,8 @@ async fn dispatch<B: BlobStore>(State(st): State<Arc<DavState<B>>>, req: Request
         _ => reply(StatusCode::METHOD_NOT_ALLOWED, "méthode non supportée"),
     };
     // Miniature WebP en arrière-plan : le dépôt n'attend jamais le décodage, et un échec ne l'annule pas.
-    if method == "PUT" && response.status().is_success() && crate::thumb::is_thumbable(vfs::guess_mime(&path)) {
+    // Rien pour le tiroir système (`/_`) : ni miniature, ni lecture EXIF, ni place dans la bibliothèque.
+    if method == "PUT" && response.status().is_success() && crate::thumb::is_thumbable(vfs::guess_mime(&path)) && !vfs::is_system(&path) {
         let (st, owner, path) = (st.clone(), owner.clone(), path.clone());
         tokio::spawn(async move {
             if let Err(e) = crate::thumb::generate(&st, &owner, &path).await {

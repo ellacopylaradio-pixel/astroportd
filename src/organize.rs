@@ -29,8 +29,6 @@ const BATCH: usize = 200;
 pub const MAX_MOVES: usize = 200_000;
 /// Passages simultanés au plus sur la station.
 const MAX_JOBS: usize = 2;
-/// Dossiers que le rangement ne touche jamais (premier segment du chemin).
-const PROTECTED: [&str; 5] = ["Coffre", "Contacts", "Calendrier", "Partages", "Sauvegardes"];
 
 /// Types de fichiers rangés.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -191,8 +189,8 @@ fn numbered(name: &str, n: u32) -> String {
 }
 
 fn is_protected(path: &str) -> bool {
-    let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
-    first.starts_with('.') || PROTECTED.iter().any(|p| p.eq_ignore_ascii_case(first)) || path.split('/').any(|s| s.starts_with('.'))
+    // Dossiers que le rangement ne touche jamais : tiroir système, copies reçues, sauvegardes (liste unique de `vfs`), cachés.
+    astro_dav::vfs::is_reserved_root(path) || path.split('/').any(|s| s.starts_with('.'))
 }
 
 fn validate(opts: &Options) -> Result<(String, Vec<Kind>), OrganizeError> {

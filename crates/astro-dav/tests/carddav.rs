@@ -28,7 +28,7 @@ async fn discovery_leads_from_the_root_to_the_address_book() {
     let (s, body) = text(call(&b.app, "PROPFIND", "/dav/addressbooks/alice@example.org/", Some(&alice()), &[("depth", "1")], Body::empty()).await).await;
     assert_eq!(s, 207);
     assert!(body.contains("<C:addressbook/>") && body.contains("<CS:getctag>") && body.contains("addressbook-multiget"), "{body}");
-    // Le carnet vide existe virtuellement (le dossier /Contacts n'est créé qu'à la première fiche).
+    // Le carnet vide existe virtuellement (le dossier /_/Contacts n'est créé qu'à la première fiche).
     let (s, body) = text(call(&b.app, "PROPFIND", &format!("{A}/"), Some(&alice()), &[("depth", "1")], Body::empty()).await).await;
     assert_eq!((s, body.matches("<D:response>").count()), (207, 1));
     let r = call(&b.app, "GET", "/.well-known/carddav", None, &[], Body::empty()).await;
@@ -55,7 +55,7 @@ async fn cards_are_created_listed_read_updated_and_deleted_with_etags() {
     // La fiche est un fichier chiffré du uCloud, lisible en clair par son propriétaire.
     let (s, _, data) = bytes(call(&b.app, "GET", &url, Some(&alice()), &[], Body::empty()).await).await;
     assert_eq!((s, String::from_utf8(data).unwrap()), (200, CARD.to_owned()));
-    let (s, body) = text(call(&b.app, "GET", "/dav/Contacts/lea.vcf", Some(&alice()), &[], Body::empty()).await).await;
+    let (s, body) = text(call(&b.app, "GET", "/dav/_/Contacts/lea.vcf", Some(&alice()), &[], Body::empty()).await).await;
     assert_eq!((s, body), (200, CARD.to_owned()), "visible aussi comme fichier");
 
     // Mise à jour conditionnelle : If-Match périmé refusé, bon etag accepté, ctag change.

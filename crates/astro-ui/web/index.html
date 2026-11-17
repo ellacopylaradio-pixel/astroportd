@@ -38,14 +38,18 @@
 <dialog id="login" aria-labelledby="login-t">
   <form method="dialog" id="login-f">
     <h2 id="login-t">Connexion</h2>
-    <p class="muted">Adresse email (ou clé), puis votre code PASS (4 à 6 chiffres) ou le jeton de la station.</p>
-    <label>Identifiant <input name="u" autocomplete="username" required></label>
-    <label>PASS ou jeton <input name="p" type="password" autocomplete="current-password" required></label>
-    <p class="muted">Pas de compte ? <a href="/register">Créer mon MULTIPASS</a> · <a href="/stations">Stations proches</a></p>
+    <p class="muted"><span>Station</span> <strong id="login-h"></strong></p>
+    <label>Email ou clé <input name="u" autocomplete="username" required></label>
+    <div id="login-2" hidden>
+      <label>PASS ou jeton <input name="p" type="password" autocomplete="current-password"></label>
+      <p class="muted">Votre code PASS (4 à 6 chiffres) ou le jeton de la station.</p>
+    </div>
+    <div id="login-x" class="card" hidden></div>
+    <p class="muted">Pas de compte ? <a href="/register">Créer mon MULTIPASS</a> · <span>Pas votre station ?</span> <a href="/stations#membre">Retrouver ma station</a></p>
     <p id="login-e" class="err" role="alert"></p>
     <menu>
       <button type="button" id="login-n" hidden>Extension Nostr</button>
-      <button value="ok">Se connecter</button>
+      <button value="ok" id="login-ok">Continuer</button>
     </menu>
   </form>
 </dialog>

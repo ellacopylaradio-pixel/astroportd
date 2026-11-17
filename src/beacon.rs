@@ -64,6 +64,15 @@ pub fn umap_coord(v: f64) -> String {
     if s == "-0.00" { "0.00".to_owned() } else { s }
 }
 
+/// Cellules géographiques d'un point, comme `Umap_geonostr.sh` : UMAP (0,01°), SECTOR (0,1°, dernier chiffre retiré), REGION (1°, partie entière).
+/// Ce sont elles qui rattachent une station à ses flux locaux (les « bonnes nouvelles » de 20h12).
+pub fn cells(lat: f64, lon: f64) -> [(&'static str, String); 3] {
+    let (la, lo) = (umap_coord(lat), umap_coord(lon));
+    let cut = |v: &str| v[..v.len() - 1].to_owned();
+    let int = |v: &str| v.split('.').next().unwrap_or(v).to_owned();
+    [("UMAP", format!("{la}, {lo}")), ("SECTOR", format!("{}, {}", cut(&la), cut(&lo))), ("REGION", format!("{}, {}", int(&la), int(&lo)))]
+}
+
 /// Relai commun de l'UPlanet : `wss://relay.<zone OVH de la coopérative>`.
 pub async fn coop_relay(db: &Db, uplanet_name: &str) -> Option<String> {
     crate::coop_config::domain(db, uplanet_name).await.map(|zone| format!("wss://relay.{zone}"))
@@ -484,6 +493,12 @@ mod tests {
 
     fn summary(tags: &[(&str, &str)], at: i64) -> Value {
         json!({ "created_at": at, "tags": tags.iter().map(|(k, v)| ((*k).to_owned(), json!(v))).collect::<serde_json::Map<_, _>>() })
+    }
+
+    #[test]
+    fn cells_follow_the_legacy_truncation() {
+        let c = cells(43.61456, 1.44419);
+        assert_eq!((c[0].1.as_str(), c[1].1.as_str(), c[2].1.as_str()), ("43.61, 1.44", "43.6, 1.4", "43, 1"));
     }
 
     #[test]

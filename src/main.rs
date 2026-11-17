@@ -142,6 +142,42 @@ enum Command {
         #[command(subcommand)]
         action: TunnelAction,
     },
+    /// Identité réseau de la station, au format de `ipfs id` (JSON : `ID`, `Addresses`, `AgentVersion`). Parle au démon qui tourne.
+    Id {
+        /// Socket de contrôle du démon (défaut : `$HOME/.zen/astroportd/control.sock`).
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Stockage des blobs, à la manière de `ipfs repo` : `stat` (poids, orphelins), `gc` (supprime les orphelins de plus de 24 h),
+    /// `verify` (recalcule les empreintes, un lot à la fois ; parle au démon).
+    Repo {
+        #[command(subcommand)]
+        action: RepoAction,
+    },
+    /// Pairs du maillage, à la manière de `ipfs swarm` : `peers` (connectés), `connect <adresse>`. Parle au démon qui tourne.
+    Swarm {
+        /// Socket de contrôle du démon (défaut : `$HOME/.zen/astroportd/control.sock`).
+        #[arg(long, global = true)]
+        socket: Option<PathBuf>,
+        #[command(subcommand)]
+        action: SwarmAction,
+    },
+    /// Stations d'amorçage, à la manière de `ipfs bootstrap` : sans argument ou `list`, `add <adresse>`, `rm <adresse>`.
+    Bootstrap {
+        /// Socket de contrôle du démon (défaut : `$HOME/.zen/astroportd/control.sock`).
+        #[arg(long, global = true)]
+        socket: Option<PathBuf>,
+        #[command(subcommand)]
+        action: Option<BootstrapAction>,
+    },
+    /// Tunnels P2P, à la manière de `ipfs p2p` : `ls`, `forward <service>`, `close <service>` (équivalents de `tunnel list|connect|close`).
+    P2p {
+        /// Socket de contrôle du démon (défaut : `$HOME/.zen/astroportd/control.sock`).
+        #[arg(long, global = true)]
+        socket: Option<PathBuf>,
+        #[command(subcommand)]
+        action: P2pAction,
+    },
     /// Reconstruit les tables de projection depuis les événements Nostr.
     Replay {
         /// Base `uplanet.db`.
@@ -222,6 +258,112 @@ enum Command {
         /// Période de rafraîchissement du cercle social, en secondes.
         #[arg(long, default_value_t = 15)]
         circle_refresh_secs: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum SwarmAction {
+    /// Pairs connectés, une adresse `/…/p2p/<PeerID>` par ligne (`/p2p/<PeerID>` si l'adresse n'est pas connue).
+    Peers {
+        /// Sortie JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Adresses de cette station (`swarm addrs listen`), une par ligne, `/p2p/<PeerID>` compris.
+    Addrs {
+        #[command(subcommand)]
+        which: AddrsAction,
+    },
+    /// Joint une station : `/ip4/…/tcp/4101/p2p/<PeerID>` (sans la garder : voir `bootstrap add`).
+    Connect {
+        /// Adresse de la station.
+        addr: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AddrsAction {
+    /// Adresses sur lesquelles la station écoute (hors boucle locale).
+    Listen,
+}
+
+/// Dossiers du bassin de blobs, communs à `repo stat` et `repo gc`.
+#[derive(clap::Args)]
+struct RepoPaths {
+    /// Dossier des blobs (défaut : `~/.zen/astroportd/blobs`).
+    #[arg(long)]
+    blobs: Option<PathBuf>,
+    /// Base `uplanet.db` d'un plan (répétable ; défaut : `~/.zen/astroportd/uplanet.db`).
+    #[arg(long = "db")]
+    dbs: Vec<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum RepoAction {
+    /// Poids du bassin, part de chaque plan, blobs partagés et orphelins.
+    Stat(RepoPaths),
+    /// Supprime les blobs que plus aucun plan ne référence, s'ils ont plus de 24 h.
+    Gc(RepoPaths),
+    /// Recalcule l'empreinte des blobs (un lot par passage, reprise là où le précédent s'est arrêté). Code 1 si un blob manque ou est corrompu.
+    Verify {
+        /// Socket de contrôle du démon (défaut : `$HOME/.zen/astroportd/control.sock`).
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Sortie JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BootstrapAction {
+    /// Liste les stations d'amorçage (une adresse par ligne).
+    List {
+        /// Sortie JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Garde une station : rejointe à chaque démarrage, rappelée si la liaison tombe.
+    Add {
+        /// Adresse de la station.
+        addr: String,
+    },
+    /// Retire une station gardée (celles données par `--p2p-bootstrap` se retirent en démarrage).
+    Rm {
+        /// Adresse de la station.
+        addr: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum P2pAction {
+    /// Accès locaux ouverts vers les services d'autres stations : `/x/<service> /p2p/<PeerID> /ip4/127.0.0.1/tcp/<port>`.
+    Ls {
+        /// Sortie JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ouvre un accès local à un service d'une autre station (voir `tunnel connect`).
+    Forward {
+        /// Service (`ollama`, `comfyui`, `ssh`…).
+        service: String,
+        /// PeerID de la station ; sans lui, la station choisie par le routage.
+        #[arg(long)]
+        peer: Option<String>,
+        /// Port local (défaut : choisi par le système).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Durée de l'accès, en heures (1 à 168).
+        #[arg(long, default_value_t = 8)]
+        hours: i64,
+    },
+    /// Ferme l'accès local à un service.
+    Close {
+        /// Service.
+        service: String,
+        /// PeerID de la station.
+        #[arg(long)]
+        peer: Option<String>,
     },
 }
 
@@ -468,6 +610,12 @@ enum PullAction {
         /// Admet une adresse privée (serveur sur le réseau local). Sans cette option, seules les adresses publiques sont jointes.
         #[arg(long)]
         allow_private: bool,
+        /// Types repris, séparés par des virgules (`images,music,videos,documents,archives`). Sans cette option : tout.
+        #[arg(long, value_delimiter = ',')]
+        kinds: Vec<String>,
+        /// Range chaque fichier dans le dossier de son type (`/Images`, `/Musique`…) au lieu du dossier de destination.
+        #[arg(long)]
+        sort: bool,
     },
     /// Retire une source (ce qui a déjà été repris reste dans le uCloud).
     Remove {
@@ -679,6 +827,10 @@ struct BridgeCopyArgs {
     /// Atteste que les deux comptes sont **la même personne** : ils partageront les blobs et leurs clés de fichier.
     #[arg(long)]
     same_person: bool,
+    /// Entre deux UPlanet privées différentes : accepte que le même blob soit servi dans les deux essaims
+    /// (quelqu'un présent dans les deux pourrait rapprocher le contenu). Un plan privé vers ORIGIN reste toujours refusé.
+    #[arg(long)]
+    cross_swarm: bool,
     /// Compte et vérifie, sans rien écrire.
     #[arg(long)]
     dry_run: bool,
@@ -784,6 +936,15 @@ async fn run(cli: Cli) -> Result<(), Failure> {
         Command::Multipass { action } => multipass_cmd(action).await,
         Command::Route { service, mode, socket } => tunnel_cmd(socket, TunnelAction::Route { service, mode }).await,
         Command::Tunnel { socket, action } => tunnel_cmd(socket, action).await,
+        Command::Id { socket } => id_cmd(socket).await,
+        Command::Repo { action } => repo_cmd(action).await,
+        Command::Swarm { socket, action } => swarm_cmd(socket, action).await,
+        Command::Bootstrap { socket, action } => bootstrap_cmd(socket, action.unwrap_or(BootstrapAction::List { json: false })).await,
+        Command::P2p { socket, action } => match action {
+            P2pAction::Ls { json } => p2p_ls(socket, json).await,
+            P2pAction::Forward { service, peer, port, hours } => tunnel_cmd(socket, TunnelAction::Connect { service, peer, mode: astro_p2p::routing::Mode::Power, port, hours }).await,
+            P2pAction::Close { service, peer } => tunnel_cmd(socket, TunnelAction::Close { service, peer }).await,
+        },
         Command::SwarmKey => {
             print!("{}", astro_p2p::generate_swarm_key()?);
             Ok(())
@@ -997,6 +1158,137 @@ async fn tunnel_cmd(socket: Option<PathBuf>, action: TunnelAction) -> Result<(),
         TunnelAction::Share { name, target } => policy_change(&socket, json!({ "share": { "name": name, "target": target } })).await,
         TunnelAction::Unshare { name } => policy_change(&socket, json!({ "unshare": name })).await,
     }
+}
+
+/// Adresse `/ip4/…/tcp/…` d'un accès local `hôte:port`.
+fn local_multiaddr(addr: &str) -> String {
+    match addr.rsplit_once(':') {
+        Some((host, port)) if host.parse::<std::net::Ipv6Addr>().is_ok() => format!("/ip6/{host}/tcp/{port}"),
+        Some((host, port)) if host.parse::<std::net::Ipv4Addr>().is_ok() => format!("/ip4/{host}/tcp/{port}"),
+        Some((host, port)) => format!("/dns4/{host}/tcp/{port}"),
+        None => addr.to_owned(),
+    }
+}
+
+/// `astroportd p2p ls` : les accès locaux ouverts, au format de `ipfs p2p ls`.
+async fn p2p_ls(socket: Option<PathBuf>, json: bool) -> Result<(), Failure> {
+    let socket = control_socket(socket)?;
+    let v = astroportd::control::call(&socket, "tunnel", None).await?;
+    let mut rows = Vec::new();
+    for s in v["stations"].as_array().into_iter().flatten() {
+        for sv in s["services"].as_array().into_iter().flatten() {
+            if let Some(addr) = sv["local"]["addr"].as_str() {
+                rows.push(serde_json::json!({ "protocol": format!("/x/{}", sv["name"].as_str().unwrap_or("?")), "peer": s["peer"], "local": local_multiaddr(addr), "until": sv["local"]["until"] }));
+            }
+        }
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        for r in &rows {
+            println!("{} /p2p/{} {}", r["protocol"].as_str().unwrap_or("?"), r["peer"].as_str().unwrap_or("?"), r["local"].as_str().unwrap_or("?"));
+        }
+    }
+    Ok(())
+}
+
+/// `astroportd id` : au format de `ipfs id`.
+async fn id_cmd(socket: Option<PathBuf>) -> Result<(), Failure> {
+    let v = astroportd::control::call(&control_socket(socket)?, "mesh", None).await?;
+    if v["active"].as_bool() == Some(false) {
+        return Err("maillage P2P coupé sur cette station".into());
+    }
+    let out = serde_json::json!({ "ID": v["peer_id"], "Addresses": v["addrs"], "AgentVersion": format!("astroportd/{}", env!("CARGO_PKG_VERSION")) });
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+
+/// `astroportd repo stat|gc|verify`.
+async fn repo_cmd(action: RepoAction) -> Result<(), Failure> {
+    let home = || std::env::var_os("HOME").map(PathBuf::from).ok_or("$HOME introuvable");
+    let paths = |p: RepoPaths, sweep: bool| -> Result<PoolStatusArgs, Failure> {
+        let dbs = if p.dbs.is_empty() { vec![home()?.join(".zen/astroportd/uplanet.db")] } else { p.dbs };
+        Ok(PoolStatusArgs { blobs: match p.blobs { Some(b) => b, None => home()?.join(".zen/astroportd/blobs") }, dbs, sweep })
+    };
+    match action {
+        RepoAction::Stat(p) => pool_status_cmd(paths(p, false)?),
+        RepoAction::Gc(p) => pool_status_cmd(paths(p, true)?),
+        RepoAction::Verify { socket, json } => {
+            let v = astroportd::control::call(&control_socket(socket)?, "repo", Some(serde_json::json!({ "verify": true }))).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                println!("{}", v["summary"].as_str().unwrap_or("?"));
+            }
+            if v["ok"].as_bool() == Some(true) { Ok(()) } else { Err("blobs absents ou corrompus".into()) }
+        }
+    }
+}
+
+/// `astroportd swarm peers|connect`.
+async fn swarm_cmd(socket: Option<PathBuf>, action: SwarmAction) -> Result<(), Failure> {
+    let socket = control_socket(socket)?;
+    match action {
+        SwarmAction::Peers { json } => {
+            let v = astroportd::control::call(&socket, "mesh", None).await?;
+            if v["active"].as_bool() == Some(false) {
+                return Err("maillage P2P coupé sur cette station".into());
+            }
+            // Adresse complète d'un pair quand la station la connaît (amorçage, relais).
+            let known: Vec<&str> = ["bootstrap", "relays"].iter().flat_map(|k| v[*k].as_array().into_iter().flatten()).filter_map(|r| r["addr"].as_str()).collect();
+            let peers: Vec<String> = v["connected"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).map(|p| known.iter().find(|a| a.ends_with(&format!("/p2p/{p}"))).map_or_else(|| format!("/p2p/{p}"), |a| (*a).to_owned())).collect();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&peers)?);
+            } else {
+                for p in &peers {
+                    println!("{p}");
+                }
+            }
+            Ok(())
+        }
+        SwarmAction::Addrs { which: AddrsAction::Listen } => {
+            let v = astroportd::control::call(&socket, "mesh", None).await?;
+            if v["active"].as_bool() == Some(false) {
+                return Err("maillage P2P coupé sur cette station".into());
+            }
+            for a in v["addrs"].as_array().into_iter().flatten().filter_map(|a| a.as_str()) {
+                println!("{a}");
+            }
+            Ok(())
+        }
+        SwarmAction::Connect { addr } => {
+            let v = astroportd::control::call(&socket, "mesh", Some(serde_json::json!({ "dial": addr }))).await?;
+            println!("connect {addr} success{}", if v["active"].as_bool() == Some(true) { "" } else { " ?" });
+            Ok(())
+        }
+    }
+}
+
+/// `astroportd bootstrap [list|add|rm]`.
+async fn bootstrap_cmd(socket: Option<PathBuf>, action: BootstrapAction) -> Result<(), Failure> {
+    let socket = control_socket(socket)?;
+    match action {
+        BootstrapAction::List { json } => {
+            let v = astroportd::control::call(&socket, "mesh", None).await?;
+            let list: Vec<&str> = v["bootstrap"].as_array().into_iter().flatten().filter_map(|r| r["addr"].as_str()).collect();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                for a in list {
+                    println!("{a}");
+                }
+            }
+        }
+        BootstrapAction::Add { addr } => {
+            astroportd::control::call(&socket, "mesh", Some(serde_json::json!({ "keep": addr }))).await?;
+            println!("added {addr}");
+        }
+        BootstrapAction::Rm { addr } => {
+            astroportd::control::call(&socket, "mesh", Some(serde_json::json!({ "forget": addr }))).await?;
+            println!("removed {addr}");
+        }
+    }
+    Ok(())
 }
 
 /// Change la politique des tunnels et montre l'état qui en résulte.
@@ -1345,10 +1637,11 @@ fn pool_status_cmd(args: PoolStatusArgs) -> Result<(), Failure> {
 }
 
 async fn bridge_copy_cmd(args: BridgeCopyArgs) -> Result<(), Failure> {
-    let BridgeCopyArgs { from_db, from, to_db, to, blobs, path, dest, same_person, dry_run } = args;
+    let BridgeCopyArgs { from_db, from, to_db, to, blobs, path, dest, same_person, cross_swarm, dry_run } = args;
     if !same_person {
         return Err("partager des blobs et leurs clés entre deux comptes demande un accord explicite : ajoutez --same-person pour attester que ce sont les deux comptes d'une même personne".into());
     }
+    astroportd::bridge::check_passage(astroportd::bridge::read_plane(&from_db)?.as_deref(), astroportd::bridge::read_plane(&to_db)?.as_deref(), cross_swarm)?;
     let (from_owner, to_owner) = (astroportd::bridge::resolve_owner(&from_db, &from)?, astroportd::bridge::resolve_owner(&to_db, &to)?);
     let dst = Db::open(&to_db, 2)?;
     let pool = astro_dav::FsBlobStore::open(&blobs)?;
@@ -1383,10 +1676,10 @@ async fn pull_webdav_cmd(args: PullArgs) -> Result<(), Failure> {
                 println!("aucune source pour {}", owner.email);
             }
             for s in &all {
-                println!("{}  {}  {} (identifiant {}) dossier distant « {} » → {}{}", s.id, s.label, s.url, s.username, s.remote_path, s.dest_prefix, if s.allow_private { "  [adresses privées admises]" } else { "" });
+                println!("{}  {}  {} (identifiant {}) dossier distant « {} » → {}{}{}{}", s.id, s.label, s.url, s.username, s.remote_path, s.dest_prefix, if s.allow_private { "  [adresses privées admises]" } else { "" }, if s.kinds.is_empty() { String::new() } else { format!("  [types : {}]", s.kinds.join(",")) }, if s.sort { "  [rangement automatique]" } else { "" });
             }
         }
-        PullAction::Add { url, user, password_stdin, label, remote_path, dest, allow_private } => {
+        PullAction::Add { url, user, password_stdin, label, remote_path, dest, allow_private, kinds, sort } => {
             if !password_stdin {
                 return Err("le mot de passe se donne sur l'entrée standard : ajoutez --password-stdin (jamais en argument, il serait visible dans la liste des processus)".into());
             }
@@ -1395,7 +1688,7 @@ async fn pull_webdav_cmd(args: PullArgs) -> Result<(), Failure> {
             let password = line.trim_end_matches(['\r', '\n']).to_owned();
             let name = if label.trim().is_empty() { url::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_else(|| "source".into()) } else { label.clone() };
             let dest = dest.unwrap_or_else(|| format!("/Imports/{}", astro_dav::ingest::sanitize_name(&name).unwrap_or_else(|| "source".into())));
-            let draft = pull::Source { id: String::new(), label, url, username: user, password, remote_path, dest_prefix: dest, allow_private, created_at: 0 };
+            let draft = pull::Source { id: String::new(), label, url, username: user, password, remote_path, dest_prefix: dest, kinds, sort, allow_private, created_at: 0 };
             let mut probe = draft.clone();
             probe.dest_prefix = "/Verification".into();
             let seen = pull::check(&probe).await.map_err(|e| format!("source refusée : {e}"))?;

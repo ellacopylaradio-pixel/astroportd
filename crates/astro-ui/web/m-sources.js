@@ -3,6 +3,7 @@
 // se lance d'ici, tourne en arrière-plan et se rejoue sans rien écraser ni dupliquer. Les fichiers arrivent tels quels sous le
 // dossier de dépôt, sans tri : ranger le uCloud est un autre geste.
 
+const KINDS = [['images', 'Images'], ['music', 'Musique'], ['videos', 'Vidéos'], ['documents', 'Documents'], ['archives', 'Archives']];
 const STATE = { running: 'En cours', done: 'Terminée', failed: 'Échec' };
 
 export default async function sources(root, K, tabs) {
@@ -15,7 +16,7 @@ export default async function sources(root, K, tabs) {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target));
     const btn = ev.target.querySelector('button'); btn.disabled = true;
-    try { await call('', { url: f.url, username: f.username, password: f.password, label: f.label, remote_path: f.remote_path, dest: f.dest }); ev.target.reset(); K.toast(t('Source ajoutée'), 1); await draw(); }
+    try { await call('', { url: f.url, username: f.username, password: f.password, label: f.label, remote_path: f.remote_path, dest: f.dest, kinds: new FormData(ev.target).getAll('kinds'), sort: !!f.sort }); ev.target.reset(); K.toast(t('Source ajoutée'), 1); await draw(); }
     catch (e) { K.toast(e.message); } finally { btn.disabled = false; }
   } },
     h('h2', {}, 'Ajouter une source'),
@@ -28,10 +29,14 @@ export default async function sources(root, K, tabs) {
       h('div', {}, h('label', { for: 'src-rp' }, 'Dossier distant (facultatif)'), h('input', { id: 'src-rp', name: 'remote_path', placeholder: 'Photos' })),
       h('div', {}, h('label', { for: 'src-label' }, 'Libellé (facultatif)'), h('input', { id: 'src-label', name: 'label', placeholder: 'Mon Nextcloud' }))),
     h('label', { for: 'src-dest' }, 'Dossier de dépôt dans le uCloud (facultatif)'), h('input', { id: 'src-dest', name: 'dest', placeholder: '/Imports/Mon Nextcloud' }),
-    h('p', { class: 'muted' }, 'Les fichiers arrivent tels qu\'ils sont sur le serveur, sans tri par dates. Seules les adresses publiques sont jointes.'),
+    h('fieldset', {}, h('legend', {}, t('Types à reprendre')),
+      h('p', { class: 'muted' }, t('Ne rien cocher : tout est repris. Ce qui n\'est pas coché reste sur le serveur distant.')),
+      h('p', { class: 'inline' }, KINDS.map(([id, l]) => h('label', {}, h('input', { type: 'checkbox', name: 'kinds', value: id }), ' ' + t(l), ' ')))),
+    h('p', {}, h('label', {}, h('input', { type: 'checkbox', name: 'sort' }), ' ', t('Ranger automatiquement chaque fichier dans le dossier de son type (Images, Musique, Vidéos, Documents, Archives)'))),
+    h('p', { class: 'muted' }, 'Sans rangement, les fichiers arrivent tels qu\'ils sont sur le serveur, sans tri par dates. Seules les adresses publiques sont jointes.'),
     h('p', {}, h('button', {}, 'Vérifier et ajouter')));
 
-  const line = r => t('{0} vus · {1} repris · {2} déjà repris · {3} échec(s)', r.remote, r.imported, r.skipped, r.errors);
+  const line = r => t('{0} vus · {1} repris · {2} déjà repris · {3} échec(s)', r.remote, r.imported, r.skipped, r.errors) + (r.filtered ? ' · ' + t('{0} laissé(s) (type non demandé)', r.filtered) : '');
   const card = s => {
     const j = s.job, running = j?.state === 'running';
     const act = (path, body, msg) => async ev => { ev.target.disabled = true; try { await call(path, body); K.toast(t(msg), 1); } catch (e) { K.toast(e.message); } await draw(); };
@@ -45,7 +50,8 @@ export default async function sources(root, K, tabs) {
     } else if (s.last) status.push(h('p', { class: 'muted' }, t('Dernière reprise : {0}', when(s.last.at)), ' · ', line(s.last.report)));
     else status.push(h('p', { class: 'muted' }, t('Jamais lancée.')));
     return h('section', { class: 'card' }, h('h2', {}, s.label), h('p', { class: 'muted' }, h('code', {}, s.url)),
-      h('p', {}, t('Dossier distant : {0}', s.remote_path || t('tout')), ' → ', h('code', {}, s.dest_prefix)), ...status,
+      h('p', {}, t('Dossier distant : {0}', s.remote_path || t('tout')), ' → ', h('code', {}, s.sort ? t('dossier de chaque type') : s.dest_prefix)),
+      s.kinds?.length || s.sort ? h('p', { class: 'muted' }, s.kinds?.length ? t('Types repris : {0}', s.kinds.map(k => t(KINDS.find(x => x[0] === k)?.[1] || k)).join(', ')) : t('Tous les types'), s.sort ? ' · ' + t('rangement automatique') : '') : null, ...status,
       h('p', { class: 'inline' },
         running ? h('button', { class: 'ghost', onclick: act('/stop', {}, 'Arrêt demandé') }, 'Arrêter')
           : [h('button', { onclick: act('/run', { id: s.id }, 'Reprise lancée') }, 'Reprendre'), h('button', { class: 'ghost', onclick: act('/run', { id: s.id, dry_run: true }, 'Aperçu lancé') }, 'Aperçu'),

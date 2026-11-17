@@ -44,7 +44,8 @@ impl<B: BlobStore, E: FaceEngine, O: Outbox> FaceCloud<B, E, O> {
     pub fn upload_hook(self: &Arc<Self>) -> UploadHook {
         let me = self.clone();
         Arc::new(move |owner: &str, path: &str, mime: &str| {
-            if mime.starts_with("image/") {
+            // Le tiroir système (`/_` : coffre, carnet, agenda) n'est jamais analysé : une image rangée là n'est pas une photo à partager.
+            if mime.starts_with("image/") && !astro_dav::vfs::is_system(path) {
                 let (me, owner, path) = (me.clone(), owner.to_owned(), path.to_owned());
                 tokio::spawn(async move {
                     let _ = me.enqueue(&owner, &path).await;

@@ -54,6 +54,9 @@ pub enum RegisterError {
     /// L'inscription est fermée sur cette station.
     #[error("l'inscription est fermée sur cette station")]
     Closed,
+    /// Station en Forteresse : on n'y entre que par l'invitation d'un membre.
+    #[error("cette station est en mode Forteresse : on n'y entre que sur l'invitation d'un de ses membres")]
+    Fortress,
     /// Quota de comptes atteint.
     #[error("cette station a atteint son nombre maximal de MULTIPASS")]
     Full,
@@ -276,6 +279,13 @@ impl Registrar {
         }
         hits.push(at);
         Ok(())
+    }
+
+    /// Écluse des **entrées libres** (inscription sans invitation, restauration d'un compte venu d'ailleurs) : fermée quand
+    /// le Capitaine a mis la station en Forteresse. Les invitations d'un membre, elles, restent ouvertes.
+    pub async fn open_to_strangers(&self) -> Result<(), RegisterError> {
+        let fortress = self.db.readers().read(|c| Ok(astro_db::station_mode::read(c)?)).await.map_err(|e| RegisterError::Internal(e.to_string()))?;
+        if fortress == astro_db::station_mode::Mode::Forteresse { Err(RegisterError::Fortress) } else { Ok(()) }
     }
 
     /// Crée un MULTIPASS. `ip` est l'adresse du client (absente en ligne de commande : pas de limite de débit).

@@ -305,6 +305,33 @@ async fn a_peer_can_be_asked_whether_it_holds_a_blob_without_transferring_it() {
 }
 
 #[tokio::test]
+async fn in_a_shared_pool_a_plane_never_serves_the_blob_of_its_neighbour() {
+    use astro_p2p::blob::{CidGate, has_blob};
+    // ORIGIN (réseau ouvert) partage son dossier de blobs avec une UPlanet privée : le chiffré du plan privé est sur le
+    // même disque. Un inconnu qui connaît son CID ne doit ni l'obtenir, ni apprendre qu'il est là.
+    let (origin, origin_addr) = node(71, None, false).await;
+    let (stranger, _) = node(72, None, false).await;
+    stranger.handle.dial(origin_addr).await.unwrap();
+    let dir = TempDir::new("pool-gate");
+    let pool = Arc::new(FsBlobStore::open(dir.0.join("pool")).unwrap());
+    let mine = put_blob(&pool, &sample(200_000, 7)).await;
+    let neighbour = put_blob(&pool, &sample(200_000, 8)).await;
+    let referenced: Arc<HashSet<String>> = Arc::new([mine.clone()].into());
+    let gate = CidGate(Arc::new(move |cid: String| {
+        let referenced = referenced.clone();
+        Box::pin(async move { referenced.contains(&cid) })
+    }));
+    let _server = serve_blobs(&origin.handle, pool.clone(), ServeOpts { gate: Some(gate), ..ServeOpts::default() }).unwrap();
+
+    let dest = FsBlobStore::open(dir.0.join("dest")).unwrap();
+    assert_eq!(fetch_from(&stranger.handle, origin.handle.peer_id(), &mine, &dest, 1 << 20, FETCH).await.unwrap().cid, mine, "ce que le plan référence sort");
+    let err = fetch_from(&stranger.handle, origin.handle.peer_id(), &neighbour, &dest, 1 << 20, FETCH).await.unwrap_err().to_string();
+    assert!(err.contains("n'a pas ce blob"), "le blob du voisin est « absent », pas « refusé » : {err}");
+    assert_eq!(has_blob(&stranger.handle, origin.handle.peer_id(), &neighbour, FETCH).await, Ok(None), "même la sonde ne révèle rien");
+    assert!(matches!(dest.open(&neighbour).await, Err(astro_dav::blob::BlobError::NotFound)));
+}
+
+#[tokio::test]
 async fn a_station_answers_each_asker_according_to_who_asks() {
     use astro_p2p::ask::{AnswerFn, MAX_ANSWER, answer, ask};
     let (a, a_addr) = node(61, None, false).await;

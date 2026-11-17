@@ -41,4 +41,8 @@ assert.deepEqual(news({ faces: { suggestions: [], unknown: 4 } })[0].text, ['{0}
 // Un ami en secours passe avant tout le reste.
 n = news({ faces: { suggestions: [{}], unknown: 0 }, shares: { pending: [] }, backup: { hosting: [{ label: 'Léa', rescue: { station: 'x' } }, { label: 'Max' }] } });
 assert.deepEqual(n.map(x => x.icon), ['🆘', '🫂']); assert.equal(n[0].href, '#/account?tab=securite'); assert.deepEqual(n[0].text[1], 'Léa');
+// Vigie de Public : un fichier qui en dit trop passe avant les photos et les visages ; rien à signaler = rien d'affiché.
+n = news({ faces: { suggestions: [{}] }, shares: { pending: [{ count: 1, name: 'Fred' }] }, fp: { privacy: { gps: 2, sensitive: 1 } } });
+assert.deepEqual(n.map(x => x.icon), ['🔒', '📸', '🫂']); assert.equal(n[0].text[1], 3); assert.equal(n[0].href, '#/cloud?p=%2FPublic');
+assert.deepEqual(news({ fp: { privacy: { gps: 0, sensitive: 0 } } }), []);
 console.log('accueil : « Pour vous » OK');

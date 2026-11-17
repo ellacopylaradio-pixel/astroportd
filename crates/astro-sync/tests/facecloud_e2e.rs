@@ -98,7 +98,8 @@ async fn photo_on_station_a_reaches_carol_on_station_b_through_a_nip59_envelope(
     }));
 
     fc.enroll(&hex(&ALICE), &hex(&CAROL), "Carol", b"FACES:carol").await.unwrap();
-    let photo = b"FACES:carol+mariage,inconnu".to_vec();
+    // Carol seule avec Alice sur la photo : elle part sans attendre (un inconnu à côté la ferait attendre l'accord d'Alice).
+    let photo = b"FACES:carol+mariage".to_vec();
     let token = derive_dav_token(SECRET, &hex(&ALICE));
     let auth = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("alice@example.org:{token}")));
     let put = Request::builder().method("PUT").uri("/dav/mariage.jpg").header(header::HOST, "localhost").header(header::AUTHORIZATION, auth).body(Body::from(photo.clone())).unwrap();

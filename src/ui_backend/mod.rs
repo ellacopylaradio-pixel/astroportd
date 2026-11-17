@@ -509,7 +509,7 @@ pub fn tls_subsystem(tls: Option<(Vec<String>, astro_ui::acme::AcmeStatus)>, now
 fn register_error(e: crate::register::RegisterError) -> ApiError {
     use crate::register::RegisterError as E;
     match e {
-        E::Closed | E::Full | E::NoCaptain => ApiError::unavailable(e.to_string()),
+        E::Closed | E::Full | E::NoCaptain | E::Fortress => ApiError::unavailable(e.to_string()),
         E::RateLimited(_) => ApiError::too_many(e.to_string()),
         E::Invalid(m) => ApiError::bad_request(m),
         E::Conflict(m) => ApiError::conflict(m),

@@ -1,6 +1,8 @@
 'use strict';
 // Dictionnaire en, écran m-billets.js.
 export default {
+"Fond et logo": "Photo and logo",
+"Mon profil Nostr (Eugro à défaut)": "My Nostr profile (Eugro by default)",
 "Le Capitaine ne vous a pas autorisé à créer des Ğ1Billets.": "The Captain has not allowed you to create Ğ1Notes.",
 "3 mois": "3 months",
 "Créer la planche": "Create the sheet",

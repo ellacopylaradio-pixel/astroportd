@@ -33,6 +33,10 @@ pub trait FacesApi: Auth {
     fn face_shares_confirm(&self, _who: &Principal, _recipient: String, _accept: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("FaceCloud non activé")) }
     }
+    /// Partage automatique avec les amis réciproques (`on`) ou chaque photo attend un clic (`!on`) : `{ auto_share }`.
+    fn face_auto_share(&self, _who: &Principal, _on: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("FaceCloud non activé")) }
+    }
     /// Dossiers du uCloud qui contiennent des visages : `[{ dir, faces, todo }]`, du plus récent au plus ancien par chemin.
     fn faces_folders(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("FaceCloud non activé")) }
@@ -58,6 +62,7 @@ pub(super) fn routes<B: FacesApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/faces/delete-photos", post(faces_delete_photos::<B>))
         .route("/api/v1/faces/pending-shares", get(face_shares_pending::<B>))
         .route("/api/v1/faces/pending-shares/confirm", post(face_shares_confirm::<B>))
+        .route("/api/v1/faces/auto-share", post(face_auto_share::<B>))
         .route("/api/v1/faces/{id}/accept", post(face_accept::<B>))
         .route("/api/v1/faces/{id}/name", post(face_name::<B>))
 }
@@ -197,4 +202,13 @@ async fn face_shares_confirm<B: FacesApi>(State(st): State<Arc<UiState<B>>>, Aut
         return reply(Err(ApiError::bad_request("clé publique de l'ami attendue (64 hexadécimaux)")));
     }
     reply(st.backend.face_shares_confirm(&p, recipient, body.accept).await)
+}
+
+#[derive(Deserialize)]
+struct AutoShareBody {
+    on: bool,
+}
+
+async fn face_auto_share<B: FacesApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<AutoShareBody>) -> Response {
+    reply(st.backend.face_auto_share(&p, body.on).await)
 }

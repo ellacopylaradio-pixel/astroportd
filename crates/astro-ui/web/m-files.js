@@ -3,9 +3,9 @@
 // renommer, déplacer, supprimer. Tout passe par les verbes WebDAV du serveur (PUT, MKCOL, MOVE, DELETE) : rien à ajouter côté station,
 // et un déplacement ne change que des chemins (aucun fichier n'est recopié ni re-chiffré).
 
-// Dossiers fonctionnels du VFS (coffre, contacts, agenda, partages, sauvegardes d'amis) et fichiers cachés : ni renommés, ni déplacés,
-// ni remplis à la main.
-const RESERVED = ['Coffre', 'Contacts', 'Calendrier', 'Partages', 'Sauvegardes'];
+// Dossiers fonctionnels du VFS (tiroir système « _ » : coffre, contacts, agenda ; partages et sauvegardes d'amis) et fichiers cachés :
+// ni renommés, ni déplacés, ni remplis à la main. Copie de `vfs::RESERVED_ROOTS` (astro-dav), vérifiée par un test.
+const RESERVED = ['_', 'Partages', 'Sauvegardes'];
 const segs = p => p.split('/').filter(Boolean);
 const locked = p => segs(p).some((s, i) => (i === 0 && RESERVED.includes(s)) || s.startsWith('.'));
 const lastName = p => segs(p).pop() || '';

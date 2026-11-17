@@ -26,12 +26,16 @@ async fn count(rig: &Rig, sql: &'static str) -> i64 {
     rig.db.readers().read(move |c| Ok(c.query_row(sql, [], |r| r.get(0))?)).await.unwrap()
 }
 
+async fn count_with(rig: &Rig, sql: &'static str, a: String, b: &'static str) -> i64 {
+    rig.db.readers().read(move |c| Ok(c.query_row(sql, rusqlite::params![a, b], |r| r.get(0))?)).await.unwrap()
+}
+
 #[tokio::test]
 async fn drop_a_photo_recognize_friends_share_locally_and_wrap_for_the_remote_friend() {
     let r = rig("e2e", |_| {}).await;
     enroll_friends(&r).await;
-    let photo = "FACES:bob+p1,carol+p1,dave+p1,stranger";
-    put_photo(&r, "vacances.jpg", photo).await;
+    let group = "FACES:bob+p1,carol+p1,dave+p1,stranger";
+    put_photo(&r, "groupe.jpg", group).await;
     let stats = drain(&r).await;
     assert_eq!((stats.done, stats.retried, stats.failed), (1, 0, 0));
 
@@ -47,10 +51,23 @@ async fn drop_a_photo_recognize_friends_share_locally_and_wrap_for_the_remote_fr
     let (status, info): (String, i64) = r
         .db
         .readers()
-        .read(|c| Ok(c.query_row("SELECT faceid_status, json_extract(data, '$.faceid.count') FROM ucloud_entries WHERE path = '/vacances.jpg'", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .read(|c| Ok(c.query_row("SELECT faceid_status, json_extract(data, '$.faceid.count') FROM ucloud_entries WHERE path = '/groupe.jpg'", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
         .await
         .unwrap();
     assert_eq!((status.as_str(), info), ("faces", 4));
+
+    // Photo de groupe : rien ne part tout seul. Bob et Carol (amis réciproques) attendent l'accord d'Alice, car d'autres
+    // personnes paraissent avec eux ; Dave (pas réciproque) n'est même pas proposé.
+    assert!(r.outbox.sent.lock().unwrap().is_empty());
+    assert_eq!(count(&r, "SELECT count(*) FROM face_shares").await, 0);
+    assert_eq!(count(&r, "SELECT count(*) FROM face_share_pending WHERE path = '/groupe.jpg'").await, 2);
+
+    // Bob seul sur la photo : copie silencieuse. Carol seule : une enveloppe.
+    let photo = "FACES:bob+p2";
+    put_photo(&r, "vacances.jpg", photo).await;
+    let carol_photo = "FACES:carol+p3";
+    put_photo(&r, "plage.jpg", carol_photo).await;
+    assert_eq!(drain(&r).await.done, 2);
 
     // Bob (ami réciproque, hébergé ici) : copie silencieuse, même blob, même clé.
     let (alice_cid,): (String,) = r.db.readers().read(|c| Ok((c.query_row("SELECT cid FROM ucloud_entries WHERE path = '/vacances.jpg'", [], |r| r.get(0))?,))).await.unwrap();
@@ -74,6 +91,7 @@ async fn drop_a_photo_recognize_friends_share_locally_and_wrap_for_the_remote_fr
     wrap.verify().unwrap();
     assert_eq!(wrap.tags, vec![vec!["p".to_owned(), hex(&CAROL)]]);
     assert_ne!(wrap.pubkey, hex(&ALICE), "l'expéditeur n'apparaît pas sur l'enveloppe");
+    let cid: String = r.db.readers().read(|c| Ok(c.query_row("SELECT cid FROM ucloud_entries WHERE path = '/plage.jpg'", [], |r| r.get(0))?)).await.unwrap();
     assert!(!wrap.content.contains(&cid));
     let opened = nip59::unwrap(&CAROL, wrap).unwrap();
     assert_eq!(opened.sender, hex(&ALICE), "expéditeur authentifié par le scellé");
@@ -81,14 +99,14 @@ async fn drop_a_photo_recognize_friends_share_locally_and_wrap_for_the_remote_fr
     assert_eq!(opened.rumor.tag_value("cid"), Some(cid.as_str()));
     assert_eq!(opened.rumor.tag_value("file-type"), Some("image/jpeg"));
     assert_eq!(opened.rumor.tag_value("encryption-algorithm"), Some("uenc-v2"));
-    assert_eq!(opened.rumor.tag_value("name"), Some("vacances.jpg"));
+    assert_eq!(opened.rumor.tag_value("name"), Some("plage.jpg"));
     assert_eq!(opened.rumor.content, format!("ipfs://{cid}"));
     // Avec le CID et la clé du message, Carol déchiffre le blob IPFS.
     let key = UencKey::from_hex(opened.rumor.tag_value("decryption-key").unwrap()).unwrap();
     let (mut blob, _) = r.blobs.open(opened.rumor.tag_value("cid").unwrap()).await.unwrap();
     let mut plain = Vec::new();
     uenc::decrypt_stream(&key, &mut blob, &mut plain).await.unwrap();
-    assert_eq!(plain, photo.as_bytes());
+    assert_eq!(plain, carol_photo.as_bytes());
     // Seule Carol peut ouvrir l'enveloppe.
     assert!(nip59::unwrap(&BOB, wrap).is_err() && nip59::unwrap(&DAVE, wrap).is_err());
 
@@ -135,9 +153,10 @@ async fn thresholds_recognized_suggestion_unknown_and_deterministic_names() {
     let mut v = r.engine_embedding("mystere");
     unit_check(&mut v);
     assert_eq!(rep.faces[2].name, unknown_name(&embedding_hash(&v)));
-    // Partages : seul Bob (visage 0) a été reconnu et partagé.
-    assert_eq!(rep.shares.len(), 1);
-    assert_eq!((rep.shares[0].recipient.as_str(), rep.shares[0].via), (hex(&BOB).as_str(), ShareVia::Local));
+    // Partages : Bob (visage 0) est reconnu avec certitude, mais un suggéré et un inconnu paraissent avec lui : la photo
+    // attend l'accord d'Alice au lieu de partir.
+    assert!(rep.shares.is_empty(), "{:?}", rep.shares);
+    assert_eq!(rep.skipped.iter().map(|s| (s.recipient.as_str(), s.reason.as_str())).collect::<Vec<_>>(), [(hex(&BOB).as_str(), "en attente de confirmation")]);
 
     // Validation humaine de la suggestion : le visage prend l'identité suggérée.
     let id = rep.faces[1].face_id;
@@ -178,14 +197,18 @@ async fn photos_without_faces_and_weak_detections() {
 async fn reprocessing_is_idempotent_and_received_copies_are_never_analyzed() {
     let r = rig("idem", |_| {}).await;
     enroll_friends(&r).await;
-    put_photo(&r, "a.jpg", "FACES:bob+1,carol+1").await;
-    let first = r.fc.process_photo(&hex(&ALICE), "/a.jpg").await.unwrap();
-    assert_eq!(first.shares.len(), 2);
+    put_photo(&r, "a.jpg", "FACES:bob+1").await;
+    put_photo(&r, "c.jpg", "FACES:carol+1").await;
+    for p in ["/a.jpg", "/c.jpg"] {
+        assert_eq!(r.fc.process_photo(&hex(&ALICE), p).await.unwrap().shares.len(), 1, "{p}");
+    }
     let faces_before = count(&r, "SELECT count(*) FROM faces").await;
-    let again = r.fc.process_photo(&hex(&ALICE), "/a.jpg").await.unwrap();
-    assert!(again.faces.iter().all(|f| f.decision == Decision::AlreadyKnown), "{again:?}");
+    for p in ["/a.jpg", "/c.jpg"] {
+        let again = r.fc.process_photo(&hex(&ALICE), p).await.unwrap();
+        assert!(again.faces.iter().all(|f| f.decision == Decision::AlreadyKnown), "{again:?}");
+        assert!(again.shares.is_empty() && again.skipped.iter().all(|s| s.reason == "déjà partagé"), "{again:?}");
+    }
     assert_eq!(count(&r, "SELECT count(*) FROM faces").await, faces_before);
-    assert!(again.shares.is_empty() && again.skipped.iter().all(|s| s.reason == "déjà partagé"), "{again:?}");
     assert_eq!(r.outbox.sent.lock().unwrap().len(), 1, "une seule enveloppe, jamais de doublon");
     // La copie reçue par Bob n'est jamais analysée (pas de cascade de partages).
     let calls = r.engine.calls.load(std::sync::atomic::Ordering::SeqCst);
@@ -196,6 +219,64 @@ async fn reprocessing_is_idempotent_and_received_copies_are_never_analyzed() {
     put_photo(&r, "b.jpg", "FACES:bob+2").await;
     r.fc.process_photo(&hex(&ALICE), "/b.jpg").await.unwrap();
     assert_eq!(count(&r, "SELECT count(*) FROM ucloud_entries WHERE origin = 'facecloud-share'").await, 2);
+}
+
+#[tokio::test]
+async fn a_photo_leaves_on_its_own_only_when_it_shows_nobody_but_the_owner_and_the_friend() {
+    let r = rig("crowd", |_| {}).await;
+    enroll_friends(&r).await;
+    let (alice, bob) = (hex(&ALICE), hex(&BOB));
+    let local_shares = |p: &'static str| count_with(&r, "SELECT count(*) FROM face_shares s JOIN ucloud_entries e ON e.owner_hex = s.owner_hex AND e.cid = s.cid WHERE s.recipient_hex = ?1 AND e.path = ?2", bob.clone(), p);
+
+    // Un inconnu net à côté de Bob : la photo attend l'accord d'Alice, puis part sur un clic.
+    put_photo(&r, "fete.jpg", "FACES:bob+1,inconnu").await;
+    let rep = r.fc.process_photo(&alice, "/fete.jpg").await.unwrap();
+    assert!(rep.shares.is_empty() && r.fc.crowded(&alice, "/fete.jpg", &bob).await.unwrap());
+    assert_eq!(local_shares("/fete.jpg").await, 0);
+    assert_eq!(r.fc.resolve_pending(&alice, &bob, true).await.unwrap().0, 1, "accord : envoyée");
+    assert_eq!(local_shares("/fete.jpg").await, 1);
+
+    // Alice elle-même (visage nommé) avec Bob : rien d'étranger, la photo part seule.
+    assert_eq!(r.fc.enroll(&alice, &alice, "Alice", b"FACES:alice").await.unwrap(), 1);
+    put_photo(&r, "nous.jpg", "FACES:alice+1,bob+2").await;
+    let shared = r.fc.process_photo(&alice, "/nous.jpg").await.unwrap().shares;
+    assert_eq!(shared.iter().map(|x| (x.recipient.as_str(), x.via)).collect::<Vec<_>>(), [(bob.as_str(), ShareVia::Local)]);
+    // Un passant flou à l'arrière-plan (détection sous `share_det_min`) ne compte pas.
+    put_photo(&r, "rue.jpg", "FACES:bob+3,passant@0.65").await;
+    assert_eq!(r.fc.process_photo(&alice, "/rue.jpg").await.unwrap().shares.len(), 1);
+
+    // Partage automatique coupé par Alice : même Bob seul attend un clic.
+    assert!(r.fc.auto_share(&alice).await.unwrap());
+    r.fc.set_auto_share(&alice, false).await.unwrap();
+    assert!(!r.fc.auto_share(&alice).await.unwrap());
+    put_photo(&r, "seul.jpg", "FACES:bob+4").await;
+    let rep = r.fc.process_photo(&alice, "/seul.jpg").await.unwrap();
+    assert!(rep.shares.is_empty() && rep.skipped.iter().any(|s| s.reason == "en attente de confirmation"), "{rep:?}");
+    r.fc.set_auto_share(&alice, true).await.unwrap();
+
+    // Relier une personne à sa clé rattrape ses photos, sous la même règle : la photo de groupe refusée reste en attente.
+    put_photo(&r, "groupe.jpg", "FACES:bob+5,carol+5").await;
+    r.fc.process_photo(&alice, "/groupe.jpg").await.unwrap();
+    r.fc.resolve_pending(&alice, &bob, false).await.unwrap();
+    let (sent, held) = r.fc.share_backlog(&alice, &bob).await.unwrap();
+    assert_eq!(local_shares("/groupe.jpg").await, 0, "rattrapage : la photo de groupe ne part pas seule (envoyées {sent}, en attente {held})");
+    assert_eq!(count_with(&r, "SELECT count(*) FROM face_share_pending WHERE recipient_hex = ?1 AND path = ?2", bob.clone(), "/groupe.jpg").await, 1);
+}
+
+#[tokio::test]
+async fn an_image_in_the_system_drawer_is_never_analyzed_nor_shared() {
+    let r = rig("drawer", |_| {}).await;
+    enroll_friends(&r).await;
+    for d in ["/dav/_", "/dav/_/Contacts"] {
+        assert_eq!(dav(&r.app, "MKCOL", d, "alice@example.org", &ALICE, vec![]).await.0, 201);
+    }
+    assert_eq!(dav(&r.app, "PUT", "/dav/_/Contacts/bob.jpg", "alice@example.org", &ALICE, b"FACES:bob+1".to_vec()).await.0, 201);
+    drain(&r).await;
+    let calls = r.engine.calls.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(r.fc.process_photo(&hex(&ALICE), "/_/Contacts/bob.jpg").await.unwrap().status, "skipped");
+    assert_eq!(r.engine.calls.load(std::sync::atomic::Ordering::SeqCst), calls, "aucune inférence");
+    assert_eq!(count(&r, "SELECT count(*) FROM faces WHERE ucloud_path LIKE '/!_/%' ESCAPE '!'").await, 0);
+    assert_eq!(count(&r, "SELECT count(*) FROM face_shares").await + count(&r, "SELECT count(*) FROM tasks").await, 0, "ni file, ni partage");
 }
 
 #[tokio::test]
@@ -215,11 +296,13 @@ async fn sharing_failures_and_non_reciprocal_friends_are_reported_not_fatal() {
     let r = rig("failures", |_| {}).await;
     enroll_friends(&r).await;
     *r.outbox.fail.lock().unwrap() = true;
-    put_photo(&r, "a.jpg", "FACES:carol+1,dave+1").await;
+    put_photo(&r, "a.jpg", "FACES:carol+1").await;
+    put_photo(&r, "d.jpg", "FACES:dave+1").await;
     let rep = r.fc.process_photo(&hex(&ALICE), "/a.jpg").await.unwrap();
     assert!(rep.shares.is_empty());
-    let reasons: Vec<&str> = rep.skipped.iter().map(|s| s.reason.as_str()).collect();
-    assert!(reasons.iter().any(|r| r.starts_with("envoi impossible")) && reasons.contains(&"pas un ami réciproque (N1)"), "{reasons:?}");
+    let mut reasons: Vec<String> = rep.skipped.iter().map(|s| s.reason.clone()).collect();
+    reasons.extend(r.fc.process_photo(&hex(&ALICE), "/d.jpg").await.unwrap().skipped.into_iter().map(|s| s.reason));
+    assert!(reasons.iter().any(|r| r.starts_with("envoi impossible")) && reasons.iter().any(|r| r == "pas un ami réciproque (N1)"), "{reasons:?}");
     assert_eq!(count(&r, "SELECT count(*) FROM face_shares").await, 0, "échec d'envoi : rien n'est marqué partagé, un retraitement réessaiera");
     // Le relai revient : le retraitement partage enfin.
     *r.outbox.fail.lock().unwrap() = false;

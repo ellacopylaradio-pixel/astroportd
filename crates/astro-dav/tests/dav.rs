@@ -268,27 +268,28 @@ async fn a_generic_content_type_falls_back_to_the_extension() {
 async fn a_keepass_vault_round_trips_replaces_and_is_never_shared() {
     use astro_dav::share::create_guest_link;
     let b = bench("vault").await;
-    assert_eq!(call(&b.app, "MKCOL", "/dav/Coffre", Some(&alice()), &[], Body::empty()).await.status(), 201);
+    assert_eq!(call(&b.app, "MKCOL", "/dav/_", Some(&alice()), &[], Body::empty()).await.status(), 201);
+    assert_eq!(call(&b.app, "MKCOL", "/dav/_/Coffre", Some(&alice()), &[], Body::empty()).await.status(), 201);
     // En-tête réel d'un fichier KDBX 4 (signatures 0x9AA2D903 et 0xB54BFB67), suivi d'octets quelconques.
     let mut vault = vec![0x03, 0xD9, 0xA2, 0x9A, 0x67, 0xFB, 0x4B, 0xB5, 0x00, 0x00, 0x04, 0x00];
     vault.extend(sample(250_000, 11));
-    let put = call(&b.app, "PUT", "/dav/Coffre/perso.kdbx", Some(&alice()), &[], streamed(vault.clone(), 40_000)).await;
+    let put = call(&b.app, "PUT", "/dav/_/Coffre/perso.kdbx", Some(&alice()), &[], streamed(vault.clone(), 40_000)).await;
     assert_eq!(put.status(), 201);
-    let (status, headers, body) = bytes(call(&b.app, "GET", "/dav/Coffre/perso.kdbx", Some(&alice()), &[], Body::empty()).await).await;
+    let (status, headers, body) = bytes(call(&b.app, "GET", "/dav/_/Coffre/perso.kdbx", Some(&alice()), &[], Body::empty()).await).await;
     assert_eq!((status, body == vault), (200, true), "octets identiques");
     assert_eq!(headers["content-type"], "application/x-keepass2");
 
     // Synchronisation suivante : le client écrase (204) et relit la nouvelle version.
     let mut newer = vault.clone();
     newer.extend_from_slice(b"entree-ajoutee");
-    assert_eq!(call(&b.app, "PUT", "/dav/Coffre/perso.kdbx", Some(&alice()), &[], Body::from(newer.clone())).await.status(), 204);
-    let (_, _, body) = bytes(call(&b.app, "GET", "/dav/Coffre/perso.kdbx", Some(&alice()), &[], Body::empty()).await).await;
+    assert_eq!(call(&b.app, "PUT", "/dav/_/Coffre/perso.kdbx", Some(&alice()), &[], Body::from(newer.clone())).await.status(), 204);
+    let (_, _, body) = bytes(call(&b.app, "GET", "/dav/_/Coffre/perso.kdbx", Some(&alice()), &[], Body::empty()).await).await;
     assert_eq!(body, newer);
-    assert_eq!(call(&b.app, "PUT", "/dav/Coffre/agents.kdbx", Some(&alice()), &[], Body::from(vault)).await.status(), 201);
+    assert_eq!(call(&b.app, "PUT", "/dav/_/Coffre/agents.kdbx", Some(&alice()), &[], Body::from(vault)).await.status(), 201);
 
     // Garde de partage : ni par le fichier, ni par le dossier, ni par la racine, quelle que soit la casse.
     let owner = hex(&ALICE);
-    for path in ["/Coffre/perso.kdbx", "/Coffre", "/coffre/agents.kdbx"] {
+    for path in ["/_/Coffre/perso.kdbx", "/_/Coffre", "/_/coffre/agents.kdbx"] {
         let r = create_guest_link(&b.db, b.blobs.as_ref(), &owner, &[path.to_owned()], "x", 3600, 1_000).await;
         assert!(r.is_err(), "{path} ne doit pas être partageable");
     }
@@ -300,8 +301,9 @@ async fn a_keepass_vault_round_trips_replaces_and_is_never_shared() {
 #[test]
 fn only_the_vault_folder_counts_as_the_vault() {
     use astro_dav::vfs::is_vault;
-    assert!(is_vault("/Coffre") && is_vault("/Coffre/perso.kdbx") && is_vault("/coffre/x") && is_vault("/COFFRE/a/b"));
-    assert!(!is_vault("/Coffres") && !is_vault("/Coffre.txt") && !is_vault("/Docs/Coffre/x") && !is_vault("/"));
+    assert!(is_vault("/_/Coffre") && is_vault("/_/Coffre/perso.kdbx") && is_vault("/_/coffre/x") && is_vault("/_/COFFRE/a/b"));
+    assert!(!is_vault("/_/Coffres") && !is_vault("/_/Coffre.txt") && !is_vault("/Docs/_/Coffre/x") && !is_vault("/"));
+    assert!(!is_vault("/Coffre/perso.kdbx"), "hors du tiroir système, un dossier « Coffre » est un dossier ordinaire");
 }
 
 /// Déplacer une photo (ou un dossier) par WebDAV garde le lien avec ses visages : l'écran Personnes en dépend.

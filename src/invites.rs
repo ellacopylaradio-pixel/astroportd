@@ -119,7 +119,7 @@ pub struct CreateRequest {
     /// Adresse du destinataire, si l'expéditeur la connaît.
     #[serde(default)]
     pub email: Option<String>,
-    /// Fiche `/Contacts/…vcf` à relier au MULTIPASS créé.
+    /// Fiche `/_/Contacts/…vcf` à relier au MULTIPASS créé.
     #[serde(default)]
     pub contact_path: Option<String>,
     /// Validité en jours (14 par défaut, 90 au plus).
@@ -312,8 +312,8 @@ impl<B: BlobStore> Invites<B> {
         if email.as_deref().is_some_and(|e| !e.contains('@') || e.len() > 120 || e.chars().any(|c| c.is_control() || c.is_whitespace())) {
             return Err(InviteError::Invalid("adresse email invalide".into()));
         }
-        if req.contact_path.as_deref().is_some_and(|p| !p.starts_with("/Contacts/")) {
-            return Err(InviteError::Invalid("fiche attendue dans /Contacts".into()));
+        if req.contact_path.as_deref().is_some_and(|p| astro_dav::carddav::card_file(p).is_none()) {
+            return Err(InviteError::Invalid("fiche attendue dans le carnet d'adresses".into()));
         }
         let days = req.days.unwrap_or(DEFAULT_DAYS);
         if !(1..=MAX_DAYS).contains(&days) {
@@ -539,7 +539,7 @@ impl<B: BlobStore> Invites<B> {
                 // La création a échoué : le lien reste valable, la personne peut corriger son adresse.
                 let _ = self.db.writer().execute("UPDATE invites SET claimed_at = NULL WHERE token = ?1 AND claimed_by IS NULL", vec![token.to_owned().into()]).await;
                 return Err(match e {
-                    RegisterError::Closed | RegisterError::Full | RegisterError::NoCaptain => InviteError::Unavailable(e.to_string()),
+                    RegisterError::Closed | RegisterError::Full | RegisterError::NoCaptain | RegisterError::Fortress => InviteError::Unavailable(e.to_string()),
                     RegisterError::RateLimited(_) => InviteError::RateLimited(e.to_string()),
                     RegisterError::Invalid(m) => InviteError::Invalid(m),
                     RegisterError::Conflict(_) => InviteError::EmailTaken,

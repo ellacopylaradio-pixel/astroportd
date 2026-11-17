@@ -127,6 +127,12 @@ impl Twin {
         self.seed.g1_pubkey()
     }
 
+    /// Adresse Ğ1 v2s (SS58, `g1…`).
+    pub fn g1_ss58(&self) -> String {
+        // Le préfixe 4450 est constant : l'encodage ne peut pas échouer.
+        self.seed.g1_ss58().unwrap_or_default()
+    }
+
     /// Clé publique ed25519 brute.
     pub fn public(&self) -> [u8; 32] {
         self.seed.ed25519_public()
@@ -315,8 +321,10 @@ pub struct InitReport {
     pub source: Source,
     /// PeerID de la station (`IPFSNODEID`).
     pub peer_id: String,
-    /// Clé publique Ğ1.
+    /// Clé publique Ğ1 (base58, format v1).
     pub g1_pubkey: String,
+    /// Adresse Ğ1 v2s (SS58, `g1…`).
+    pub g1_ss58: String,
     /// Clé Nostr de la station (hex).
     pub nostr_hex: String,
     /// Ligne publique SSH jumelle.
@@ -466,7 +474,7 @@ pub fn init(paths: &Paths, opts: &InitOptions, now: u64) -> Result<InitReport, Y
         }
     }
 
-    Ok(InitReport { source, peer_id: twin.peer_id(), g1_pubkey: twin.g1_pubkey(), nostr_hex, ssh_public, written, kept })
+    Ok(InitReport { source, peer_id: twin.peer_id(), g1_pubkey: twin.g1_pubkey(), g1_ss58: twin.g1_ss58(), nostr_hex, ssh_public, written, kept })
 }
 
 /// Aligne `Identity.PeerID`/`PrivKey` de kubo sur la station. Sauvegarde `config.bkp` (une fois). Rend `true` si modifié.
@@ -511,7 +519,7 @@ pub fn verify(paths: &Paths, kubo_config: Option<&Path>) -> Vec<Check> {
         return out;
     };
     let twin = Twin::from_seed(dk.seed());
-    check("NODE", true, format!("IPFSNODEID {}  ·  Ğ1 {}", twin.peer_id(), twin.g1_pubkey()));
+    check("NODE", true, format!("IPFSNODEID {}  ·  Ğ1 {} ({})", twin.peer_id(), twin.g1_ss58(), twin.g1_pubkey()));
 
     match std::fs::read_to_string(paths.secret_june()).map_err(|e| e.to_string()).and_then(|t| Secrets::parse_secret_june(&t).map_err(|e| e.to_string())).and_then(|s| s.twin().map_err(|e| e.to_string())) {
         Ok(j) if j.peer_id() == twin.peer_id() => check("secret.june", true, "secret.june redonne bien le NODE".into()),

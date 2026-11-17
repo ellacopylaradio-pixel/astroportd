@@ -85,7 +85,7 @@ async fn alice_has_lea(b: &Bench) -> String {
             .unwrap();
     }
     let card = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Léa\r\nEMAIL:lea@example.org\r\nEND:VCARD\r\n";
-    let done = ingest::ingest(&b.dav, &alice, "/Contacts", "lea.vcf", Some("text/vcard"), Cursor::new(card.as_bytes().to_vec())).await.unwrap();
+    let done = ingest::ingest(&b.dav, &alice, "/_/Contacts", "lea.vcf", Some("text/vcard"), Cursor::new(card.as_bytes().to_vec())).await.unwrap();
     b.links.sync_owner(&alice).await.unwrap();
     done.path
 }

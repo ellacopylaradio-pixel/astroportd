@@ -53,7 +53,7 @@ export default async function mesh(root, K) {
   find.oninput = show; show();
   const captains = h('section', { class: 'card wide' }, h('h2', {}, t('Capitaines')),
     c.error ? h('p', { class: 'degraded' }, c.error) : !caps.length ? h('p', { class: 'muted' }, t('Aucun autre Capitaine connu pour l\'instant.')) : [caps.length > 8 ? find : null, list],
-    h('p', { class: 'muted' }, t('Un ami réciproque vous montre ce qu\'il vous partage ; c\'est sa station qui décide.'), ' ', h('a', { href: '#/options' }, t('Régler mes partages'))));
+    h('p', { class: 'muted' }, t('Un ami réciproque vous montre ce qu\'il vous partage ; c\'est sa station qui décide.'), ' ', h('a', { href: '#/options' }, t('Régler mes partages')), ' · ', h('a', { href: '#/locks' }, t('Ce que « Suivre » ouvre'))));
 
   // ── Essaim : toutes les stations vues, de la plus puissante à la moins puissante ──
   const TIER = { Light: '🌿', Standard: '⚡', Brain: '🔥' }, nodes = cs?.nodes || [];

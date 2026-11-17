@@ -1,6 +1,6 @@
 //! CalDAV (RFC 4791) : l'agenda de chaque compte, synchronisable avec « Agenda » d'Android (DAVx⁵), d'iOS et Thunderbird.
 //!
-//! Même principe que CardDAV : les événements sont de simples fichiers `.ics` du dossier `/Calendrier` du uCloud (chiffrés
+//! Même principe que CardDAV : les événements sont de simples fichiers `.ics` du dossier `/_/Calendrier` du uCloud (tiroir système) (chiffrés
 //! UENC, répliqués chez les amis avec le manifeste, comptés dans le quota, visibles aussi d'un client WebDAV ordinaire).
 //! Ils restent **privés** : rien n'est publié sur Nostr. Ce module n'est qu'une façade de protocole.
 //!
@@ -9,7 +9,7 @@
 //! | `/principals/<login>/` | principal : `calendar-home-set` (voir `carddav`) |
 //! | `/calendars/<login>/` | dossier d'accueil des agendas |
 //! | `/calendars/<login>/default/` | l'agenda (`getctag`, `sync-token`, rapports `calendar-multiget`, `calendar-query`, `sync-collection`) |
-//! | `/calendars/<login>/default/<nom>.ics` | un objet ↔ `/Calendrier/<nom>.ics` |
+//! | `/calendars/<login>/default/<nom>.ics` | un objet ↔ `/_/Calendrier/<nom>.ics` |
 //!
 //! Limites assumées : un seul agenda par compte ; `calendar-query` renvoie tout l'agenda sans appliquer le filtre de dates
 //! ni développer les récurrences (le client filtre et calcule) ; pas d'invitations (`schedule-*`) ; pas de `MKCALENDAR`.
@@ -30,7 +30,7 @@ use crate::vfs::{self, Entry, EntryKind};
 use crate::xml::{self, escape};
 
 /// Dossier du uCloud qui porte l'agenda.
-pub const CALENDAR_DIR: &str = "/Calendrier";
+pub const CALENDAR_DIR: &str = "/_/Calendrier";
 const NS: &str = "xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\" xmlns:CS=\"http://calendarserver.org/ns/\"";
 
 /// Le chemin (hors montage) relève-t-il de CalDAV ?
@@ -60,7 +60,7 @@ fn is_object(e: &Entry) -> bool {
     e.kind == EntryKind::File && e.path.to_ascii_lowercase().ends_with(".ics")
 }
 
-/// Objets `.ics` du dossier `/Calendrier` d'un compte.
+/// Objets `.ics` du dossier `/_/Calendrier` d'un compte.
 pub async fn list_objects<B: BlobStore>(st: &DavState<B>, owner: &str) -> Vec<Entry> {
     let o = owner.to_owned();
     let listed = st.db.readers().read(move |c| Ok(vfs::list_children(c, &o, CALENDAR_DIR).unwrap_or_default())).await.unwrap_or_default();
@@ -228,7 +228,7 @@ async fn report<B: BlobStore>(st: &DavState<B>, owner: &str, login: &str, req: R
     multistatus(&parts)
 }
 
-/// `sync-collection` : même journal et même jeton que CardDAV, filtré sur `/Calendrier`.
+/// `sync-collection` : même journal et même jeton que CardDAV, filtré sur `/_/Calendrier`.
 async fn sync_collection<B: BlobStore>(st: &DavState<B>, owner: &str, login: &str, token: &str) -> Response {
     let head = carddav::journal_head(st).await;
     let since = if token.is_empty() {
@@ -283,10 +283,7 @@ async fn put_object<B: BlobStore>(st: &DavState<B>, auth: &Auth, file: &str, req
         }
     }
     let o = owner.clone();
-    if let Err(e) = vfs::vfs_tx(&st.db, move |tx| match vfs::mkdir_tx(tx, &o, CALENDAR_DIR, now_secs()) {
-        Ok(()) | Err(vfs::VfsError::Exists) => Ok(()),
-        Err(e) => Err(e),
-    })
+    if let Err(e) = vfs::vfs_tx(&st.db, move |tx| vfs::mkdir_p_tx(tx, &o, CALENDAR_DIR, now_secs()))
     .await
     {
         return reply(StatusCode::INTERNAL_SERVER_ERROR, &format!("dossier de l'agenda : {e}"));

@@ -100,6 +100,11 @@ pub trait OnboardApi: Auth {
     fn invite_claim(&self, _ip: Option<std::net::IpAddr>, _token: String, _who: Applicant, _lang: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("invitations non disponibles sur cette station")) }
     }
+    /// « Retrouver ma station » (public, borné par adresse) : `{ where: here | elsewhere | unknown, url? }` pour un email,
+    /// un `npub1…` ou une clé hexadécimale. Jamais de secret : l'email et la station d'accueil sont déjà dans le DID public.
+    fn locate(&self, _ip: Option<std::net::IpAddr>, _q: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("recherche de station non disponible ici")) }
+    }
     /// Rétablit sur cette station un MULTIPASS existant depuis sa carte secrète (public : la carte est la preuve). `ip` : limite de débit.
     fn restore(&self, _ip: Option<std::net::IpAddr>, _card: String, _lang: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("restauration non disponible sur cette station")) }
@@ -116,6 +121,7 @@ pub(super) fn routes<B: OnboardApi>() -> Router<Arc<UiState<B>>> {
         .route("/.well-known/nostr/nip96.json", get(nip96_info::<B>))
         .route("/api/v1/register", get(register_info::<B>).post(register::<B>))
         .route("/api/v1/stations", get(stations::<B>))
+        .route("/api/v1/locate", get(locate::<B>))
         .route("/12345", get(station_card::<B>))
         .route("/12345/", get(station_card::<B>))
         .route("/api/v1/restore", post(restore::<B>))
@@ -230,6 +236,21 @@ async fn station_card<B: OnboardApi>(State(st): State<Arc<UiState<B>>>) -> Respo
 }
 
 /// Annuaire des stations de l'UPlanet (public).
+#[derive(Deserialize)]
+struct LocateQuery {
+    #[serde(default)]
+    q: String,
+}
+
+async fn locate<B: OnboardApi>(State(st): State<Arc<UiState<B>>>, req: axum::extract::Request) -> Response {
+    let ip = super::client_ip(&req);
+    let q = axum::extract::Query::<LocateQuery>::try_from_uri(req.uri()).map(|q| q.0.q).unwrap_or_default();
+    if q.trim().is_empty() || q.len() > 200 {
+        return any_origin(reply(Err(ApiError::bad_request("email, npub1… ou clé attendu (paramètre q)"))));
+    }
+    any_origin(reply(st.backend.locate(ip, q).await))
+}
+
 async fn stations<B: OnboardApi>(State(st): State<Arc<UiState<B>>>) -> Response {
     any_origin(reply(st.backend.stations().await))
 }

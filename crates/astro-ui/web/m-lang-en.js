@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire en, phrases communes. Les écrans de `parts` ont aussi m-lang-en-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account billets call contacts coop files mesh options planes sync';
+export const parts = 'account billets call contacts coop files locks mesh options planes sync';
 export default {
 "Aller au contenu": "Skip to content",
 "Tableau de bord": "Dashboard",
@@ -18,6 +18,15 @@ export default {
 "Pas de compte ?": "No account?",
 "Créer mon MULTIPASS": "Create my MULTIPASS",
 "Stations proches": "Nearby stations",
+"Email ou clé": "Email or key",
+"Votre code PASS (4 à 6 chiffres) ou le jeton de la station.": "Your PASS code (4 to 6 digits) or the station token.",
+"Pas votre station ?": "Not your station?",
+"Retrouver ma station": "Find my station",
+"Continuer": "Continue",
+"Votre espace est sur {0}. Votre code PASS ne se tape que là-bas.": "Your space is on {0}. Only type your PASS code there.",
+"Aller sur ma station": "Go to my station",
+"Aucun MULTIPASS trouvé pour cet identifiant, ni ici ni sur les stations que nous connaissons.": "No MULTIPASS found for this identifier, here or on the stations we know.",
+"Identifiant ou jeton refusé.": "Identifier or token refused.",
 "Se connecter": "Sign in",
 "Fermer": "Close",
 "Copier": "Copy",
@@ -94,6 +103,7 @@ export default {
 "Messagerie": "Messaging",
 "Cette personne n'est pas joignable d'ici pour le moment.": "This person can't be reached from here for now.",
 "Fiche reliée": "Card linked",
+"Si vous vous suivez l'un l'autre, ses photos où elle est seule avec vous lui seront envoyées ; une photo de groupe attend votre accord.": "If you follow each other, photos where they are alone with you will be sent to them; a group photo waits for your consent.",
 "Fiche déliée": "Card unlinked",
 "Contact": "Contact",
 "Carnet d'adresses": "Address book",
@@ -326,6 +336,8 @@ export default {
 "Options et tunnels": "Options and tunnels",
 "Pour vous": "For you",
 "{0} photo(s) de {1} attendent votre accord pour lui être envoyées": "{0} photo(s) of {1} await your consent to be sent to them",
+"{0} fichier(s) de Public en disent trop (lieu, mot de passe, contacts…)": "{0} Public file(s) reveal too much (place, password, contacts…)",
+"Voir": "See",
 "{0} visage(s) à confirmer": "{0} face(s) to confirm",
 "{0} visage(s) à nommer": "{0} face(s) to name",
 "Trier en 1 clic": "Sort in 1 tap",
@@ -361,6 +373,7 @@ export default {
 "Retour": "Back",
 "Rubrique": "Section",
 "Régie": "Treasury",
+"Écluses": "Locks",
 "Réglages": "Settings",
 "Essaim": "Swarm",
 "Détails techniques": "Technical details",

@@ -17,20 +17,40 @@
 <main id="main">
   <h1 data-t="title">Trouver ma station</h1>
   <p class="lead" data-t="lead">Votre MULTIPASS vit sur une station de la coopérative. Choisissez la plus proche de chez vous qui a encore de la place : c’est aussi elle qui tient les nouvelles de votre quartier.</p>
-  <p class="row"><button id="geo" type="button" data-t="geo">📍 Me localiser</button> <span id="geo-st" class="muted" role="status"></span></p>
-  <p class="muted small0" data-t="privacy">Votre position reste dans ce navigateur : elle sert seulement à trier les stations, elle n’est envoyée à personne.</p>
+  <div class="doors" role="tablist" aria-label="Choisir">
+    <button id="door-new" class="door" type="button" role="tab" aria-controls="new"><span aria-hidden="true">🌱</span> <span data-t="new">Je suis nouveau</span></button>
+    <button id="door-member" class="door" type="button" role="tab" aria-controls="member"><span aria-hidden="true">🔑</span> <span data-t="member">J’ai déjà un MULTIPASS</span></button>
+  </div>
 
-  <section id="best" class="best" hidden aria-live="polite">
-    <p class="muted" data-t="advice">Station conseillée</p>
-    <h2 id="best-name"></h2>
-    <p id="best-why"></p>
-    <p class="row"><a id="best-go" class="btn primary" href="/register" data-t="join">Créer mon MULTIPASS ici</a></p>
+  <section id="member" hidden>
+    <p id="last" class="last" hidden><span data-t="last">Dernière station utilisée :</span> <strong id="last-name"></strong> <a id="last-go" class="btn primary" data-t="go">Y aller</a></p>
+    <form id="find" class="row">
+      <label class="grow"><span data-t="who">Votre email ou votre clé (npub)</span> <input id="who" name="q" autocomplete="username" required></label>
+      <button type="submit" data-t="find">Retrouver</button>
+    </form>
+    <div id="trip" class="trip" hidden aria-live="polite">
+      <p class="path" aria-hidden="true"><span>🙂</span><span class="dots"></span><span id="trip-ico">🏠</span></p>
+      <p id="trip-say"></p>
+      <p id="trip-act" class="row"></p>
+    </div>
+    <p class="muted small0" data-t="nopass">Votre code PASS ne se tape que sur votre propre station : ici, on ne vous le demande jamais.</p>
+  </section>
+
+  <section id="new">
+    <p class="row"><button id="geo" type="button" data-t="geo">📍 Me localiser</button> <span id="geo-st" class="muted" role="status"></span></p>
+    <p class="muted small0" data-t="privacy">Votre position reste dans ce navigateur : elle sert seulement à trier les stations, elle n’est envoyée à personne.</p>
+    <section id="best" class="best" hidden aria-live="polite">
+      <p class="muted" data-t="advice">Station conseillée</p>
+      <h2 id="best-name"></h2>
+      <p id="best-why"></p>
+      <p class="row"><a id="best-go" class="btn primary" href="/register" data-t="join">Créer mon MULTIPASS ici</a></p>
+    </section>
   </section>
 
   <p id="info" class="muted" role="status" data-t="loading">Lecture de l’annuaire…</p>
   <ul id="list" class="st-list"></ul>
   <p class="muted small" data-t="note">Chaque station publie toutes les quelques heures ses places libres et sa position approchée (à environ 1 km). Une station muette depuis plus de 8 jours n’apparaît plus.</p>
-  <p class="muted small"><a href="/register" data-t="here">Créer mon MULTIPASS sur cette station</a> · <a href="/" data-t="back">Retour à la connexion</a></p>
+  <p class="muted small"><a href="/register" data-t="here">Créer mon MULTIPASS sur cette station</a> · <a href="/" data-t="back">Me connecter sur cette station</a></p>
 </main>
 <script type="module" src="/ui/stations.js"></script>
 </body>

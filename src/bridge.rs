@@ -69,6 +69,61 @@ struct Source {
     phash: Option<i64>,
 }
 
+/// Où la base note la constellation de son plan (`kv`, état local réécrit à chaque `serve`).
+const PLANE_SCOPE: &str = "station";
+const PLANE_KEY: &str = "plane";
+
+/// Marque d'un plan : `origin`, ou `prive:<16 hex>` (empreinte de `UPLANETNAME`, jamais la clé elle-même).
+pub fn plane_tag(uplanet_name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    if uplanet_name == crate::init::ORIGIN_UPLANETNAME {
+        return "origin".to_owned();
+    }
+    let digest = hex::encode(Sha256::digest(uplanet_name.as_bytes()));
+    format!("prive:{}", &digest[..16])
+}
+
+/// Note dans `db` la constellation du plan qu'elle sert (appelé par `serve`).
+pub async fn record_plane(db: &Db, uplanet_name: &str) -> Result<(), String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    db.writer()
+        .execute(
+            "INSERT INTO kv(scope, key, value, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            vec![PLANE_SCOPE.to_owned().into(), PLANE_KEY.to_owned().into(), plane_tag(uplanet_name).into(), now.into()],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Marque du plan d'une base (lecture seule) ; `None` si ce plan n'a jamais tourné avec cette version.
+pub fn read_plane(db: &Path) -> Result<Option<String>, String> {
+    let c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("{} : {e}", db.display()))?;
+    c.query_row("SELECT value FROM kv WHERE scope = ?1 AND key = ?2", [PLANE_SCOPE, PLANE_KEY], |r| r.get(0)).optional().map_err(|e| format!("{} : {e}", db.display()))
+}
+
+/// Écluse entre deux plans (invariant I1 et décision 7 du plan double UPlanet) :
+/// - ORIGIN → plan privé, ou un plan vers lui-même : permis (le chiffré d'ORIGIN est déjà public) ;
+/// - plan privé → ORIGIN : **refusé** — le chiffré d'un réseau privé n'entre jamais dans ORIGIN et son Kubo ; il faudrait
+///   un ré-chiffrement (nouvelle clé, nouveau CID), que le pont ne fait pas ;
+/// - plan privé → autre plan privé : seulement avec `cross_swarm` (accord explicite : le même CID sera servi dans deux
+///   essaims, et quelqu'un présent dans les deux pourrait rapprocher le contenu).
+pub fn check_passage(from: Option<&str>, to: Option<&str>, cross_swarm: bool) -> Result<(), String> {
+    let (Some(from), Some(to)) = (from, to) else {
+        return Err("constellation d'un des deux plans inconnue : démarrez-le une fois (`astroportd serve`) avec cette version, qui l'inscrit dans sa base".into());
+    };
+    if from == to || from == "origin" {
+        return Ok(());
+    }
+    if to == "origin" {
+        return Err("passage refusé : un fichier né dans une UPlanet privée n'entre jamais dans ORIGIN (son chiffré sortirait de l'essaim, jusque dans Kubo) ; il faudrait le ré-chiffrer, ce que le pont ne fait pas encore".into());
+    }
+    if !cross_swarm {
+        return Err("deux UPlanet privées différentes : partager le même blob le fera servir dans les deux essaims, et quelqu'un présent dans les deux pourrait rapprocher le contenu ; ajoutez --cross-swarm pour l'accepter".into());
+    }
+    Ok(())
+}
+
 /// Clé (64 hex) du compte hébergé `login` (email ou clé) dans la base `db`.
 pub fn resolve_owner(db: &Path, login: &str) -> Result<String, String> {
     let c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("{} : {e}", db.display()))?;
@@ -207,5 +262,19 @@ mod tests {
         assert_eq!(dest_path("/", "/Imports/ORIGIN", "/Photos/a.jpg"), "/Imports/ORIGIN/Photos/a.jpg");
         assert_eq!(dest_path("/Photos/a.jpg", "/Imports", "/Photos/a.jpg"), "/Imports/a.jpg", "un fichier seul garde son nom");
         assert_eq!(dest_path("/Photos", "/", "/Photos/a.jpg"), "/a.jpg");
+    }
+
+    #[test]
+    fn the_lock_between_planes_never_lets_private_ciphertext_into_origin() {
+        let (origin, zen, zen2) = (plane_tag(crate::init::ORIGIN_UPLANETNAME), plane_tag(&"1".repeat(64)), plane_tag(&"2".repeat(64)));
+        assert_eq!(origin, "origin");
+        assert!(zen.starts_with("prive:") && zen.len() == 6 + 16 && !zen.contains("1111"), "empreinte, jamais la clé : {zen}");
+        let pass = |a: &str, b: &str, x: bool| check_passage(Some(a), Some(b), x);
+        assert!(pass(&origin, &zen, false).is_ok(), "ORIGIN → privé : le chiffré est déjà public");
+        assert!(pass(&zen, &zen, false).is_ok(), "même plan");
+        assert!(pass(&zen, &origin, false).is_err() && pass(&zen, &origin, true).is_err(), "privé → ORIGIN : jamais, même avec accord");
+        assert!(pass(&zen, &zen2, false).is_err(), "deux essaims privés : accord explicite requis");
+        assert!(pass(&zen, &zen2, true).is_ok());
+        assert!(check_passage(None, Some(&zen), true).is_err(), "plan inconnu : on refuse");
     }
 }

@@ -146,7 +146,17 @@ impl<B: BlobStore> FacesApi for FacesBackend<B> {
         }
         let batches = astro_facecloud::review::pending_batches(&self.services.db, &who.hex).await.map_err(db_err)?;
         let pending: Vec<Value> = batches.into_iter().map(|b| json!({ "recipient_hex": b.recipient_hex, "name": b.name, "count": b.count, "sample_path": b.sample_path })).collect();
-        Ok(json!({ "pending": pending }))
+        let auto_share = astro_facecloud::review::auto_share(&self.services.db, &who.hex).await.map_err(db_err)?;
+        Ok(json!({ "pending": pending, "auto_share": auto_share }))
+    }
+    async fn face_auto_share(&self, who: &Principal, on: bool) -> Result<Value, ApiError> {
+        if !self.faces_enabled {
+            return Err(ApiError::unavailable("La reconnaissance des visages n'est pas activée sur cette station (le Capitaine l'active dans Options)."));
+        }
+        astro_facecloud::review::set_auto_share(&self.services.db, &who.hex, on).await.map_err(db_err)?;
+        let said = if on { "photos de vos amis : envoi automatique quand ils sont seuls avec vous sur la photo" } else { "photos de vos amis : chaque envoi attend votre accord" };
+        self.services.activity.publish_to(astro_core::Audience::Owner(who.hex.clone()), "facecloud", "ui:faces", said, None);
+        Ok(json!({ "auto_share": on }))
     }
     async fn face_shares_confirm(&self, who: &Principal, recipient: String, accept: bool) -> Result<Value, ApiError> {
         let f = self.pending_fn.as_ref().ok_or_else(|| ApiError::unavailable("La reconnaissance des visages n'est pas activée sur cette station."))?;

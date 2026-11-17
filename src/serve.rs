@@ -540,6 +540,8 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         Some(path) => std::fs::read_to_string(path)?.lines().map(str::trim).rfind(|l| !l.is_empty()).map(str::to_owned).ok_or("swarm.key vide")?,
         None => astroportd::init::ORIGIN_UPLANETNAME.to_owned(),
     };
+    // La base note sa constellation (empreinte, jamais la clé) : le pont entre plans (`bridge-copy`) y lit le sens du passage.
+    astroportd::bridge::record_plane(&db, &uplanet_name).await?;
     // Stations relais publiées par la coopérative : la station s'y trouve-t-elle ? Alors elle sert de relais.
     let coop_relays = astroportd::coop_config::p2p_relays(&db, &uplanet_name).await;
     let (mut p2p_guards, p2p_handle, p2p_role) = p2p::start(&a, station.p2p_seed, &coop_relays, &local, &tunnel_policy, &mut exposed_names).await?;
@@ -552,6 +554,21 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let keys: Arc<dyn KeySource> = Arc::new(FileKeySource::new(&secrets_dir));
     let ui_keys = keys.clone();
     let publisher = ManifestPublisher::spawn(db.clone(), blobs.clone(), keys.clone(), Duration::from_secs(a.debounce_secs));
+    // Tiroir système `/_` : le coffre, le carnet et l'agenda encore à la racine y sont déplacés une fois, puis le
+    // manifeste de chaque compte touché est republié (la vérité suit ; un `replay` retrouve les nouvelles places).
+    match astro_dav::vfs::migrate_system_dirs(&db).await {
+        Ok(owners) => {
+            for owner in &owners {
+                publisher.notify(owner);
+            }
+            if !owners.is_empty() {
+                activity.publish("system", "uCloud", format!("coffre, contacts et agenda rangés dans le tiroir système « _ » ({} compte(s))", owners.len()), None);
+            }
+        }
+        Err(e) => {
+            activity.publish("system", "uCloud", format!("tiroir système « _ » : migration impossible ({e})"), None);
+        }
+    }
     let circle = Arc::new(DbCircle::new());
     circle.refresh(&db).await?;
     // La clé de la coopérative est signée par cette station : ses témoins (Ğ1Billets…) doivent passer le pare-feu social.
@@ -683,7 +700,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let pull = astroportd::webdav_pull::PullService::new(dav.clone(), pull_keys, Some(activity.clone()));
     // Rangement du uCloud par type (Documents, Images, Musique, Vidéos, Archives), lancé depuis l'onglet « Ranger ».
     let organize = astroportd::organize::OrganizeService::new(dav.clone(), Some(activity.clone()));
-    // Annuaire : fiches vCard de /Contacts ↔ visages ↔ MULTIPASS (CardDAV est servi par le routeur WebDAV).
+    // Annuaire : fiches vCard de /_/Contacts ↔ visages ↔ MULTIPASS (CardDAV est servi par le routeur WebDAV).
     let links = Arc::new(astroportd::identity_links::IdentityLinks::new(db.clone(), dav.clone(), share_fn, Some(activity.clone())));
     let _ = contacts_cell.set(links.clone());
 
@@ -837,7 +854,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     // Ğ1Billets : vérifier la valeur d'un billet papier et la transférer vers un compte de l'UPlanet (page publique /scan).
     let billets = billet_chain.map(|chain| {
         let primal = (!squid_urls.is_empty()).then(|| Arc::new(astroportd::funds::SquidPrimal::new(squid_urls.clone())));
-        let svc = astroportd::billet::Billets::new(db.clone(), chain, ui_wallets.clone(), primal, uplanet_name.to_string(), activity.clone()).with_public_images(public_images.clone());
+        let svc = astroportd::billet::Billets::new(db.clone(), chain, ui_wallets.clone(), primal, uplanet_name.to_string(), activity.clone()).with_public_images(public_images.clone()).with_plane_name(station_planes(&a.db).0);
         // Créer des billets exige les comptes (le portefeuille de l'émetteur finance), la clé du NODE (elle chiffre les parts gardées
         // pour le retour automatique) et de quoi publier le témoin.
         Arc::new(match (&station.nostr_dir, &station.node_secret) {
@@ -1048,15 +1065,35 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     if let Some(bad) = a.ice_servers.iter().find(|u| !["stun:", "stuns:", "turn:", "turns:"].iter().any(|p| u.starts_with(p)) || u.len() > 200 || u.chars().any(char::is_whitespace)) {
         return Err(format!("--ice-server « {bad} » : stun:hôte:port ou turn:hôte:port attendu").into());
     }
-    let admin_fn = Arc::new(astroportd::station_admin::Admin { face: face_control, kinds: kinds_control, tunnels: Some((tunnel_policy.clone(), exposed_names.clone())), targets: service_targets(&a), dnslink: Some(dnslink.clone()), assist: Some(assist_admin), tasks: Some(db.clone()), mesh: Some(mesh_admin), captains: Some(captains_admin) }).handler();
+    // Écluses : ce que `serve` sait du plan et des portes réglées en ligne de commande, plus le mode choisi à chaud.
+    let facts = astroportd::locks::Facts { origin: a.swarm_key.is_none(), kubo: a.kubo.is_some(), pool_peers: a.pool_peers.len(), p2p: p2p_handle.is_some(), crawl: !a.no_crawl, register: !a.no_register };
+    let locks = Arc::new(astroportd::locks::Locks::new(db.clone(), kinds_control.clone(), circle.clone(), facts, activity.clone()));
+    let admin_fn = Arc::new(astroportd::station_admin::Admin { face: face_control, kinds: kinds_control, tunnels: Some((tunnel_policy.clone(), exposed_names.clone())), targets: service_targets(&a), dnslink: Some(dnslink.clone()), assist: Some(assist_admin), tasks: Some(db.clone()), mesh: Some(mesh_admin), captains: Some(captains_admin), locks: Some(locks) }).handler();
     // Prise de contrôle locale (`astroportd tunnel …`) : la politique des tunnels et le routage vers les services des autres stations.
     let swarm_route = Arc::new(astroportd::swarm_route::SwarmRoute::new(stations.clone(), p2p_handle.clone(), forwards.clone(), a.lat.zip(a.lon)));
     let mut control_sections: std::collections::BTreeMap<&'static str, astroportd::ui_backend::AdminFn> = std::collections::BTreeMap::new();
     control_sections.insert("tunnels", admin_fn.clone());
+    // Maillage (`astroportd swarm …`, `astroportd bootstrap …`) : joindre, garder ou oublier une station, jamais plus.
+    control_sections.insert("mesh", admin_fn.clone());
     control_sections.insert("tunnel", Arc::new(move |_section, body| {
         let route = swarm_route.clone();
         Box::pin(async move { route.act(&body.unwrap_or(serde_json::Value::Null)).await })
     }));
+    // Contrôle des blobs à la demande (`astroportd repo verify`) : un lot, comme le passage de 20h12 (même curseur).
+    {
+        let integrity = Arc::new(astroportd::integrity::Integrity::new(db.clone(), local.clone(), Some(activity.clone())));
+        control_sections.insert("repo", Arc::new(move |_section, body| {
+            let integrity = integrity.clone();
+            Box::pin(async move {
+                if body.as_ref().is_none_or(|b| b["verify"] != true) {
+                    return Err("action attendue : verify".to_owned());
+                }
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                let result = integrity.run(now).await;
+                Ok(serde_json::json!({ "ok": result.is_ok(), "summary": result.unwrap_or_else(|e| e), "report": integrity.last_report().await }))
+            })
+        }));
+    }
     let control_path = astroportd::control::socket_path(&a.db);
     match astroportd::control::serve(control_path.clone(), control_sections) {
         Ok(task) => {

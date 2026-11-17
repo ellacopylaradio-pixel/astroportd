@@ -20,6 +20,7 @@
 //! **Validité** : un billet peut porter une date de fin, écrite dans un événement signé par la clé de la coopérative
 //! (kind 31903, `d = billet:<adresse>`, tag `u` = date de fin en secondes Unix : seules les étiquettes d'une lettre sont indexées). Passée cette date, le porteur ne l'encaisse plus.
 
+use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::net::IpAddr;
@@ -182,6 +183,8 @@ pub struct Billets<C: Chain, P: PrimalSource> {
     wallets: Arc<Wallets>,
     primal: Option<Arc<P>>,
     uplanet_name: String,
+    /// Nom du plan servi (`origin`, `copylaradio`…) : celui qu'on imprime sur les billets d'une UPlanet autre qu'ORIGIN.
+    plane_name: Option<String>,
     activity: ActivityBus,
     recent: Mutex<HashMap<(IpAddr, bool), Vec<u64>>>,
     inflight: Mutex<HashSet<[u8; 32]>>,
@@ -206,7 +209,25 @@ pub struct Issuing {
 impl<C: Chain, P: PrimalSource> Billets<C, P> {
     /// Service pour la constellation `uplanet_name` ; `primal` : indexeur qui lit le premier émetteur d'un portefeuille.
     pub fn new(db: Arc<Db>, chain: Arc<C>, wallets: Arc<Wallets>, primal: Option<Arc<P>>, uplanet_name: String, activity: ActivityBus) -> Self {
-        Self { db, chain, wallets, primal, uplanet_name, activity, recent: Mutex::new(HashMap::new()), inflight: Mutex::new(HashSet::new()), issuing: None, images: None, retry_delay: Duration::from_secs(15) }
+        Self { db, chain, wallets, primal, uplanet_name, plane_name: None, activity, recent: Mutex::new(HashMap::new()), inflight: Mutex::new(HashSet::new()), issuing: None, images: None, retry_delay: Duration::from_secs(15) }
+    }
+
+    /// Nom du plan servi, imprimé sur les billets d'une UPlanet autre qu'ORIGIN.
+    #[must_use]
+    pub fn with_plane_name(mut self, name: String) -> Self {
+        self.plane_name = Some(name);
+        self
+    }
+
+    /// Ce qu'on marque sur le billet : « ORIGIN » pour l'UPlanet ORIGIN (clé de 64 zéros), sinon le nom de l'UPlanet.
+    fn plane_label(&self) -> String {
+        if self.uplanet_name.bytes().all(|b| b == b'0') {
+            return "ORIGIN".to_owned();
+        }
+        match self.plane_name.as_deref() {
+            Some(n) if !n.is_empty() && !n.eq_ignore_ascii_case("origin") => n.to_owned(),
+            _ => "ẐEN".to_owned(),
+        }
     }
 
     /// Active la création de billets.
@@ -587,12 +608,26 @@ impl<C: Chain, P: PrimalSource> Billets<C, P> {
             out.push(json!({ "g1pub": account.ss58(), "p1": p1, "p2": p2, "qr_p1": qr(&p1), "qr_p2": qr(&p2), "verify_url": link, "qr_verify": link.as_deref().and_then(qr), "amount_zen": amount_zen, "expires_at": expires, "return_to_issuer": ret }));
             self.audit(json!({ "billet": account.ss58(), "step": "issued", "issuer": issuer_hex, "amount_zen": amount_zen, "expires_at": expires, "return": ret })).await;
         }
-        Ok(json!({ "billets": out, "issuer_wallet": issuer_wallet.ss58(), "style": self.issuer_style(issuer_hex).await }))
+        Ok(json!({ "billets": out, "issuer_wallet": issuer_wallet.ss58(), "plane": self.plane_label(), "style": self.issuer_style(issuer_hex, body.get("style").and_then(Value::as_str).unwrap_or("profile")).await }))
     }
 
-    /// Fond et icône des billets : le **bandeau** (`banner`) et l'**image** (`picture`) du profil (kind 0) de l'émetteur, réduits en `data:` URI
-    /// pour qu'ils passent la CSP et partent à l'impression. Un fond manquant ou illisible n'empêche jamais de créer des billets.
-    async fn issuer_style(&self, hex: &str) -> Value {
+    /// Fond et icône des billets. `style` : `profile` (défaut) = le **bandeau** (`banner`) et l'**image** (`picture`) du profil (kind 0)
+    /// de l'émetteur ; `eugro` ou `astroport` = l'habillage prêt à l'emploi de `billet.html`. Ce que le profil ne fournit pas (ou si
+    /// l'image est illisible) est complété par Eugro : un billet a toujours un fond et un logo. Tout part en `data:` URI pour passer la CSP
+    /// et l'impression ; un fond illisible n'empêche jamais de créer des billets.
+    async fn issuer_style(&self, hex: &str, style: &str) -> Value {
+        let named = |k: &str| -> Option<(String, String)> {
+            let (fond, logo): (&[u8], &[u8]) = match k {
+                "eugro" => (include_bytes!("billet_styles/eugro_fond.jpg"), include_bytes!("billet_styles/eugro_logo.png")),
+                "astroport" => (include_bytes!("billet_styles/astroport_fond.jpg"), include_bytes!("billet_styles/astroport_logo.png")),
+                _ => return None,
+            };
+            let enc = |mime: &str, b: &[u8]| format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(b));
+            Some((enc("image/jpeg", fond), enc("image/png", logo)))
+        };
+        if let Some((background, icon)) = named(style) {
+            return json!({ "background": background, "icon": icon, "style": style, "logo_wide": true });
+        }
         let h = hex.to_owned();
         let profile: Value = self.db.readers().read(move |c| Ok(c.query_row("SELECT content FROM nostr_events WHERE kind = 0 AND pubkey = ?1 ORDER BY created_at DESC LIMIT 1", [&h], |r| r.get::<_, String>(0)).optional()?)).await.ok().flatten().and_then(|c| serde_json::from_str(&c).ok()).unwrap_or(Value::Null);
         let load = |field: &'static str, kind: crate::profile_image::Kind| {
@@ -600,7 +635,10 @@ impl<C: Chain, P: PrimalSource> Billets<C, P> {
             let images = self.images.clone();
             async move { if url.is_empty() { None } else { crate::profile_image::data_uri(images.as_deref(), &url, kind).await } }
         };
-        json!({ "background": load("banner", crate::profile_image::Kind::Banner).await, "icon": load("picture", crate::profile_image::Kind::Picture).await })
+        let (background, icon) = (load("banner", crate::profile_image::Kind::Banner).await, load("picture", crate::profile_image::Kind::Picture).await);
+        let (def_fond, def_logo) = named("eugro").unwrap_or_default();
+        let logo_wide = icon.is_none();
+        json!({ "background": background.unwrap_or(def_fond), "icon": icon.unwrap_or(def_logo), "style": "profile", "logo_wide": logo_wide })
     }
 
     /// Finance un billet créé par `issuer_hex` : 1 Ğ1 d'activation du maître si le billet est vide, puis le montant, du portefeuille
@@ -1199,7 +1237,8 @@ mod tests {
         let (p1, p2) = (sheet_part(b, "p1"), sheet_part(b, "p2"));
         assert!(b["qr_p1"].as_str().unwrap().contains("<svg") && b["qr_verify"].as_str().unwrap().contains("<svg"));
         assert!(b["verify_url"].as_str().unwrap().starts_with("https://station.exemple/scan?g1pub=g1"));
-        assert_eq!(out["style"], json!({ "background": null, "icon": null }), "pas de profil : pas de fond");
+        assert!(out["style"]["background"].as_str().unwrap().starts_with("data:image/jpeg;base64,") && out["style"]["icon"].as_str().unwrap().starts_with("data:image/png;base64,"), "pas de profil : le style Eugro sert de fond et de logo");
+        assert_eq!(out["plane"], "ẐEN", "constellation privée sans nom de plan");
         assert_eq!(b["return_to_issuer"], false);
         // Sans retour automatique, le témoin ne contient rien de secret.
         let ev = sent.lock().unwrap()[0].clone();
@@ -1270,6 +1309,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_sheet_names_its_uplanet_and_offers_ready_made_styles() {
+        let (_, svc, _, _) = issuing_rig("plane").await;
+        assert_eq!(svc.plane_label(), "ẐEN", "constellation privée sans nom de plan");
+        let mut origin = svc.with_plane_name("origin".into());
+        origin.uplanet_name = "0".repeat(64);
+        assert_eq!(origin.plane_label(), "ORIGIN", "UPlanet ORIGIN (64 zéros) : « ORIGIN »");
+        let svc = origin;
+        let svc = Billets { uplanet_name: "UPlanetTestName".into(), ..svc };
+        let svc = svc.with_plane_name("copylaradio".into());
+        assert_eq!(svc.plane_label(), "copylaradio", "une autre UPlanet : son nom");
+        for name in ["eugro", "astroport"] {
+            let st = svc.issuer_style(ISSUER_HEX, name).await;
+            assert!(st["background"].as_str().unwrap().starts_with("data:image/jpeg;base64,") && st["icon"].as_str().unwrap().starts_with("data:image/png;base64,"), "{name}");
+        }
+    }
+
+    #[tokio::test]
     async fn the_issuers_profile_images_become_the_background_and_icon() {
         let (r, svc, _, _) = issuing_rig("style").await;
         svc.set_issuer(ISSUER_HEX, true).await.unwrap();
@@ -1289,7 +1345,7 @@ mod tests {
         let profile = json!({ "name": "Émetteur", "banner": url_for("https://station.exemple", &banner), "picture": url_for("https://station.exemple", &icon) });
         let ev = UnsignedEvent { created_at: 10, kind: 0, tags: vec![], content: profile.to_string() }.sign(&secret).unwrap();
         r.db.writer().transaction(move |tx| astro_db::events::insert_event(tx, &ev).map(|_| ())).await.unwrap();
-        let style = svc.issuer_style(&hex).await;
+        let style = svc.issuer_style(&hex, "profile").await;
         assert!(style["background"].as_str().unwrap().starts_with("data:image/jpeg;base64,") && style["icon"].as_str().unwrap().starts_with("data:image/jpeg;base64,"), "{style}");
         let _ = std::fs::remove_dir_all(r.dir);
     }

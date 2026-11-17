@@ -2,10 +2,10 @@
 //!
 //! ```text
 //! visage nommé « Léa »  ────►  fiche vCard « Léa Martin »  ────►  clé Nostr du MULTIPASS de Léa
-//!  (FaceCloud, faces)           (/Contacts, CardDAV)               (X-NOSTR-PUBKEY, ou email hébergé ici)
+//!  (FaceCloud, faces)           (/_/Contacts, CardDAV)             (X-NOSTR-PUBKEY, ou email hébergé ici)
 //! ```
 //!
-//! Les fiches sont des fichiers chiffrés du uCloud (`/Contacts/*.vcf`) : ce module n'en garde qu'un **index**
+//! Les fiches sont des fichiers chiffrés du uCloud (`/_/Contacts/*.vcf`) : ce module n'en garde qu'un **index**
 //! (`identity_links`, reconstructible) et fait le lien avec FaceCloud :
 //!
 //! - un visage est relié à **une fiche** par son UID vCard (`faces.contact_uid`), jamais par le nom : deux homonymes restent
@@ -201,7 +201,7 @@ impl<B: BlobStore> IdentityLinks<B> {
         self.db.readers().read(move |c| Ok(c.query_row("SELECT uid FROM identity_links WHERE owner_hex = ?1 AND path = ?2", [o, p], |r| r.get::<_, Option<String>>(0)).optional()?.flatten())).await.map_err(internal)
     }
 
-    /// Relit les fiches modifiées de `/Contacts`, retire celles qui ont disparu, puis rapproche les visages.
+    /// Relit les fiches modifiées du carnet (`/_/Contacts`), retire celles qui ont disparu, puis rapproche les visages.
     pub async fn sync_owner(&self, owner: &str) -> Result<SyncReport, LinkError> {
         let entries = carddav::list_cards(&self.dav, owner).await;
         let o = owner.to_owned();
@@ -453,8 +453,8 @@ impl<B: BlobStore> IdentityLinks<B> {
 
     /// Relie (ou délie, `target = None`) une fiche à un MULTIPASS : l'email d'un compte hébergé ici, une clé `npub…`/hex.
     pub async fn link(self: &Arc<Self>, owner: &str, path: &str, target: Option<&str>) -> Result<Value, LinkError> {
-        if !path.starts_with("/Contacts/") {
-            return Err(LinkError::Invalid("fiche attendue dans /Contacts".into()));
+        if carddav::card_file(path).is_none() {
+            return Err(LinkError::Invalid("fiche attendue dans le carnet d'adresses".into()));
         }
         let bytes = carddav::read_file(&self.dav, owner, path).await.ok_or_else(|| LinkError::NotFound("fiche introuvable".into()))?;
         let text = String::from_utf8(bytes).map_err(|_| LinkError::Invalid("fiche illisible".into()))?;
@@ -489,8 +489,8 @@ impl<B: BlobStore> IdentityLinks<B> {
             .db
             .readers()
             .read(|c| {
-                let mut stmt = c.prepare("SELECT DISTINCT owner_hex FROM ucloud_entries WHERE parent = '/Contacts' UNION SELECT DISTINCT owner_hex FROM identity_links")?;
-                Ok(stmt.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)
+                let mut stmt = c.prepare("SELECT DISTINCT owner_hex FROM ucloud_entries WHERE parent = ?1 UNION SELECT DISTINCT owner_hex FROM identity_links")?;
+                Ok(stmt.query_map([carddav::CONTACTS_DIR], |r| r.get(0))?.collect::<Result<_, _>>()?)
             })
             .await
             .unwrap_or_default();
@@ -524,14 +524,14 @@ impl<B: BlobStore> ContactSync for IdentityLinks<B> {
 /// Annuaire branché après coup (il a besoin de l'état WebDAV, qui a besoin du crochet de dépôt).
 pub type HookCell = Arc<std::sync::OnceLock<Arc<dyn ContactSync>>>;
 
-/// Crochet de dépôt : une fiche déposée sous `/Contacts/` (WebDAV, CardDAV, interface) relance la relecture du carnet ;
+/// Crochet de dépôt : une fiche déposée sous `/_/Contacts/` (WebDAV, CardDAV, interface) relance la relecture du carnet ;
 /// le reste est confié à `next` (FaceCloud met les photos en file d'analyse).
 pub fn upload_hook(cell: HookCell, next: Option<astro_dav::server::UploadHook>) -> astro_dav::server::UploadHook {
     Arc::new(move |owner: &str, path: &str, mime: &str| {
         if let Some(next) = &next {
             next(owner, path, mime);
         }
-        if path.starts_with("/Contacts/") && path.to_ascii_lowercase().ends_with(".vcf") {
+        if carddav::card_file(path).is_some_and(|n| n.to_ascii_lowercase().ends_with(".vcf")) {
             if let Some(links) = cell.get().cloned() {
                 let owner = owner.to_owned();
                 tokio::spawn(async move { links.sync(owner).await });

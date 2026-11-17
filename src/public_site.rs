@@ -149,10 +149,7 @@ impl<B: BlobStore> Site<B> {
             .await
             .ok()?;
         let (_, home) = rows.into_iter().find(|(email, _)| name_of(email) == who)?;
-        let node = home.split(':').nth(1)?.to_owned();
-        let summary: String = self.dav.db.readers().read(move |c| Ok(rusqlite::OptionalExtension::optional(c.query_row("SELECT value FROM kv WHERE scope = 'economic_health' AND key = ?1", [&node], |r| r.get::<_, String>(0)))?)).await.ok().flatten()?;
-        let url = serde_json::from_str::<Value>(&summary).ok()?["tags"]["url"].as_str()?.trim_end_matches('/').to_owned();
-        ((url.starts_with("https://") || url.starts_with("http://")) && !url[url.find("//")? + 2..].contains(['/', ' ', '?', '#'])).then_some(url)
+        self.dav.db.readers().read(move |c| Ok(crate::locate::home_url(c, &home)?)).await.ok().flatten()
     }
 
     /// Compte une visite (page vue) de `hex` : un compteur par jour et par page, sans adresse ni identifiant de visiteur. Se fait en tâche de
@@ -277,7 +274,7 @@ impl<B: BlobStore> Site<B> {
                 (true, true) => Some("déjà public"),
                 (false, false) => Some("pas dans Public"),
                 _ if from == "/" || from == DIR || to.is_empty() => Some("dossier Public lui-même : rien à déplacer"),
-                _ if vfs::is_vault(&from) => Some("le coffre n'est jamais publié"),
+                _ if vfs::is_system(&from) => Some("le tiroir système (coffre, contacts, agenda) n'est jamais publié"),
                 _ => None,
             };
             if let Some(why) = why {

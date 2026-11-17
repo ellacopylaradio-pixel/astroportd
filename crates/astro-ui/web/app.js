@@ -50,22 +50,36 @@ return null;
 let loginP = null;
 function login() {
 loginP ??= new Promise(done => {
-const d = $('#login'), f = $('#login-f'), er = $('#login-e'), nip = $('#login-n');
-const ok = () => { d.close(); f.reset(); loginP = null; $('#out').hidden = false; done(); };
+const d = $('#login'), f = $('#login-f'), er = $('#login-e'), nip = $('#login-n'), two = $('#login-2'), away = $('#login-x'), go = $('#login-ok');
+const ok = () => { d.close(); f.reset(); step(1); loginP = null; $('#out').hidden = false; done(); };
 const probe = async a => (await fetch('/api/v1/me', { headers: a ? { Authorization: a } : {} })).ok;
+// Deux temps : l'identifiant d'abord. Le PASS n'est demandé que si le compte vit ici ; ailleurs, on y mène le membre
+// (son PASS ne part jamais vers une station qui n'est pas la sienne).
+const step = (n, box) => { two.hidden = n !== 2; f.p.required = n === 2; away.hidden = !box; away.replaceChildren(...(box || [])); go.textContent = t(n === 2 ? 'Se connecter' : 'Continuer'); };
+$('#login-h').textContent = location.host;
 er.textContent = '';
 nip.hidden = !ext();
 d.oncancel = ev => ev.preventDefault();
+f.u.oninput = () => { if (!two.hidden || !away.hidden) step(1); };
+const pre = new URLSearchParams(location.search).get('u');
+if (pre && !f.u.value) f.u.value = pre.slice(0, 200);
 f.onsubmit = async ev => {
 ev.preventDefault();
+er.textContent = '';
 let u = f.u.value.trim(), p = f.p.value;
+if (two.hidden) {
+const r = await fetch('/api/v1/locate?q=' + encodeURIComponent(u)).then(x => x.ok ? x.json() : null).catch(() => null);
+if (r?.where === 'elsewhere') return step(1, [h('p', {}, t('Votre espace est sur {0}. Votre code PASS ne se tape que là-bas.', r.station)), h('a', { class: 'btn', href: `${r.url}/?u=${encodeURIComponent(u)}` }, t('Aller sur ma station'))]);
+if (r?.where === 'unknown') return step(1, [h('p', {}, t('Aucun MULTIPASS trouvé pour cet identifiant, ni ici ni sur les stations que nous connaissons.')), h('p', {}, h('a', { href: '/stations#membre' }, t('Retrouver ma station')), ' · ', h('a', { href: '/register' }, t('Créer mon MULTIPASS')))]);
+step(2); return f.p.focus(); // ici, ou recherche indisponible : on n'empêche jamais de se connecter
+}
 if (/^\d{4,6}$/.test(p)) { // code PASS : la station le vérifie (essais limités) et rend le jeton
 const r = await fetch('/api/v1/account/unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: u, pass: p }) }), j = await r.json().catch(() => ({}));
 if (!r.ok) return er.textContent = j.error || 'Connexion refusée.';
 u = j.email; p = j.token;
 }
 const basic = b64(u + ':' + p);
-if (await probe('Basic ' + basic)) { store.set('basic', basic); store.set('nip07', null); ok(); } else er.textContent = 'Identifiant ou jeton refusé.';
+if (await probe('Basic ' + basic)) { store.set('basic', basic); store.set('nip07', null); ok(); } else er.textContent = t('Identifiant ou jeton refusé.');
 };
 nip.onclick = async () => {
 store.set('basic', null); store.set('nip07', '1');

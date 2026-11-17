@@ -118,6 +118,29 @@ pub struct PendingBatch {
     pub sample_path: String,
 }
 
+/// Réglage « partage automatique avec mes amis » de chaque membre (`kv`, clé = son hex ; `0` = coupé, absent = actif).
+pub const AUTO_SHARE_SCOPE: &str = "facecloud_auto_share";
+
+/// Le membre laisse-t-il partir seules les photos de ses amis ? Oui par défaut ; sinon tout attend son accord. Une station
+/// en **Forteresse** fait tout attendre, quel que soit le réglage du membre.
+pub async fn auto_share(db: &Db, owner: &str) -> Result<bool, FaceError> {
+    let o = owner.to_owned();
+    let sql = format!("SELECT NOT {} AND COALESCE((SELECT value FROM kv WHERE scope = ?1 AND key = ?2), '1') <> '0'", astro_db::station_mode::FORTRESS_SQL);
+    Ok(db.readers().read(move |c| Ok(c.query_row(&sql, rusqlite::params![AUTO_SHARE_SCOPE, o], |r| r.get::<_, bool>(0))?)).await?)
+}
+
+/// Règle l'envoi automatique du membre (`false` : chaque photo attend un clic).
+pub async fn set_auto_share(db: &Db, owner: &str, on: bool) -> Result<(), FaceError> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    db.writer()
+        .execute(
+            "INSERT INTO kv(scope, key, value, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            vec![AUTO_SHARE_SCOPE.to_owned().into(), owner.to_owned().into(), (if on { "1" } else { "0" }).to_owned().into(), now.into()],
+        )
+        .await?;
+    Ok(())
+}
+
 /// Lots en attente de `owner`, du plus fourni au plus petit.
 pub async fn pending_batches(db: &Db, owner: &str) -> Result<Vec<PendingBatch>, FaceError> {
     let o = owner.to_owned();

@@ -70,6 +70,17 @@ impl<B: BlobStore> OnboardApi for OnboardBackend<B> {
         }
         Ok(out)
     }
+    async fn locate(&self, ip: Option<std::net::IpAddr>, q: String) -> Result<Value, ApiError> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        if !crate::locate::limiter().lock().unwrap_or_else(|e| e.into_inner()).allow(ip, now) {
+            return Err(ApiError::too_many("trop de recherches depuis cette adresse : réessayez dans une minute"));
+        }
+        Ok(match crate::locate::locate(&self.services.db, &q).await.map_err(db_err)? {
+            crate::locate::Found::Here => json!({ "where": "here" }),
+            crate::locate::Found::Elsewhere(url) => json!({ "where": "elsewhere", "url": url, "station": url.split("//").nth(1).unwrap_or(&url) }),
+            crate::locate::Found::Unknown => json!({ "where": "unknown" }),
+        })
+    }
     async fn station_card(&self) -> Result<Value, ApiError> {
         let svc = &self.services;
         let keys = self.stations.as_ref().ok_or_else(|| ApiError::unavailable("carte de station non disponible"))?.public_keys().await.map_err(ApiError::internal)?;
@@ -119,10 +130,12 @@ impl<B: BlobStore> OnboardApi for OnboardBackend<B> {
     }
     async fn register(&self, ip: Option<std::net::IpAddr>, email: String, lang: String) -> Result<Value, ApiError> {
         let r = self.registrar.as_ref().ok_or_else(|| ApiError::unavailable("inscription non disponible sur cette station"))?;
+        r.open_to_strangers().await.map_err(register_error)?;
         r.register(ip, &email, &lang).await.map(|reg| registered_json(&reg)).map_err(register_error)
     }
     async fn register_guest(&self, ip: Option<std::net::IpAddr>, alias: Option<String>, lang: String) -> Result<Value, ApiError> {
         let r = self.registrar.as_ref().ok_or_else(|| ApiError::unavailable("inscription non disponible sur cette station"))?;
+        r.open_to_strangers().await.map_err(register_error)?;
         r.register_guest(ip, alias.as_deref(), &lang).await.map(|reg| registered_json(&reg)).map_err(register_error)
     }
     async fn invite_create(&self, who: &Principal, body: Value) -> Result<Value, ApiError> {
@@ -227,6 +240,7 @@ impl<B: BlobStore> OnboardApi for OnboardBackend<B> {
         };
         let card = astro_lifecycle::share::Recovery::parse(&text).map_err(|e| ApiError::bad_request(e.to_string()))?;
         let lang = if lang.is_empty() { "fr".to_owned() } else { lang };
+        r.open_to_strangers().await.map_err(register_error)?;
         let reg = r.recover(ip, &card, &lang).await.map_err(register_error)?;
         if let (Some(_), Some(b)) = (&rescued, &self.backup) {
             (b.rescue_share)(card.card.hex.clone(), true).await;

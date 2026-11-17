@@ -277,12 +277,14 @@ function side() {
   root.querySelector('.pe-todo').replaceChildren(...todo.map(c => K.h('button', { class: 'ghost', 'aria-pressed': String(c.members.every(m => S.sel.has(m.id))), onclick: () => { select(c.members.map(m => m.id)); focus(c); } }, c.n > 1 ? `Groupe de ${c.n} visages` : `Visage ${c.members[0].id}`)),
     S.clusters.filter(c => !c.person).length > 30 && K.h('p', { class: 'muted' }, `… et ${S.clusters.filter(c => !c.person).length - 30} autre(s) sur la table.`));
 }
-/* Envois de photos en attente : un clic par ami (visage flou, de profil ou ressemblance incertaine). */
+// Envois en attente : un clic par ami.
 async function shares() {
   const box = root.querySelector('.pe-shares'), r = await K.api('/api/v1/faces/pending-shares');
   const reply = (b, accept) => act(x => accept ? `${x.sent} photo(s) partagée(s) avec ${b.name}` : `Rien n'est envoyé à ${b.name}`, () => K.api('/api/v1/faces/pending-shares/confirm', { method: 'POST', body: { recipient_hex: b.recipient_hex, accept } }));
-  box.replaceChildren(...r.pending.map(b => K.h('div', { class: 'pe-share' },
-    K.h('p', {}, K.h('strong', {}, 'Partage de photos : '), `${b.count} photo(s) où ${b.name} apparaît semblent prêtes à lui être envoyées.`),
+  const auto = K.h('input', { type: 'checkbox', id: 'pe-auto', checked: r.auto_share, onchange: () => K.api('/api/v1/faces/auto-share', { method: 'POST', body: { on: auto.checked } }).then(() => K.toast('Enregistré', 1), e => { auto.checked = !auto.checked; K.toast(e.message); }) });
+  box.replaceChildren(K.h('p', { class: 'muted' }, auto, ' ', K.h('label', { for: 'pe-auto' }, 'Envoi auto à un ami seul avec vous sur la photo (sinon, votre accord)')),
+    ...r.pending.map(b => K.h('div', { class: 'pe-share' },
+    K.h('p', {}, K.h('strong', {}, 'Partage de photos : '), `${b.count} photo(s) où ${b.name} apparaît attendent votre accord.`),
     K.h('button', { onclick: () => reply(b, true) }, `Partager avec ${b.name} en 1 clic`), ' ',
     K.h('button', { class: 'ghost', onclick: () => reply(b, false) }, 'Ignorer'))));
 }
