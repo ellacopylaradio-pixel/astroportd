@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="ill cx" viewBox="0 0 520 560" role="img" aria-labelledby="cx-t cx-d" width="520" height="560">
+<title id="cx-t">Se connecter depuis n'importe quelle station</title>
+<desc id="cx-d">La connexion se fait en deux temps. On tape d&#x27;abord son email (ou sa clé) sur n&#x27;importe quelle station, puis on clique sur Continuer. La station cherche où vit ce compte. Ici : le champ PASS s&#x27;affiche. Sur une autre station : un bouton y mène, l&#x27;email déjà rempli, et c&#x27;est là-bas seulement que l&#x27;on tape son PASS. Compte inconnu : une réponse neutre, avec Retrouver ma station et Créer mon MULTIPASS. Une station ne demande jamais le PASS d&#x27;un compte qu&#x27;elle n&#x27;héberge pas.</desc>
+<style>.cx{--ink:#1b1f2a;--mut:#454c61;--pan:#eef1f9;--pan2:#e2e8f8;--line:#6b7390;--acc:#2a46c8;--ok:#14663a;--warn:#8f3b06;--bad:#b3261e;--bg:#ffffff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){.cx{--ink:#eef0f8;--mut:#bcc3da;--pan:#1c2133;--pan2:#262d47;--line:#8790ad;--acc:#9bb0ff;--ok:#7fdca6;--warn:#ffb98a;--bad:#ff8a80;--bg:#12151f}}
+.cx .bg{fill:var(--bg)}.cx .pan{fill:var(--pan);stroke:var(--line);stroke-width:1.5}.cx .pan2{fill:var(--pan2);stroke:var(--acc);stroke-width:2}
+.cx .t{fill:var(--ink);font-size:17px;font-weight:700}.cx .s{fill:var(--mut);font-size:13.5px}.cx .m{text-anchor:middle}
+.cx .ln{stroke:var(--line);stroke-width:2;fill:none}.cx .hd{fill:var(--line)}
+.cx .in{fill:var(--bg);stroke:var(--line);stroke-width:1.2}.cx .bt{fill:var(--acc)}.cx .btt{fill:var(--bg);font-size:13.5px;font-weight:700}
+.cx .em{fill:var(--ink);font-size:14px;font-family:ui-monospace,Menlo,monospace}.cx .g{fill:var(--ok);font-size:15px;font-weight:700}.cx .w{fill:var(--warn);font-size:15px;font-weight:700}
+.cx .a{fill:var(--acc);font-size:15px;font-weight:700}.cx .no{fill:var(--bad);font-size:13px;font-weight:700}
+.cx .lay,.cx .dim,.cx .tok{animation-duration:12s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+.cx .L0{opacity:1;animation-name:cx-l0}@keyframes cx-l0{0%,30%{opacity:1}33.0%,96.6%{opacity:0}100%{opacity:1}}
+.cx .D0{opacity:1;animation-name:cx-d0}@keyframes cx-d0{0%,30%{opacity:1}33.0%,96.6%{opacity:.38}100%{opacity:1}}
+.cx .L1{opacity:0;animation-name:cx-l1}@keyframes cx-l1{0%,30.0%{opacity:0}33.3%,63.3%{opacity:1}66.3%,100%{opacity:0}}
+.cx .D1{opacity:0.38;animation-name:cx-d1}@keyframes cx-d1{0%,30.0%{opacity:.38}33.3%,63.3%{opacity:1}66.3%,100%{opacity:.38}}
+.cx .L2{opacity:0;animation-name:cx-l2}@keyframes cx-l2{0%,63.3%{opacity:0}66.6%,96.6%{opacity:1}99.6%,100%{opacity:0}}
+.cx .D2{opacity:0.38;animation-name:cx-d2}@keyframes cx-d2{0%,63.3%{opacity:.38}66.6%,96.6%{opacity:1}99.6%,100%{opacity:.38}}
+@keyframes cx-tok{0.0%{transform:translate(0px,0px);opacity:0}2.0%{transform:translate(0px,0px);opacity:1}9.0%{transform:translate(-111px,91px);opacity:1}16.5%{transform:translate(-111px,149px);opacity:1}25.5%{transform:translate(-111px,369px);opacity:1}30.0%{transform:translate(-111px,369px);opacity:0}33.3%{transform:translate(0px,0px);opacity:0}35.3%{transform:translate(0px,0px);opacity:1}42.3%{transform:translate(-111px,91px);opacity:1}49.8%{transform:translate(-279px,149px);opacity:1}58.8%{transform:translate(-279px,223px);opacity:1}63.3%{transform:translate(-279px,223px);opacity:0}66.6%{transform:translate(0px,0px);opacity:0}68.6%{transform:translate(0px,0px);opacity:1}75.6%{transform:translate(-111px,91px);opacity:1}83.1%{transform:translate(57px,149px);opacity:1}92.1%{transform:translate(57px,223px);opacity:1}96.6%{transform:translate(57px,223px);opacity:0}100%{transform:translate(0,0);opacity:0}}
+.cx .tok{opacity:0;animation-name:cx-tok}
+@media (prefers-reduced-motion:reduce){.cx .lay,.cx .dim,.cx .tok{animation:none}}</style>
+<rect class="bg" width="520" height="560" rx="14"/>
+<text x="260.0" y="32" class="t m">Se connecter depuis n'importe quelle station</text>
+<rect class="pan" x="90" y="50" width="340" height="104" rx="12"/>
+<text x="106" y="74" class="s">① sur toulouse.coop, on tape son email</text>
+<rect class="in" x="106" y="88" width="210" height="34" rx="7"/>
+<text x="116" y="110" class="em lay L0">bob@exemple.org</text>
+<text x="116" y="110" class="em lay L1">alice@exemple.org</text>
+<text x="116" y="110" class="em lay L2">zoe@exemple.org</text>
+<rect class="bt" x="326" y="88" width="90" height="34" rx="7"/>
+<text x="371" y="110" class="btt m">Continuer</text>
+<text x="260" y="144" class="no m">🔒 pas encore de PASS</text>
+<path class="ln" d="M260 154 V178"/><path class="hd" d="M260 182 l-6 -10 h12 z"/>
+<rect class="pan2" x="150" y="182" width="220" height="34" rx="17"/>
+<text x="260" y="204" class="a m">② Où vit ce compte ?</text>
+<path class="ln" d="M260 216 Q92 226 92 256"/><path class="hd" d="M92 260 l-6 -10 h12 z"/>
+<g class="dim D1">
+<rect class="pan" x="14" y="262" width="156" height="118" rx="12"/>
+<text x="92" y="288" class="g m">✅ Ici</text>
+<text x="92" y="312" class="s m">le champ PASS</text>
+<text x="92" y="330" class="s m">s&#x27;affiche</text>
+<rect class="in" x="36" y="342" width="112" height="26" rx="6"/><text x="92" y="360" class="em m">PASS ●●●●</text>
+</g>
+<path class="ln" d="M260 216 Q260 226 260 256"/><path class="hd" d="M260 260 l-6 -10 h12 z"/>
+<g class="dim D0">
+<rect class="pan" x="182" y="262" width="156" height="118" rx="12"/>
+<text x="260" y="288" class="a m">➡️ Ailleurs</text>
+<text x="260" y="312" class="s m">« Aller sur</text>
+<text x="260" y="330" class="s m">ma station »</text>
+<text x="260" y="362" class="s m" style="font-style:italic">email déjà rempli</text>
+</g>
+<path class="ln" d="M260 216 Q428 226 428 256"/><path class="hd" d="M428 260 l-6 -10 h12 z"/>
+<g class="dim D2">
+<rect class="pan" x="350" y="262" width="156" height="118" rx="12"/>
+<text x="428" y="288" class="w m">❔ Inconnu</text>
+<text x="428" y="312" class="s m">réponse neutre :</text>
+<text x="428" y="330" class="s m">Retrouver ma station</text>
+<text x="428" y="362" class="s m" style="font-style:italic">ou Créer un compte</text>
+</g>
+<path class="ln" d="M260 380 V430"/><path class="hd" d="M260 434 l-6 -10 h12 z"/>
+<g class="dim D0">
+<rect class="pan2" x="110" y="436" width="300" height="74" rx="12"/>
+<text x="260" y="460" class="s m">③ sur lyon.coop, sa station</text>
+<rect class="in" x="204" y="472" width="112" height="26" rx="6"/><text x="260" y="490" class="em m">PASS ●●●●</text>
+</g>
+<text x="260" y="542" class="s m">Une station ne demande jamais le PASS d'un compte qu'elle n'héberge pas.</text>
+<g class="tok" transform="translate(0,0)"><circle cx="371" cy="105" r="7" style="fill:var(--acc)"/></g>
+</svg>

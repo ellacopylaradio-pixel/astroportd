@@ -191,10 +191,9 @@ astroportd serve ... --swarm-key ./swarm.key
 </code></pre></div>
 <p>Toutes les stations d'une même constellation doivent avoir <strong>exactement la même</strong> clé. Si votre station ne voit pas les autres, c'est la première chose à vérifier, avec <code>astroportd doctor</code> (le diagnostic de la station).</p>
 <h3>Fonder votre propre constellation</h3>
-<div class="code"><pre><code>astroportd swarm-key &gt; swarm.key    # fabrique une nouvelle clé de réseau privé
-chmod 600 swarm.key
+<div class="code"><pre><code>astroportd init --mode zen --found-constellation    # fabrique la clé de réseau privé et prépare la station
 </code></pre></div>
-<p>Copiez ensuite ce fichier sur <strong>chaque</strong> station de votre réseau, par un canal sûr (clé USB, copie chiffrée), puis lancez sur chacune <code>astroportd init --mode zen --swarm-key ./swarm.key</code>.</p>
+<p>Pour faire entrer une autre station, le plus simple est le <strong>parrainage</strong> : <code>astroportd parrainer</code> sur votre station donne un jeton à usage unique (24 h par défaut), et la nouvelle station lance <code>astroportd init --join '&lt;jeton&gt;'</code> : elle reçoit la <code>swarm.key</code> chiffrée et s'amorce sur la vôtre. Sinon, copiez <code>swarm.key</code> à la main sur <strong>chaque</strong> station, par un canal sûr (clé USB, copie chiffrée), puis lancez sur chacune <code>astroportd init --mode zen --swarm-key ./swarm.key</code>.</p>
 <h3>Créer les comptes de vos membres</h3>
 <figure><svg xmlns="http://www.w3.org/2000/svg" class="ill" viewBox="0 0 520 640" role="img" aria-labelledby="mpc-t mpc-d" width="520" height="640">
 <title id="mpc-t">Création d&#x27;un MULTIPASS : de l&#x27;email aux clés</title>
@@ -258,7 +257,7 @@ chmod 600 swarm.key
 astroportd multipass create ami@exemple.org                   # les suivants suivent automatiquement le Capitaine
 astroportd multipass list
 </code></pre></div>
-<p>Vos membres peuvent aussi s'inscrire eux-mêmes dans leur navigateur, sur la page <strong><code>/register</code></strong> de votre station. L'inscription est <strong>ouverte par défaut</strong> ; vous la réglez avec <code>--max-accounts</code> (nombre maximal de comptes) et <code>--register-per-hour</code> (inscriptions par heure et par adresse), ou vous la fermez avec <code>--no-register</code>.</p>
+<p>Vos membres peuvent aussi s'inscrire eux-mêmes dans leur navigateur, sur la page <strong><code>/register</code></strong> de votre station. L'inscription est <strong>ouverte par défaut</strong> ; vous la réglez avec <code>--max-accounts</code> (nombre maximal de comptes) et <code>--register-per-hour</code> (inscriptions par heure et par adresse), ou vous la fermez avec <code>--no-register</code>. Le mode <strong>Forteresse</strong> (<em>Ma station › Réseau › Écluses</em>) la ferme aussi, ainsi que les restaurations ; les invitations d'un membre restent possibles.</p>
 <div class="box warn"><p><span class="lbl">Attention</span> Les secrets d'un compte (SALT, PEPPER, nsec, code PASS, jeton web) ne sont affichés <strong>qu'une seule fois</strong>. Le membre doit les noter tout de suite. Détails à l'<a href="guide.html#etape-5">étape 6 du guide</a>.</p></div>
 <h3>Une station dans plusieurs constellations</h3>
 <p>Un <code>astroportd serve</code> sert <strong>une</strong> constellation (une <code>swarm.key</code>, ou aucune). Pour raccorder la même machine à ORIGIN <strong>et</strong> à une ou plusieurs UPlanet ẐEN, utilisez <code>astroportd planes</code> : un seul programme, la même identité de station, et pour chaque constellation (chaque « plan ») son réseau, sa base, ses comptes et son port. Voir, dans le guide, <a href="guide.html#etape-8bis-i">Plusieurs UPlanet dans un seul processus</a>.</p>
@@ -429,7 +428,7 @@ astroportd ylevel --verify   # code de sortie 1 si la clé SSH ne correspond pas
 </ul>
 <p><strong>Il en faut au moins une par constellation ; deux ou trois, c'est mieux.</strong> Un Capitaine l'inscrit une fois dans la <strong>configuration coopérative</strong> (clé <code>P2P_RELAYS</code>) : toutes les stations de la constellation la reçoivent, y réservent leur place, s'annoncent dans leur balise et se joignent entre elles. Chaque station range la description des autres dans <code>~/.zen/tmp/swarm/</code>, comme le fait Astroport.ONE. Une station neuve a seulement besoin d'un premier lien : une voisine sur le même réseau local, le relai de la coopérative, ou une adresse collée une fois. Les détails : <a href="guide.html#etape-9">Relier sa station aux autres Capitaines</a>, paragraphe « Stations derrière une box ».</p>
 <h3>Ce que vous décidez : qui ouvre quoi</h3>
-<p>Votre station offre au maillage trois services : <strong>SSH</strong> (l'accès à distance), <strong>Ollama</strong> (un moteur d'IA) et <strong>ComfyUI</strong> (un générateur d'images), plus ceux que vous ajoutez. Pour chacun, vous choisissez dans <em>Options › Tunnels</em> qui peut l'ouvrir :</p>
+<p>Votre station offre au maillage trois services : <strong>SSH</strong> (l'accès à distance), <strong>Ollama</strong> (un moteur d'IA) et <strong>ComfyUI</strong> (un générateur d'images), plus ceux que vous ajoutez. Pour chacun, vous choisissez dans <em>Ma station › Réseau › Réglages › Tunnels et accès</em> qui peut l'ouvrir :</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -508,7 +507,7 @@ astroportd ylevel --verify   # code de sortie 1 si la clé SSH ne correspond pas
 <p>FaceCloud reconnaît les visages sur vos photos et les partage avec les personnes concernées, dans le cercle de confiance :</p>
 <ul>
 <li><strong>N¹</strong>, ce sont vos amis réciproques : les personnes que vous suivez <em>et</em> qui vous suivent. <strong>N²</strong>, ce sont les amis de vos amis.</li>
-<li>Quand FaceCloud reconnaît un ami N¹ sur une photo, il la <strong>lui partage automatiquement</strong> : copie dans son dossier <code>/Partages/De_&lt;nom&gt;/</code> s'il est sur la même station, sinon message chiffré vers sa station.</li>
+<li>Quand FaceCloud reconnaît un ami N¹ <strong>seul avec vous</strong> sur une photo, il la <strong>lui partage automatiquement</strong> : copie dans son dossier <code>/Partages/De_&lt;nom&gt;/</code> s'il est sur la même station, sinon message chiffré vers sa station. Dès qu'une autre personne y paraît nettement, la photo attend votre accord ; chaque membre peut couper l'envoi automatique, et en mode Forteresse tout attend un accord.</li>
 <li>Pour quelqu'un hors du cercle, vous créez un <strong>lien secret</strong> <code>/s/&lt;slug&gt;#clé</code>. La clé est après le <code>#</code> : le navigateur ne l'envoie jamais au serveur, la station ne peut donc pas lire le fichier.</li>
 <li>Les <strong>vidéos</strong> ne sont livrées qu'à leur auteur et à ses amis N¹, jamais à tout le cercle N².</li>
 <li>Le relai Nostr de la station réserve les contenus privés aux membres authentifiés du cercle N¹/N².</li>
@@ -516,7 +515,7 @@ astroportd ylevel --verify   # code de sortie 1 si la clé SSH ne correspond pas
 <p>La reconnaissance des visages se fait soit par un service externe (<code>--face-engine</code>), soit sur la station elle-même (<code>--face-models</code>, voir <a href="guide.html#etape-8">FaceCloud dans le guide</a>). Aucun modèle n'est livré avec le programme.</p>
 <h3>Vos copies chez les autres : la réplication</h3>
 <p>Votre station va chercher régulièrement les profils et messages publics de ses membres, de leurs amis (N¹) et des amis de leurs amis (N²), auprès des autres stations de la constellation. Par défaut, un passage toutes les 15 minutes (<code>--crawl-every</code>, 900 secondes ; <code>--no-crawl</code> pour couper). Elle passe <strong>par le maillage P2P</strong>, sans port public, auprès des stations auxquelles elle est reliée. Si une station annonce aussi une adresse publique, celle-ci ne sert que de <strong>solution de repli</strong> quand le maillage échoue.</p>
-<p>L'écran <strong>Réplication</strong> de l'interface vous montre, pour vos derniers messages et vos derniers fichiers, <strong>où</strong> ils existent aussi (sur quelles stations) et <strong>chez qui</strong> (vos proches, les proches de vos proches, ou d'autres stations). Il indique aussi par quelle voie chaque station a été jointe. Une station qui ne répond pas est marquée « injoignable », jamais comptée comme « 0 copie ». La mesure des fichiers demande l'option <code>--kubo</code>.</p>
+<p>L'écran <strong>Moi › Sauvegarde</strong> de l'interface vous montre, pour vos derniers messages et vos derniers fichiers, <strong>où</strong> ils existent aussi (sur quelles stations) et <strong>chez qui</strong> (vos proches, les proches de vos proches, ou d'autres stations). Il indique aussi par quelle voie chaque station a été jointe. Une station qui ne répond pas est marquée « injoignable », jamais comptée comme « 0 copie ». La mesure des fichiers demande l'option <code>--kubo</code>.</p>
 <hr />
 <h2>L'économie d'une station</h2>
 <p>Chaque semaine, la station règle ses frais à partir des loyers d'hébergement reçus. La charge hebdomadaire vaut <strong>3×PAF</strong> (PAF : participation aux frais). L'ordre est fixe :</p>
@@ -528,7 +527,7 @@ astroportd ylevel --verify   # code de sortie 1 si la clé SSH ne correspond pas
 <p>S'il manque de l'argent (recettes inférieures à la PAF), le manque est couvert par la trésorerie ou par le bénévolat déclaré (Love Ledger), <strong>jamais</strong> par un prélèvement sur TREASURY, R&amp;D ou ASSETS.</p>
 <hr />
 <h2>Qui fait quoi : astroportd et Astroport.ONE</h2>
-<p>astroportd (version 1.3.0) remplace peu à peu les scripts bash d'<a href="https://github.com/papiche/Astroport.ONE">Astroport.ONE</a>. Les deux fonctionnent ensemble ; voici ce que chacun fait aujourd'hui.</p>
+<p>astroportd (version 1.4.0) remplace peu à peu les scripts bash d'<a href="https://github.com/papiche/Astroport.ONE">Astroport.ONE</a>. Les deux fonctionnent ensemble ; voici ce que chacun fait aujourd'hui.</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -554,14 +553,14 @@ astroportd ylevel --verify   # code de sortie 1 si la clé SSH ne correspond pas
 <td style="text-align:center">✔ <code>DRAGON_p2p_ssh.sh</code></td>
 </tr>
 <tr>
-<td>Suivi entre Capitaines (kind 30850)</td>
-<td style="text-align:center">✔ manuel (écran <em>Capitaines</em>)</td>
-<td style="text-align:center">✔ automatique</td>
+<td>Suivi entre Capitaines (liste de contacts, kind 3)</td>
+<td style="text-align:center">✔ manuel (<em>Réseau › Essaim</em>, carte <em>Capitaines</em>)</td>
+<td style="text-align:center">✔ automatique (d'après les balises kind 30850)</td>
 </tr>
 <tr>
 <td>Création d'un MULTIPASS</td>
-<td style="text-align:center">✔ <code>multipass create</code>, page <code>/register</code> (version allégée)</td>
-<td style="text-align:center">✔ <code>make_NOSTRCARD.sh</code> (complet : SSSS, QR, zine, ZenCard)</td>
+<td style="text-align:center">✔ <code>multipass create</code>, page <code>/register</code>, clé de secours 2 sur 3 en QR, primo-transaction à la première connexion</td>
+<td style="text-align:center">✔ <code>make_NOSTRCARD.sh</code> (avec zine et ZenCard)</td>
 </tr>
 <tr>
 <td>uCloud chiffré, FaceCloud, liens secrets</td>
@@ -584,7 +583,7 @@ astroportd ylevel --verify   # code de sortie 1 si la clé SSH ne correspond pas
 <h2>Pour aller plus loin (technique)</h2>
 <h3>Détection ORIGIN / ẐEN</h3>
 <ul>
-<li><em>astroportd</em> : <code>serve --swarm-key FICHIER</code> active le réseau privé libp2p (clé pré-partagée, ou PSK) ; sans cette option, le démarrage affiche « réseau ouvert » (<code>src/serve.rs</code>). <code>astroportd init --mode origin|zen</code> prépare la station dans ce sens.</li>
+<li><em>astroportd</em> : <code>serve --swarm-key FICHIER</code> active le réseau privé libp2p (clé pré-partagée, ou PSK) ; sans cette option, le démarrage affiche « réseau ouvert » (<code>src/serve/p2p.rs</code>). <code>astroportd init --mode origin|zen</code> prépare la station dans ce sens.</li>
 <li><em>Astroport.ONE</em> : <code>tools/my.sh</code> définit <code>UPLANETNAME</code> comme la dernière ligne de <code>~/.ipfs/swarm.key</code>, ou 64 zéros (<code>000…0</code>) s'il n'y en a pas.</li>
 </ul>
 <div class="tw"><table>
@@ -619,9 +618,69 @@ astroportd ylevel --verify   # code de sortie 1 si la clé SSH ne correspond pas
 <p>Les nouveaux MULTIPASS utilisent la formule de clés dite <strong>isolated</strong> : <code>(SALT, PEPPER_&lt;sel&gt;)</code> où <code>sel = sha256(UPLANETNAME)[:16]</code> (<em>astroportd</em> : <code>astro-core</code>, <code>KeyFormula::Isolated</code>). Le SALT et le PEPPER sont tirés au hasard (24 caractères). Ces crédentiels passent par scrypt ; la clé Nostr (sha256 de la graine), la clé Ğ1 et l'identité IPNS en découlent. Le <strong>même</strong> couple SALT/PEPPER donne donc <strong>d'autres clés</strong> dans une autre constellation (vérifié contre le <code>keygen</code> d'Astroport.ONE).</p>
 <h3>Ce que <code>multipass create</code> écrit</h3>
 <p><code>~/.zen/game/nostr/&lt;email&gt;/</code> : <code>.secret.nostr</code>, <code>.secret.dunikey</code>, <code>.keyformula</code>, <code>.pass</code>, <code>.multipass.json</code> (en <code>0600</code>, lisibles par le seul propriétaire), plus <code>HEX</code>, <code>NPUB</code>, <code>G1PUBNOSTR</code>, <code>LANG</code>, <code>NOSTRNS</code>. Et trois événements signés par le compte : profil (kind 0), suivi du Capitaine (kind 3), DID W3C (kind 30800).</p>
-<p><strong>Non repris de <code>make_NOSTRCARD.sh</code></strong> : le découpage SSSS 2-sur-3 de DISCO chiffré vers le Capitaine, les QR codes, l'import de la clé IPNS dans Kubo, l'envoi du zine par email, la ZenCard et la primo-transaction. Retrouver un compte repose sur le SALT/PEPPER remis une fois au titulaire (et sur le <code>nsec</code>).</p>
+<p><strong>Clé de secours</strong> : le secret du compte est découpé en trois parts, dont deux suffisent (P1 : QR remis au membre, <code>multipass card --svg</code> ; P2 : la station ; P3 : les amis qui hébergent sa sauvegarde) ; <code>multipass recover</code> ou <code>/restore</code> rétablit le compte. La primo-transaction part à la première connexion du membre. <strong>Non repris de <code>make_NOSTRCARD.sh</code></strong> : l'import de la clé IPNS dans Kubo, l'envoi du zine par email et la ZenCard.</p>
 <h3>Plusieurs plans dans un processus</h3>
-<p><code>astroportd planes</code> : un seul processus, la même identité Y-Level, et par plan un réseau P2P privé, une base, un dossier de comptes et un port ; chaque MULTIPASS est rattaché à son plan. Le routage par nom d'hôte (<code>--front</code>) et <code>--plane</code> sont disponibles ; le miroir entre plans (règles de synchronisation, charte) ne l'est pas encore.</p>
+<figure><svg xmlns="http://www.w3.org/2000/svg" class="ill pl" viewBox="0 0 520 500" role="img" aria-labelledby="pl-t pl-d" width="520" height="500">
+<title id="pl-t">Une machine, plusieurs UPlanet</title>
+<desc id="pl-d">Une même machine sert trois UPlanet : ORIGIN, réseau ouvert sans swarm.key où Kubo est possible, et deux UPlanet privées ẐEN 1 et ẐEN 2, chacune avec sa swarm.key, son port P2P, sa base et ses comptes, sans Kubo. Toutes rangent leurs fichiers chiffrés dans un bassin commun : un fichier n&#x27;y est stocké qu&#x27;une fois, et chaque plan ne sert aux autres stations que les fichiers que sa base référence. Les passages entre plans : d&#x27;ORIGIN vers une UPlanet privée, permis pour une même personne ; d&#x27;une UPlanet privée vers ORIGIN, toujours refusé ; d&#x27;une UPlanet privée vers une autre, seulement avec --cross-swarm.</desc>
+<style>.pl{--ink:#1b1f2a;--mut:#454c61;--pan:#eef1f9;--pan2:#e2e8f8;--line:#6b7390;--acc:#2a46c8;--ok:#14663a;--warn:#8f3b06;--bad:#b3261e;--bg:#ffffff;--wat:#d6e2fb;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){.pl{--ink:#eef0f8;--mut:#bcc3da;--pan:#1c2133;--pan2:#262d47;--line:#8790ad;--acc:#9bb0ff;--ok:#7fdca6;--warn:#ffb98a;--bad:#ff8a80;--bg:#12151f;--wat:#22305a}}
+.pl .bg{fill:var(--bg)}.pl .pan{fill:var(--pan);stroke:var(--line);stroke-width:1.5}.pl .okp{fill:var(--pan);stroke:var(--ok);stroke-width:2.5}
+.pl .wat{fill:var(--wat);stroke:var(--acc);stroke-width:2}.pl .mach{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+.pl .t{fill:var(--ink);font-size:17px;font-weight:700}.pl .n{fill:var(--ink);font-size:15.5px;font-weight:700}.pl .s{fill:var(--mut);font-size:12.5px}.pl .m{text-anchor:middle}
+.pl .cap{font-size:14px;font-weight:700}.pl .ln{stroke:var(--line);stroke-width:2;fill:none}.pl .arc{fill:none;stroke-width:2.5;stroke-dasharray:6 5}
+.pl .lay,.pl .tok{animation-duration:12s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+.pl .L0{opacity:1;animation-name:pl-l0}@keyframes pl-l0{0%,30%{opacity:1}33.0%,96.6%{opacity:0}100%{opacity:1}}
+.pl .L1{opacity:0;animation-name:pl-l1}@keyframes pl-l1{0%,30.0%{opacity:0}33.3%,63.3%{opacity:1}66.3%,100%{opacity:0}}
+.pl .L2{opacity:0;animation-name:pl-l2}@keyframes pl-l2{0%,63.3%{opacity:0}66.6%,96.6%{opacity:1}99.6%,100%{opacity:0}}
+@keyframes pl-tok{0.0%{transform:translate(0.0px,0.0px);opacity:0}1.5%{transform:translate(0.0px,0.0px);opacity:1}4.5%{transform:translate(21.0px,-20.6px);opacity:1}7.5%{transform:translate(42.0px,-35.2px);opacity:1}10.5%{transform:translate(63.0px,-44.1px);opacity:1}13.5%{transform:translate(84.0px,-47.0px);opacity:1}16.5%{transform:translate(105.0px,-44.1px);opacity:1}19.5%{transform:translate(126.0px,-35.2px);opacity:1}22.5%{transform:translate(147.0px,-20.6px);opacity:1}25.5%{transform:translate(168.0px,0.0px);opacity:1}30.0%{transform:translate(168.0px,0.0px);opacity:0}33.3%{transform:translate(168.0px,0.0px);opacity:0}34.8%{transform:translate(168.0px,0.0px);opacity:1}37.5%{transform:translate(147.0px,-20.6px);opacity:1}40.1%{transform:translate(126.0px,-35.2px);opacity:1}42.8%{transform:translate(105.0px,-44.1px);opacity:1}45.5%{transform:translate(84.0px,-47.0px);opacity:1}48.1%{transform:translate(84.0px,-47.0px);opacity:1}50.8%{transform:translate(105.0px,-44.1px);opacity:1}53.5%{transform:translate(126.0px,-35.2px);opacity:1}56.1%{transform:translate(147.0px,-20.6px);opacity:1}58.8%{transform:translate(168.0px,0.0px);opacity:1}63.3%{transform:translate(168.0px,0.0px);opacity:0}66.6%{transform:translate(168.0px,0.0px);opacity:0}68.1%{transform:translate(168.0px,0.0px);opacity:1}71.1%{transform:translate(189.0px,-20.6px);opacity:1}74.1%{transform:translate(210.0px,-35.2px);opacity:1}77.1%{transform:translate(231.0px,-44.1px);opacity:1}80.1%{transform:translate(252.0px,-47.0px);opacity:1}83.1%{transform:translate(273.0px,-44.1px);opacity:1}86.1%{transform:translate(294.0px,-35.2px);opacity:1}89.1%{transform:translate(315.0px,-20.6px);opacity:1}92.1%{transform:translate(336.0px,0.0px);opacity:1}96.6%{transform:translate(336.0px,0.0px);opacity:0}100%{transform:translate(0,0);opacity:0}}.pl .tok{opacity:0;animation-name:pl-tok}
+@media (prefers-reduced-motion:reduce){.pl .lay,.pl .tok{animation:none}}</style>
+<rect class="bg" width="520" height="500" rx="14"/>
+<text x="260.0" y="32" class="t m">Une machine, plusieurs UPlanet</text>
+<text x="260.0" y="58" class="cap m lay L0" style="fill:var(--ok)">ORIGIN → ẐEN 1 : permis (même personne)</text>
+<g class="lay L0"><path class="arc" d="M92 146 Q176.0 52 260 146" style="stroke:var(--ok)"/><text x="176.0" y="94" class="m" style="font-size:20px">✅</text></g>
+<text x="260.0" y="58" class="cap m lay L1" style="fill:var(--bad)">ẐEN 1 → ORIGIN : refusé, toujours</text>
+<g class="lay L1"><path class="arc" d="M260 146 Q176.0 52 92 146" style="stroke:var(--bad)"/><text x="176.0" y="94" class="m" style="font-size:20px">⛔</text></g>
+<text x="260.0" y="58" class="cap m lay L2" style="fill:var(--warn)">ẐEN 1 → ẐEN 2 : seulement avec --cross-swarm</text>
+<g class="lay L2"><path class="arc" d="M260 146 Q344.0 52 428 146" style="stroke:var(--warn)"/><text x="344.0" y="94" class="m" style="font-size:20px">🟠</text></g>
+<rect class="mach" x="8" y="136" width="504" height="326" rx="14"/>
+<text x="260.0" y="452" class="s m">une machine · un NODE · une identité Y-Level</text>
+<rect class="pan" x="16" y="150" width="152" height="150" rx="12"/>
+<text x="92" y="178" class="n m">🌐 ORIGIN</text>
+<text x="92" y="202" class="s m">pas de swarm.key</text>
+<text x="92" y="222" class="s m">réseau ouvert</text>
+<text x="92" y="242" class="s m">P2P 4101</text>
+<text x="92" y="262" class="s m">sa base, ses comptes</text>
+<text x="92" y="282" class="s m">Kubo possible</text>
+<path class="ln" d="M92 300 V362"/>
+<circle cx="92" cy="331.0" r="13" style="fill:var(--bg);stroke:var(--line);stroke-width:1.5"/><text x="92" y="336.0" class="m" style="font-size:13px">🔒</text>
+<rect class="okp" x="184" y="150" width="152" height="150" rx="12"/>
+<text x="260" y="178" class="n m">✨ ẐEN 1</text>
+<text x="260" y="202" class="s m">swarm.key A</text>
+<text x="260" y="222" class="s m">réseau privé A</text>
+<text x="260" y="242" class="s m">P2P 4102</text>
+<text x="260" y="262" class="s m">sa base, ses comptes</text>
+<text x="260" y="282" class="s m">sans Kubo</text>
+<path class="ln" d="M260 300 V362"/>
+<circle cx="260" cy="331.0" r="13" style="fill:var(--bg);stroke:var(--line);stroke-width:1.5"/><text x="260" y="336.0" class="m" style="font-size:13px">🔒</text>
+<rect class="okp" x="352" y="150" width="152" height="150" rx="12"/>
+<text x="428" y="178" class="n m">✨ ẐEN 2</text>
+<text x="428" y="202" class="s m">swarm.key B</text>
+<text x="428" y="222" class="s m">réseau privé B</text>
+<text x="428" y="242" class="s m">P2P 4103</text>
+<text x="428" y="262" class="s m">sa base, ses comptes</text>
+<text x="428" y="282" class="s m">sans Kubo</text>
+<path class="ln" d="M428 300 V362"/>
+<circle cx="428" cy="331.0" r="13" style="fill:var(--bg);stroke:var(--line);stroke-width:1.5"/><text x="428" y="336.0" class="m" style="font-size:13px">🔒</text>
+<rect class="wat" x="24" y="362" width="472" height="70" rx="12"/>
+<text x="260.0" y="388" class="n m">🗄️ Bassin de fichiers commun (chiffrés)</text>
+<text x="260.0" y="410" class="s m">un fichier stocké une seule fois ; chaque plan ne sert</text>
+<text x="260.0" y="426" class="s m">aux autres stations que les fichiers de sa propre base</text>
+<text x="260.0" y="484" class="s m">Les passages entre plans : astroportd bridge-copy --same-person</text>
+<g class="tok"><circle cx="92" cy="146" r="8" style="fill:var(--acc)"/><text x="92" y="150" class="m" style="font-size:10px;fill:var(--bg)">📄</text></g>
+</svg>
+<figcaption>Une machine, plusieurs UPlanet : chaque plan a sa swarm.key, sa base et ses comptes ; les fichiers chiffrés vont dans un bassin commun ; ORIGIN vers ẐEN permis, ẐEN vers ORIGIN refusé, ẐEN vers ẐEN avec --cross-swarm.</figcaption></figure>
+<p><code>astroportd planes</code> : un seul processus, la même identité Y-Level, et par plan un réseau P2P privé, une base, un dossier de comptes et un port ; chaque MULTIPASS est rattaché à son plan. Le routage par nom d'hôte (<code>--front</code>) et <code>--plane</code> sont disponibles. Entre plans, les fichiers passent par <code>bridge-copy</code> (adoption sans copie dans le bassin commun, <code>--same-person</code> ; un plan privé ne verse jamais vers ORIGIN, et vers un autre plan privé seulement avec <code>--cross-swarm</code>), et une même personne relie ses comptes par un lien signé des deux clés (kind 31903 <code>plane-link</code>). Le <strong>miroir</strong> automatique entre plans (règles de synchronisation, charte) reste à faire.</p>
 <h3>La chaîne de dérivation Y-Level</h3>
 <div class="code"><pre><code>~/.ssh/id_ed25519
    └─ sha512 du fichier ─→ SECRET1 (64 premiers caractères hex) + SECRET2 (64 suivants)

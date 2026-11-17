@@ -244,6 +244,11 @@ pub fn station_row(summary: &Value, swarm: &str, me: Option<&str>, updated: i64)
         "paf_cents": count("paf:machine"),
         "health": tag("health:status").unwrap_or("unknown"),
         "week": tag("week"),
+        // Mode (Forteresse, Village, Place publique), UPlanet et charte : de quoi les présenter et filtrer sur une carte.
+        "mode": tag("station:mode"),
+        "uplanet": tag("uplanet:name"),
+        "charter_version": tag("charter:version"),
+        "coop": tag("coop"),
         "at": summary.get("created_at").and_then(Value::as_i64).unwrap_or(updated),
     }))
 }
@@ -337,6 +342,19 @@ impl<P: Publisher> Beacon<P> {
         add("station:name", self.name.clone());
         add("swarm_id", swarm.clone());
         add("constellation", swarm);
+        // Mode de la station (Forteresse, Village, Place publique) et identité de l'UPlanet : nom, charte (version, empreinte)
+        // et clé de la coopérative, dont la configuration publiée (kind 30800 `d=cooperative-config`) porte le texte de la charte.
+        let mode = self.db.readers().read(|c| Ok(astro_db::station_mode::read(c)?)).await.map_err(|e| e.to_string())?;
+        add("station:mode", mode.as_str().to_owned());
+        if let Ok((_, coop)) = crate::coop_config::coop_keys(&self.stations.uplanet_name) {
+            let charter = crate::coop_config::charter_of(crate::coop_config::load(&self.db, &coop).await.as_ref());
+            if let Some(n) = charter.name {
+                add("uplanet:name", n);
+            }
+            add("charter:version", charter.version);
+            add("charter:sha256", charter.sha256);
+            add("coop", coop);
+        }
         if let Some(u) = self.public_url.as_ref().filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
             let u = u.trim_end_matches('/').to_owned();
             add("url", u.clone());
@@ -393,6 +411,14 @@ impl<P: Publisher> Beacon<P> {
                 Ok((true, _)) => accepted = true,
                 Ok((false, why)) => notes.push(format!("{coop} : {why}")),
                 Err(e) => notes.push(format!("{coop} : {e}")),
+            }
+        }
+        // Station ẐEN ouverte : la balise est aussi annoncée sur le relai ORIGIN, qui réunit toutes les UPlanet (carte des
+        // stations). Une Forteresse ne s'annonce jamais hors de sa constellation.
+        let open = !event.tags.iter().any(|t| t.first().map(String::as_str) == Some("station:mode") && t.get(1).map(String::as_str) == Some("forteresse"));
+        if let Some(origin) = crate::coop_config::origin_relay(&self.db, &self.stations.uplanet_name).await.filter(|r| open && !self.relays.contains(r)) {
+            if let Err(e) | Ok((false, e)) = self.client.publish(&origin, &event).await.map_err(|e| e.to_string()) {
+                notes.push(format!("{origin} : {e}"));
             }
         }
         match (accepted, notes.is_empty()) {

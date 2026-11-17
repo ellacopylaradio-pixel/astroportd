@@ -1,3 +1,15 @@
+## astroportd 1.4.0 — écluses, UPlanet visibles sur la carte, guide en images
+
+- **Écluses** (*Ma station › Écluses*) : trois modes de station, réglés d'un geste. **Forteresse** (hébergés et amis réciproques seulement, aucune inscription), **Village** (défaut : amis et amis d'amis), **Place publique** (messages et profils ouverts à tous). Le mode est lu en SQL par le relai, le crawl et FaceCloud.
+- **Tiroir système** : Coffre, Contacts et Calendrier rangés sous `/_/` (migration au démarrage).
+- **FaceCloud** : une photo n'est envoyée d'office à un ami que s'il y est **seul avec vous**.
+- **Vigie de `/Public`** (20h12 et accueil du membre) : prévient — sans rien modifier — des photos géolocalisées, des photos dont l'EXIF porte le **numéro de série de l'appareil ou le nom de son propriétaire**, et des fichiers sensibles (coffre, contacts, agenda, clés).
+- **Balise de station** (kind 30850) : porte le mode, le nom de l'UPlanet, la version et l'empreinte de sa charte, la clé de sa coopérative. Une station ẐEN en Village ou Place publique l'annonce aussi sur le relai ORIGIN (`ORIGIN_RELAY` dans la configuration coopérative, `none` pour s'abstenir) ; une Forteresse jamais. Le relai ORIGIN accepte ces balises ouvertes, et elles seules.
+- **Carte des stations** (G1v1map) : chaque UPlanet ouverte devient un choix de constellation, avec sa charte dépliable ; les Forteresses n'y figurent pas.
+- **« Mes Ẑen »** remplace « Mon argent » (accueil, Moi ; en anglais *My Ẑen*, en espagnol *Mis Ẑen*).
+- **Téléphone** : la barre d'en-tête passe à la ligne au lieu de rogner ; le nom de la constellation n'est plus tronqué.
+- **Guide** : trois schémas animés (écluses, connexion en deux temps, plans), trois romans-photos tirés de vraies captures (`docs/roman/roman_photo.py`), texte allégé de moitié, détails techniques repliés. README et limites connues alignés sur le code.
+
 ## astroportd 1.3.1 — Ğ1Billet par UPlanet, imports WebDAV triés, test navigateur réparé
 
 - **Ğ1Billet** : « ORIGIN » sur les billets de l'UPlanet ORIGIN, nom de l'UPlanet sur les autres. Nouveau choix « Fond et logo » : profil Nostr (défaut), Eugro ou Astroport ; Eugro remplace le profil s'il n'a pas d'images. Images embarquées dans le binaire.

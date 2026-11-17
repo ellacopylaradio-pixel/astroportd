@@ -54,8 +54,25 @@ pub const SECTIONS: &[Section] = &[
     Section { id: "api", title: "Clés d'API", keys: &["PLANTNET_API_KEY", "GIT_HOST", "GIT_TOKEN", "GIT_OWNER"], level: "services" },
     Section { id: "mj", title: "Mailjet", keys: &["MJ_APIKEY_PUBLIC", "MJ_APIKEY_PRIVATE", "MJ_SENDER_EMAIL"], level: "services" },
     Section { id: "ovh", title: "DNSLink OVH", keys: &["OVH_APP_KEY", "OVH_APP_SECRET", "OVH_CONSUMER_KEY", "OVH_ZONE"], level: "essential" },
-    Section { id: "mesh", title: "Stations relais du maillage", keys: &["P2P_RELAYS"], level: "essential" },
+    Section { id: "mesh", title: "Stations relais du maillage", keys: &["P2P_RELAYS", "ORIGIN_RELAY"], level: "essential" },
 ];
+
+/// Relai ORIGIN de la coopérative, où une station ẐEN ouverte (Village, Place publique) annonce aussi sa balise : la carte
+/// des stations y trouve toutes les UPlanet. `ORIGIN_RELAY` le change ; `none` n'annonce rien hors de sa constellation.
+pub const DEFAULT_ORIGIN_RELAY: &str = "wss://relay.copylaradio.com";
+
+/// Relai ORIGIN où annoncer la balise d'une station de `uplanet_name` ; `None` en ORIGIN (son relai commun suffit) ou si
+/// la coopérative a choisi `none`.
+pub async fn origin_relay(db: &Db, uplanet_name: &str) -> Option<String> {
+    if uplanet_name == crate::init::ORIGIN_UPLANETNAME {
+        return None;
+    }
+    match setting(db, uplanet_name, "ORIGIN_RELAY").await {
+        Some(v) if v == "none" => None,
+        Some(v) => Some(v),
+        None => Some(DEFAULT_ORIGIN_RELAY.to_owned()),
+    }
+}
 
 /// Stations relais de la constellation, au plus.
 pub const MAX_RELAYS: usize = 8;
@@ -153,6 +170,9 @@ pub fn validate(key: &str, value: &str) -> Result<(), String> {
     }
     if key == "P2P_RELAYS" {
         parse_relays(value)?;
+    }
+    if key == "ORIGIN_RELAY" && value != "none" && !value.strip_prefix("wss://").is_some_and(|h| valid_domain(h.trim_end_matches('/'))) {
+        return Err(format!("{key} : une adresse wss://relai.exemple.org, ou none pour ne rien annoncer hors de la constellation"));
     }
     if key == "OVH_ZONE" && !value.is_empty() && !valid_domain(value) {
         return Err(format!("{key} : un nom de domaine est attendu (ex. copylaradio.com)"));
@@ -331,6 +351,16 @@ mod tests {
 
     fn patch(items: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
         items.iter().map(|(k, v)| ((*k).to_owned(), v.map(str::to_owned))).collect()
+    }
+
+    #[test]
+    fn the_origin_relay_setting_is_a_wss_address_or_none() {
+        assert!(validate("ORIGIN_RELAY", "wss://relay.copylaradio.com").is_ok());
+        assert!(validate("ORIGIN_RELAY", "none").is_ok(), "none : ne rien annoncer hors de la constellation");
+        for bad in ["https://relay.exemple.org", "wss://", "wss://relay exemple.org", "ws://relay.exemple.org", "wss://evil.example/x?y"] {
+            assert!(validate("ORIGIN_RELAY", bad).is_err(), "{bad}");
+        }
+        assert!(!is_secret("ORIGIN_RELAY"), "en clair dans la configuration publiée");
     }
 
     #[test]

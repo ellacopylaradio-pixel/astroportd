@@ -21,7 +21,9 @@ const fr = { p1: 'Scannez ou collez d’abord votre carte de secours imprimée.'
 const t = (k, ...a) => a.reduce((s, v, i) => s.replace(`{${i}}`, v), (T[lang] || fr)[k] ?? fr[k]);
 if (lang !== 'fr') {
   document.documentElement.lang = lang;
-  for (const el of document.querySelectorAll('[data-t]')) { const v = (T[lang] || {})[el.dataset.t]; if (typeof v === 'string') el.innerHTML = v; }
+  // Les traductions ne portent que des <strong> : on les reconstruit en nœuds (jamais d'innerHTML).
+  const rich = v => v.split(/(<strong>.*?<\/strong>)/).filter(Boolean).map(p => p.startsWith('<strong>') ? Object.assign(document.createElement('strong'), { textContent: p.slice(8, -9) }) : document.createTextNode(p));
+  for (const el of document.querySelectorAll('[data-t]')) { const v = (T[lang] || {})[el.dataset.t]; if (typeof v === 'string') el.replaceChildren(...rich(v)); }
 }
 let result = null, stream = null, timer = 0;
 const stopCam = () => { clearInterval(timer); if (stream) for (const tr of stream.getTracks()) tr.stop(); stream = null; $('#cam').hidden = true; };

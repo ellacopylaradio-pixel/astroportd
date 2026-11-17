@@ -11,9 +11,15 @@ vos amis, vous fait **sauvegarder par vos proches** (et retrouver votre compte s
 une **comptabilité coopérative en Ẑen** (monnaie libre Ğ1) — sans plateforme, sans abonnement, sans serveur central.
 C'est le cœur souverain d'[Astroport.ONE](https://github.com/papiche/Astroport.ONE) et d'UPlanet, réécrit en Rust.
 
-> **Version 1.0.0.** Le code est testé de bout en bout (≈ 870 tests, `clippy` sans avertissement) :
-> lisez [les limites connues](#8-état-du-projet-et-limites-connues). Licence **AGPL-3.0** · Auteur : Fred
-> (support@qo-op.com) · Rust 2024 (≥ 1.85).
+> **Version 1.4.0.** Testé de bout en bout (≈ 930 tests, `clippy` sans avertissement) ; lisez aussi
+> [les limites connues](#10-limites-connues). Licence **AGPL-3.0** · Auteur : Fred (support@qo-op.com) · Rust 2024 (≥ 1.85).
+
+**Par où commencer ?** Découvrir sans rien installer : [la page d'accueil](docs/index.html) · Ouvrir sa station :
+[Démarrer en 5 minutes](#démarrer-en-5-minutes), puis le [guide du Capitaine illustré](docs/guide.html) · Comprendre
+le réseau : [les écluses](#de-lintime-au-public--les-écluses) et [les constellations](docs/CONSTELLATIONS.md) ·
+Contribuer : [l'architecture](#2-vue-densemble).
+
+![Roman-photo : Alice rejoint une station, et ses photos trouvent Léa](docs/img/roman-membre.webp)
 
 ---
 
@@ -21,14 +27,15 @@ C'est le cœur souverain d'[Astroport.ONE](https://github.com/papiche/Astroport.
 
 | Je veux… | astroportd… |
 |---|---|
-| **Garder mes fichiers chez moi**, accessibles partout | Un cloud personnel (`uCloud`) **chiffré avant de quitter l'appareil**, monté comme un disque réseau (WebDAV : Finder, Explorateur Windows, mobile) et dans le navigateur. |
-| **Retrouver mes photos par visage** et les partager entre amis | `FaceCloud` reconnaît les visages et envoie les photos à vos amis **chiffrées, directement à leur station**. Une zone de doute (« est-ce X ? ») vous laisse valider. |
+| **Garder mes fichiers chez moi**, accessibles partout | Un cloud personnel (`uCloud`) **chiffré avant de quitter l'appareil**, monté comme un disque réseau (WebDAV : Finder, Explorateur Windows, mobile) et dans le navigateur. Contacts et agenda se synchronisent avec le téléphone (CardDAV, CalDAV). |
+| **Retrouver mes photos par visage** et les partager entre amis | `FaceCloud` reconnaît les visages et envoie les photos à vos amis **chiffrées, directement à leur station**. Une photo de groupe attend votre accord. |
 | **Faire entrer quelqu'un** dans le réseau en lui envoyant une photo | Un **lien d'invitation** (ou un QR) : la personne crée son compte en un geste, ou l'accepte avec le sien, même sur une autre station ; ses photos arrivent. |
-| **Ne rien perdre si ma machine tombe en panne** | Mes amis hébergent une **copie chiffrée** que seul moi peux lire. Avec ma **clé de secours** (QR) et la part d'un ami (« j'appelle un ami »), je rétablis mon compte sur n'importe quelle station : mes amis renvoient tout d'eux-mêmes, sans rien faire. |
+| **Ne rien perdre si ma machine tombe en panne** | Un ami que je choisis héberge une **copie chiffrée** que moi seul peux lire. Avec ma **clé de secours** (QR) et la part de cet ami (« j'appelle un ami »), je rétablis mon compte sur n'importe quelle station : tout revient de soi-même. |
 | **Changer de station** (déménager chez un Capitaine plus proche) | Le même parcours : la nouvelle station s'annonce comme ma maison, l'ancienne cesse d'héberger mon compte. |
-| **Parler et publier entre amis**, sans plateforme | Un **relai Nostr** intégré, des contacts et un agenda synchronisables avec le téléphone (CardDAV, CalDAV), un cercle social à deux niveaux (amis N¹, amis d'amis N²). |
-| **Faire vivre une économie coopérative** | Une comptabilité en **Ẑen** adossée à la Ğ1 : règle des 3×1/3, registre signé, micro-dons par simple réaction `+N`. |
-| **Avoir un assistant** qui me connaît | **BRO** : une mémoire personnelle à recherche vectorielle locale (`sqlite-vec`), dont les embeddings sont calculés par votre propre serveur Ollama. |
+| **Parler entre amis**, sans plateforme | Un **relai Nostr** intégré, des conversations privées chiffrées, des **appels visio** de navigateur à navigateur, et un cercle social à deux niveaux (amis N¹, amis d'amis N²). |
+| **Choisir jusqu'où mes données circulent** | Le Capitaine règle sa station en un geste : **Forteresse**, **Village** ou **Place publique** ([les écluses](#de-lintime-au-public--les-écluses)). |
+| **Faire vivre une économie coopérative** | Une comptabilité en **Ẑen** adossée à la Ğ1 : règle des 3×1/3, registre signé, micro-dons par simple réaction `+N`, billets papier. |
+| **Avoir un assistant** qui me connaît | **BRO** : une mémoire personnelle à recherche vectorielle locale (`sqlite-vec`), avec **votre** IA (Ollama, ou une clé que vous déclarez). |
 
 **Pour qui ?** Un **membre** s'inscrit sur la station d'un Capitaine (ou la sienne) ; un **Capitaine** héberge des membres et
 règle sa station ; un **développeur** étend l'ensemble par des plugins WebAssembly.
@@ -42,13 +49,13 @@ choix que les services habituels ne font pas :
 |---|---|---|---|
 | **Fichiers et synchronisation** | Google Drive, Dropbox, Nextcloud | Filecoin, Sia, IPFS Desktop | Chiffrement **UENC v2** (flux authentifié par blocs de 64 Kio, lecture partielle `Range`), déduplication par CID, et un **manifeste de votre cloud ancré sur Nostr** : la base SQLite n'est qu'un cache, tout se rejoue. |
 | **Photos et visages** | Google Photos, Apple Photos | Immich, PhotoPrism | Photos **chiffrées**, empreintes de visages 512D **cloisonnées par propriétaire** (`sqlite-vec`), partage vers les amis reconnus par messages chiffrés **NIP-59/NIP-17**, avec validation de l'utilisateur dans la zone de doute. |
-| **Identité et réseau social** | Keybase, X, Mastodon | Urbit, Farcaster, clients Nostr | Une **identité dérivée de votre clé SSH** (Y-Level : SSH, IPFS, Ğ1 et Nostr sont la même clé) et un **pare-feu social NIP-42 à deux niveaux** : seuls les membres du cercle (hébergés, N¹, N²) publient, et tout contenu non public exige d'être authentifié dans le cercle. |
-| **Sauvegarde et reprise** | Sauvegarde cloud payante | Syncthing, Tahoe-LAFS | Des **amis réciproques hébergent votre copie chiffrée** (ils ne peuvent rien lire), et restituent **d'eux-mêmes** après une panne : ma **clé de secours** (QR) plus la part d'un ami suffisent à retrouver compte, contacts et fichiers sur une autre station. |
-| **Communication entre machines** | Tailscale, ZeroTier, ngrok | libp2p, Iroh | Tunnels **« DRAGON »** natifs `/x/<service>-<PeerID>` sur le maillage libp2p, sans ouvrir de port sur la box : découverte mDNS sur le réseau local, stations relais publiées par la configuration coopérative (`P2P_RELAYS`), adresses annoncées dans la balise et dossier de l'essaim tenu par astroportd ; une politique réglée par le Capitaine dit qui peut ouvrir quel service. |
+| **Identité et réseau social** | Keybase, X, Mastodon | Urbit, Farcaster, clients Nostr | Une **identité dérivée de votre clé SSH** (Y-Level : SSH, IPFS, Ğ1 et Nostr sont la même clé) et un **pare-feu social NIP-42** réglé en trois modes : seuls les membres du cercle publient, et tout contenu non public exige d'être authentifié dans le cercle. |
+| **Sauvegarde et reprise** | Sauvegarde cloud payante | Syncthing, Tahoe-LAFS | Des **amis réciproques hébergent votre copie chiffrée** (ils ne peuvent rien lire), et restituent **d'eux-mêmes** après une panne : la **clé de secours** (QR) plus la part d'un ami suffisent à retrouver compte, contacts et fichiers sur une autre station. |
+| **Communication entre machines** | Tailscale, ZeroTier, ngrok | libp2p, Iroh | Tunnels **« DRAGON »** natifs `/x/<service>-<PeerID>` sur le maillage libp2p, sans ouvrir de port sur la box : découverte mDNS sur le réseau local, stations relais publiées par la configuration coopérative (`P2P_RELAYS`), adresses annoncées dans la balise ; une politique réglée par le Capitaine dit qui peut ouvrir quel service. |
 | **Économie et monnaie** | OpenCollective, Stripe | DAO, Lightning | Comptabilité coopérative adossée à la **monnaie libre Ğ1** (Duniter v2s) : **règle des 3×1/3**, registre Ğ1-N² signé et chaîné, **micro-dons sur réaction Nostr `+N`**. Le Ẑen est une unité comptable de la coopérative, pas une monnaie publique. |
 
 Ce qu'on ne prétend pas : astroportd n'est pas un réseau social grand public, ni un service hébergé. C'est **votre** station,
-avec ses [limites connues](#8-état-du-projet-et-limites-connues).
+avec ses [limites connues](#10-limites-connues).
 
 ---
 
@@ -56,43 +63,43 @@ avec ses [limites connues](#8-état-du-projet-et-limites-connues).
 
 ![FaceCloud : photos, visages, album, amis N¹, lien secret](docs/img/facecloud-partage.svg)
 
-**Vos photos retrouvent les visages, et circulent entre amis — sans passer par une plateforme.** Tout part de votre
-**uCloud**, un cloud personnel **chiffré avant de quitter votre appareil** :
+Vos photos sont **chiffrées avant de quitter l'appareil**, puis FaceCloud y reconnaît les visages (≥ 0,82 ; entre 0,55
+et 0,82, il vous demande « est-ce X ? »). Une photo part **seule** chez un ami réciproque quand il y est **seul avec
+vous** (score ≥ 0,88) ; sinon elle attend votre clic, et toujours en mode Forteresse. Pour les autres : un **lien
+secret** `/s/<slug>#clé`, dont la clé ne quitte jamais le navigateur. Les films (NIP-71) ne vont qu'au cercle N¹ de
+l'auteur ([§9](#9-films-et-séries--la-copie-privée)).
 
-- **Déposez vos photos** (WebDAV : Finder, Explorateur Windows, application mobile ; ou l'API). Chaque fichier est chiffré
-  en flux (UENC v2) ; le clair ne touche jamais le disque de la station (`astro-dav`).
-- **FaceCloud reconnaît les visages** : détection et empreinte 512D, comparaison cosinus. À partir de **0,82** le visage
-  est reconnu ; entre **0,55 et 0,82** la station demande « est-ce X ? » et **vous validez** ; en dessous, il reste
-  `Inconnu_<hash8>`. Une seule inférence à la fois, file d'attente persistante (`astro-facecloud`).
-- **Partage automatique entre amis N¹** (ceux que vous suivez *et* qui vous suivent) : la photo où figure votre ami
-  est copiée dans `/Partages/De_<vous>/` chez lui s'il est sur la même station ; sinon elle lui est envoyée **chiffrée
-  vers sa station** (message de fichier NIP-17 emballé NIP-59, relayé par la constellation).
-- **Le reste du monde par un lien secret** : `https://station/s/<slug>#clé`, de 1 heure à 30 jours. La clé AES-256 est
-  dans le **fragment** `#…` que le navigateur n'envoie jamais ; le serveur ne garde que des copies chiffrées avec cette
-  clé, et les liens expirés sont supprimés chaque nuit (`astro-dav/share.rs`).
-- **Films et séries** (copie privée, CPI L. 122-5) : publiés en NIP-71 (kind 21/22) et **livrés au cercle N¹ de l'auteur
-  seulement**, jamais à tout le cercle N² (§10).
-- **Les cercles N¹ et N²** sont ceux de Nostr : le relai de la station réserve ses contenus privés aux membres
-  authentifiés (NIP-42) du cercle, et le N¹ d'un auteur se lit dans sa liste de contacts, même s'il vit sur **une autre
-  station** de la constellation.
-
-> **À savoir.** La reconnaissance faciale passe soit par un service HTTP d'inférence (`--face-engine`), soit, sur une
-> station autonome, par une inférence **locale** (`--face-models`, binaire compilé avec `--features onnx` : SCRFD +
-> ArcFace par ONNX Runtime, modèles à fournir). Sans l'un ni l'autre, uCloud fonctionne mais sans visages. Pas de partage
-> « automatique » vers un ami qui ne vous suit pas en retour : c'est le lien secret qui sert alors.
+> **À savoir.** Les visages se calculent par un service HTTP (`--face-engine`) ou en local (`--face-models`, ONNX,
+> inclus dans les archives Linux gnu et macOS). Sans l'un ni l'autre, uCloud marche sans visages.
 
 Pas à pas : [FaceCloud dans le guide](docs/GUIDE.md#etape-8).
 
 ---
 
+## De l'intime au public : les écluses
+
+![Les écluses : six bassins du coffre au public ; les portes s'ouvrent ou se ferment selon le mode de la station](docs/img/ecluses.svg)
+
+Le Capitaine choisit un mode dans *Ma station › Réseau › Écluses* : **Forteresse** (amis réciproques seulement, pas
+d'inscription libre), **Village** (le défaut) ou **Place publique** (tout le monde publie). Sans redémarrer.
+
+- **`/_/`** range à part le coffre, les contacts et l'agenda : ni FaceCloud, ni miniatures, ni site public n'y touchent.
+- **À 20h12**, une vigie signale au membre une photo géolocalisée ou signée (n° de série, propriétaire) ou un fichier sensible dans `/Public` (sans rien retirer).
+
+Pas à pas : [les écluses dans le guide](docs/GUIDE.md#ecluses).
+
+---
+
 ## Démarrer en 5 minutes
+
+![Roman-photo : Fred ouvre sa station](docs/img/roman-capitaine.webp)
 
 ```bash
 # 1. Installer (vérifie l'empreinte SHA-256 de l'archive, sans droits administrateur)
 curl -fsSL https://raw.githubusercontent.com/papiche/astroportd/main/install.sh | bash
 
 # 2. Préparer la station : clé Y-Level, choix ORIGIN ou ẐEN, dossiers, puis le MULTIPASS du Capitaine
-#    (son email est demandé ; secrets et code PASS affichés UNE seule fois : notez-les)
+#    (son email est demandé ; code PASS et clé de secours affichés UNE seule fois : notez-les)
 astroportd init
 
 # 3. Sans email à l'étape 2 : la station démarre sans Capitaine, écrit un code d'installation dans son journal,
@@ -105,11 +112,14 @@ astroportd serve --db ~/.zen/astroportd/uplanet.db --blobs ~/.zen/astroportd/blo
 # 5. Les membres s'inscrivent sur http://127.0.0.1:8090/register (ou : astroportd multipass create <email>)
 ```
 
-`astroportd init --mode origin` ou `--mode zen --swarm-key ./swarm.key` s'utilisent aussi sans questions (`--yes`).
-`astroportd init --systemd` écrit un service utilisateur ; `astroportd doctor` vérifie le tout.
+`install.sh` **s'adapte à la machine** (architecture, cœurs, mémoire, vitesse du disque, GPU, Ollama) et recommande un
+profil : *léger* (visages et mémoire calculés ailleurs), *standard* ou *confort* (tout en local). `--profile`,
+`--no-face`, `--embed`/`--no-embed` forcent un choix ; `--check-hardware` n'affiche que le diagnostic, `--dry-run` montre
+ce qui serait fait. `astroportd init --mode origin` ou `--mode zen --swarm-key ./swarm.key` s'utilisent aussi sans
+questions (`--yes`) ; `astroportd init --systemd` écrit un service utilisateur ; `astroportd doctor` vérifie le tout.
 
-**Page d'accueil** (grand public et futurs Capitaines) : [docs/index.html](docs/index.html) · **Guide du Capitaine illustré** (terminal *et* navigateur) : [docs/guide.html](docs/guide.html)
-· version texte : [docs/GUIDE.md](docs/GUIDE.md) · en profondeur : [docs/CONSTELLATIONS.md](docs/CONSTELLATIONS.md).
+**Guide du Capitaine illustré** (terminal *et* navigateur) : [docs/guide.html](docs/guide.html) · version texte :
+[docs/GUIDE.md](docs/GUIDE.md) · en profondeur : [docs/CONSTELLATIONS.md](docs/CONSTELLATIONS.md).
 
 ## Créer son MULTIPASS, directement sur sa station
 
@@ -120,25 +130,31 @@ d'Astroport.ONE) :
 
 - **Au terminal** : `astroportd multipass create <email> [--captain] [--lang fr|en|es] [--json]` et
   `astroportd multipass list`. `--captain` désigne le **premier** compte comme Capitaine de la station (refusé si un
-  autre Capitaine existe) ; les suivants **suivent automatiquement le Capitaine** (kind 3). `astroportd init` le fait
-  lui-même quand on lui donne l'email du Capitaine.
+  autre Capitaine existe) ; les suivants **suivent automatiquement le Capitaine** (kind 3).
 - **Station neuve, sans Capitaine** : l'inscription web reste **fermée** (personne ne peut prendre l'email du Capitaine).
   `serve` écrit un **code d'installation** dans son journal (terminal ou `journalctl`) ; la page **`/welcome`** le demande
   et crée le compte du Capitaine. Code à usage unique, renouvelé après 5 essais faux.
-- **Lien d'accueil** (cockpit › « Inviter votre premier membre ») : un lien `/w/<jeton>` et son QR, pour **plusieurs**
-  personnes (entrée d'un lieu, site, article). Qui l'ouvre crée son MULTIPASS (email ou simple pseudo), devient ami
-  réciproque du Capitaine et arrive dans la discussion avec lui. Places limitées (50 par défaut), 90 jours, retirable.
-- **Au navigateur** : la page publique **`/register`** (lien « Pas de compte ? Créer mon MULTIPASS » dans la fenêtre de
-  connexion) : email + langue, puis une **carte d'identité** à noter (SALT, PEPPER, nsec, npub, Ğ1, IPNS, code PASS,
-  jeton), téléchargeable en `.txt`, et un bouton « Ouvrir mon espace ». API : `GET/POST /api/v1/register`.
+- **Lien d'accueil** (cockpit › « ✉️ Liens d'accueil ») : un lien `/w/<jeton>` et son QR, pour **plusieurs** personnes
+  (entrée d'un lieu, site, article). Qui l'ouvre crée son MULTIPASS (email ou simple pseudo), devient ami réciproque du
+  Capitaine et arrive dans la discussion avec lui. Places limitées (50 par défaut), 90 jours, retirable.
+- **Au navigateur** : la page publique **`/register`** montre l'**identifiant**, le **code PASS** et la **carte de
+  secours** à imprimer ; les clés (nsec, npub, Ğ1, IPNS) sont repliées sous *Détails techniques*. API :
+  `GET/POST /api/v1/register`.
 - **Inscription web ouverte par défaut**, avec garde-fous : `--max-accounts N` (500 par défaut, `0` = illimité),
-  `--register-per-hour N` (5 par adresse IP, `0` = illimité), `--no-register` pour la fermer.
+  `--register-per-hour N` (5 par adresse IP, `0` = illimité), `--no-register` ou le mode Forteresse pour la fermer.
 - **Une seule constellation par compte** : SALT et PEPPER aléatoires (24 caractères), puis la formule **isolée**
   `(SALT, PEPPER_<sha256(UPLANETNAME)[:16]>)`. Le même couple donne donc **d'autres clés** dans une autre constellation.
   La création signe un profil (kind 0), le suivi du Capitaine (kind 3) et un DID (kind 30800).
 
-Les secrets ne sont affichés qu'**une seule fois**. [qo-op.com](https://qo-op.com) reste une option (une station ORIGIN
-publique où s'inscrire), pas une obligation.
+Les secrets ne sont affichés qu'**une seule fois** (SALT et PEPPER ne le sont plus du tout, sauf `--json`).
+[qo-op.com](https://qo-op.com) reste une option (une station ORIGIN publique où s'inscrire), pas une obligation.
+
+### Se connecter depuis n'importe quelle station
+
+![Se connecter depuis n'importe quelle station : l'identifiant d'abord, le PASS seulement chez soi](docs/img/connexion.svg)
+
+On tape son identifiant ; le PASS ne se tape que sur **sa** station. Le portail **`/stations`**, servi par chaque
+station, accueille les nouveaux (« Je suis nouveau ») et retrouve la station d'un membre (« J'ai déjà un MULTIPASS »).
 
 ### La clé de secours : retrouver son compte après une panne, ou changer de station
 
@@ -150,25 +166,13 @@ Le secret du compte (SALT et PEPPER) est découpé en **3 parts, dont 2 suffisen
 | **P2** | la station d'accueil (`<compte>/.ssss/2`, `0600`) | sert à réimprimer P1 ou à renvoyer P3 |
 | **P3** | **les amis qui hébergent la sauvegarde** (envoyée d'elle-même, chiffrée pour chacun) | ne révèle rien ; l'ami la montre à celui qui l'appelle |
 
-**« J'appelle un ami »** : sur la nouvelle station, on saisit (ou scanne) P1 et la part que l'ami lit dans *Compte › Sauvegarde
-privée*. Aucun mot de passe, aucun réseau à attendre pour cette étape ; la voix de l'ami est la vérification. L'ancienne carte
-complète (`astro-secret:v1|…`) reste acceptée. Le SALT et le PEPPER ne sont plus affichés à la création.
+![Roman-photo : j'appelle un ami, Alice retrouve son compte](docs/img/roman-secours.webp)
 
-- **Rétablir** : `/restore` sur la nouvelle station (scan des deux QR ou collage), ou `astroportd multipass recover -` au terminal.
-  La station rétablie retrouve les trois parts d'origine (le P1 imprimé et le P3 des amis restent valables).
-  Même clé, donc mêmes amis, contacts et fichiers ; un **nouveau PASS** est généré (l'ancien n'est pas récupérable).
-- **Sans rien demander à vos amis** : chaque nuit, votre station range chez l'ami qui héberge votre sauvegarde vos fichiers
-  privés **et le manifeste de votre uCloud**. Après un rétablissement, la nouvelle station republie votre DID avec **sa**
-  station d'accueil, prévient vos proches (leurs stations mettent à jour votre adresse), et **leurs stations renvoient d'elles-mêmes**
-  le manifeste, puis les fichiers sauvegardés ou partagés. Les fichiers qui manquent encore sont redemandés par leur CID.
-- **Déménager** (l'ancienne station tourne encore) : la nouvelle écrit à l'ancienne un message `moved`, signé de la clé du
-  compte ; l'ancienne cesse d'héberger ce compte et met son dossier de côté (corbeille `trash/moved/`, effacé après 30 jours).
-- **Garde-fous** : la carte d'une autre constellation, ou dont les secrets ne redonnent pas la clé annoncée, est refusée avant
-  toute écriture ; aucun événement de naissance n'est republié (il écraserait votre vraie liste d'amis) ; aucun manifeste vide
-  n'est publié tant que la restauration dure.
-- **Réafficher une part** : `astroportd multipass card <email> [--part 1|2|3] [--svg]`.
+- **Au terminal** : `astroportd multipass recover -` ; `astroportd multipass card <email> [--part 1|2|3] [--svg]` réaffiche une part.
+- **Déménager** : la nouvelle station prévient l'ancienne (message `moved` signé), qui cesse d'héberger le compte.
+- **Garde-fous** : carte d'une autre constellation ou mal recopiée refusée avant toute écriture ; aucun manifeste vide publié pendant la restauration.
 
-Pas à pas : [guide, étape 6](docs/GUIDE.md#etape-5).
+Pas à pas : [la clé de secours dans le guide](docs/GUIDE.md#secours).
 
 ---
 
@@ -176,18 +180,12 @@ Pas à pas : [guide, étape 6](docs/GUIDE.md#etape-5).
 
 ![ORIGIN ou ẐEN](docs/img/origin-vs-zen.svg)
 
-| | **UPlanet ORIGIN** | **UPlanet ẐEN** |
-|---|---|---|
-| Vocation | Bac à sable, apprentissage | Production, économie coopérative |
-| `swarm.key` | **absente** | **présente** (clé du réseau privé) |
-| `UPLANETNAME` | 64 zéros | la clé partagée |
-| Réseau P2P | ouvert | privé, chiffré |
-| 1 Ẑen vaut | 0,1 Ğ1 (jeu) | 1 € (coopérative) |
-| Pour démarrer | `astroportd init --mode origin` | `astroportd init --mode zen --swarm-key ./swarm.key` |
+**Pas de `swarm.key` = ORIGIN (réseau ouvert, Kubo possible) ; `swarm.key` présente = ẐEN (réseau privé, sans Kubo).** Pour entrer en ẐEN, recevez un jeton de parrainage d'un
+Capitaine (`astroportd parrainer`, puis `astroportd init --join <jeton>`), ou **fondez votre constellation** :
+`astroportd init --mode zen --found-constellation`. Une même machine peut servir les deux à la fois
+(`astroportd planes`, voir le [guide](docs/GUIDE.md#etape-8bis-i)).
 
-**Pas de `swarm.key` = ORIGIN ; `swarm.key` présente = ẐEN.** Pour entrer en ẐEN, recevez la clé d'un Capitaine
-(certification DRAGON) — ou **fondez votre constellation** : `astroportd swarm-key > swarm.key`, puis copiez-la sur
-chaque station. Détails, avertissements et limites : [docs/CONSTELLATIONS.md](docs/CONSTELLATIONS.md).
+![Une machine, plusieurs UPlanet : chaque plan a sa swarm.key, sa base et ses comptes ; les fichiers chiffrés vont dans un bassin commun ; ORIGIN vers ẐEN permis, ẐEN vers ORIGIN refusé, ẐEN vers ẐEN avec --cross-swarm.](docs/img/plans.svg) Détails : [docs/CONSTELLATIONS.md](docs/CONSTELLATIONS.md).
 
 ## Y-Level : votre clé SSH *est* l'identité de votre station
 
@@ -204,9 +202,10 @@ Nostr peuvent donc s'ouvrir un accès SSH entre machines de confiance, à traver
 
 ![Individus, Astroports, territoire](docs/img/individu-astroport-territoire.svg)
 
-*Ce qui est dans astroportd :* le rituel, la vérification, les tunnels P2P (SSH, ComfyUI et Ollama offerts par défaut mais **fermés**, `--p2p-expose` pour d'autres, `--p2p-forward`), réglés par le Capitaine dans Options › Tunnels.
-*Ce qui reste dans Astroport.ONE :* le suivi automatique des Capitaines (kind 30850) et la mise à jour des clés SSH
-autorisées.
+*Ce qui est dans astroportd :* le rituel, la vérification, les tunnels P2P (SSH, ComfyUI et Ollama, plus ceux de
+`--p2p-expose`), réglés par le Capitaine dans *Ma station › Réseau › Réglages › Tunnels et accès*. Par défaut, **SSH est
+fermé en ẐEN** ; ComfyUI, Ollama (et SSH en ORIGIN) s'ouvrent aux seuls Capitaines amis réciproques.
+*Ce qui reste dans Astroport.ONE :* le suivi automatique des Capitaines d'après leurs balises (kind 30850).
 
 ---
 
@@ -216,14 +215,14 @@ Les binaires sont publiés dans les [**Releases**](https://github.com/papiche/as
 
 | Cible | Pour |
 |---|---|
-| `x86_64-unknown-linux-gnu` | PC, serveur, VM |
-| `aarch64-unknown-linux-gnu` | Raspberry Pi 4/5, Pi Zero 2 W (64 bits) |
+| `x86_64-unknown-linux-gnu` | PC, serveur, VM (inférence locale ONNX incluse) |
+| `aarch64-unknown-linux-gnu` | Raspberry Pi 4/5, Pi Zero 2 W (64 bits) (ONNX inclus) |
 | `armv7-unknown-linux-gnueabihf` | Raspberry Pi 2/3, Pi OS 32 bits |
-| `x86_64-unknown-linux-musl` | binaire statique, sans glibc |
-| `aarch64-unknown-linux-musl` | binaire statique ARM 64 bits (Android sous Termux, Pi, NAS) |
-| `aarch64-apple-darwin` · `x86_64-apple-darwin` | **macOS** (Apple Silicon : Brain GPU par mémoire unifiée ; Mac Intel). *Au mieux* : première version, voir [docs/MACOS.md](docs/MACOS.md) |
+| `x86_64-unknown-linux-musl` | binaire statique, sans glibc (sans ONNX : visages et mémoire calculés ailleurs) |
+| `aarch64-unknown-linux-musl` | binaire statique ARM 64 bits (Android sous Termux, Pi, NAS) (sans ONNX) |
+| `aarch64-apple-darwin` · `x86_64-apple-darwin` | **macOS** (Apple Silicon : Brain GPU par mémoire unifiée ; Mac Intel). *Au mieux* : voir [docs/MACOS.md](docs/MACOS.md) |
 
-Linux, et macOS en bêta. Compiler soi-même : `./build-all.sh` (voir §4).
+Compiler soi-même : `./build-all.sh` (voir [§4](#4-démarrage-rapide)).
 
 ---
 
@@ -268,18 +267,23 @@ Un nœud doit coûter peu d'énergie et peu d'attention. Les travaux d'entretien
 (équation du temps de Spencer, précise à ~30 s), pas sur l'horloge murale : ils suivent le soleil de la station.
 `astro-core::solar` calcule le prochain 20h12 et refuse de fonctionner si l'horloge est antérieure à 2026 (un
 Raspberry Pi sans pile RTC démarre en 1970 et ferait des échéances absurdes). `astroportd doctor` l'affiche.
-Le démon (`src/solar_cron.rs`) dort jusqu'à ce soleil-là, puis joue, **dans cet ordre et chaque étape indépendante
-des suivantes** : garde-fou RTC → verrou du jour (posé *avant* le travail) → snapshot atomique `VACUUM INTO`
-(7 conservés) → purge des réclamations de plus de 7 jours et des liens d'invités expirés → balayage RÊVE → clôture
-hebdomadaire de la régie 3×1/3 (toute semaine ISO terminée et pas encore close : le lundi, avec rattrapage de
-5 semaines) → événement de santé économique (kind 30850, `d = economic-health`). Une étape qui échoue est dite sur
-le bus d'activité et dans le journal ; la nuit continue. Il faut les coordonnées de la station (`--lat/--lon` ou la
-position de son NODE) ; sans elles le démon le dit et reste inactif (`--no-nightly` pour le couper).
-**Rattrapage au démarrage** : une station éteinte à 20h12 ne reste pas en retard. Au boot, une tâche de fond (le
-serveur n'attend pas) joue la nuit du jour solaire courant si son 20h12 est passé et qu'elle n'a pas eu lieu
-(`done nightly:<date>`), et la nuit de la veille si elle a été manquée alors que la station avait déjà fait une nuit.
-Les nuits plus anciennes ne sont pas rejouées (la clôture hebdomadaire, elle, rattrape 5 semaines). Horloge < 2026 :
-rien n'est fait, et le dit.
+
+Le démon (`src/solar_cron.rs`) dort jusqu'à ce soleil-là, puis joue, **dans cet ordre et chaque étape indépendante des
+suivantes** :
+
+1. garde-fou RTC, puis verrou du jour (posé *avant* le travail) ;
+2. snapshot atomique `VACUUM INTO` (7 conservés) ;
+3. purges : réclamations de plus de 7 jours, liens d'invités et événements (NIP-40) expirés, journal CardDAV/CalDAV ;
+4. balayage RÊVE de la mémoire de BRO ;
+5. sauvegarde privée chez les amis, puis contrôle d'intégrité des blobs ;
+6. vigie « vie privée » de `/Public` (prévient, ne modifie rien) ;
+7. retour des Ğ1Billets expirés à leur émetteur ;
+8. clôture hebdomadaire de la régie 3×1/3 (rattrapage jusqu'à 5 semaines) ;
+9. événement de santé économique (kind 30850, `d = economic-health`).
+
+Une étape qui échoue est dite sur le bus d'activité et dans le journal ; la nuit continue. Il faut les coordonnées de la
+station (`--lat/--lon` ou la position de son NODE) ; sans elles le démon le dit et reste inactif (`--no-nightly` pour le
+couper). Une station éteinte à 20h12 **rattrape au démarrage** la nuit du jour et celle de la veille.
 
 ### Ni cloud, ni abonnement, ni destruction
 
@@ -292,11 +296,11 @@ couvre plus les charges, la station bascule en **Bénévolat Actif** (Love Ledge
 ## 2. Vue d'ensemble
 
 ```
-        navigateur / mobile (PWA)        clients Nostr        WebDAV (Finder, Windows…)
+        navigateur / mobile (PWA)        clients Nostr        WebDAV · CardDAV · CalDAV
                     │                         │ NIP-11/WS               │
                     ▼                         ▼                         ▼
    ┌────────────────────────────  astroportd  ───────────────────────────────────┐
-   │  astro-ui  façade HTTPS (ACME, proxy, app web, /health, SSE)                 │
+   │  astro-ui  façade HTTPS (ACME, proxy, app web, /health, SSE, /stations)      │
    │  astro-relay  relai Nostr, pare-feu social NIP-42   astro-dav  uCloud chiffré│
    │  astro-bro  mémoire, bus         astro-facecloud  visages   astro-plugins    │
    │  astro-economy  3×1/3, Love Ledger              astro-lifecycle  comptes     │
@@ -318,22 +322,22 @@ Le workspace compte **16 crates** (+ le binaire `astroportd`, qui est aussi une 
 
 | Crate | Rôle |
 |---|---|
-| **`astro-core`** | Socle pur : les 5 formules de crédentiels (`KeyFormula`), dérivations Ğ1/IPFS/Nostr (scrypt, PBKDF2), SS58 préfixe 4450, `Amount` (centimes entiers), semaine ISO, **horloge solaire 20h12**, **bus d'activité** (flux SSE). |
+| **`astro-core`** | Socle pur : les 4 formules de crédentiels (`KeyFormula`), dérivations Ğ1/IPFS/Nostr (scrypt, PBKDF2), SS58 préfixe 4450, `Amount` (centimes entiers), semaine ISO, **horloge solaire 20h12**, **bus d'activité** (flux SSE). |
 | **`astro-crypto`** | Chiffrement des fichiers **UENC v2**, NIP-44 v2, NIP-59 (gift wrap), NIP-98 durci (anti-rejeu, liaison URL/méthode/`payload`), sources de clés. |
 | **`astro-nostr-proto`** | Événements, filtres, messages NIP-01, kinds du projet, signature Schnorr (secp256k1), validation stricte. |
-| **`astro-db`** | `uplanet.db` : schéma, acteur d'écriture unique, pool de lecteurs WAL, recherche vectorielle `sqlite-vec` (mémoire 1024D, visages 512D), stockage des événements (remplaçables, NIP-09, NIP-40), recherche plein texte NIP-50 par index FTS5 (préfixes, sans accents ni casse, classée par pertinence), migrations légères. Base créée en `0600`. |
-| **`astro-relay`** | Relai Nostr WebSocket en **pare-feu social** : lecture publique des kinds publics, tout le reste réservé au cercle N1/N2 authentifié (NIP-42) ; NIP-11 ; anti-abus (débit, tailles). NIP-01, 09 (suppressions par id et par adresse, sans réinsertion), 11 (avec CORS), 17, 40, 42, 45 (`COUNT`), 50 (`search`), 59 et 70 (événements protégés). |
-| **`astro-sync`** | `Projector` (événement → requêtes SQL, pur et indépendant de l'ordre), `replay`, `Crawler` N² clé par clé, client WebSocket (`ws://`, `wss://` rustls), envoi de messages chiffrés. |
-| **`astro-dav`** | WebDAV classe 1+2 sur uCloud chiffré (GET/Range, PUT en flux, PROPFIND, MKCOL, MOVE, COPY, LOCK, PROPPATCH), manifeste ancré sur Nostr/IPFS, liens d'invité `/s/<slug>#clé` (lecture seule) et **invitations** `/i/<jeton>` (le destinataire crée son MULTIPASS et reçoit les photos), **miniatures WebP**, dépôt hors WebDAV (`ingest`), magasin de blobs (disque / Kubo), **CardDAV** (`carddav` : carnet `/_/Contacts` chiffré, vCard 3.0/4.0 avec `X-NOSTR-PUBKEY`/`X-G1-PUBKEY`), **CalDAV** (`caldav`, `ical` : agenda `/_/Calendrier` chiffré, objets `.ics`), `sync-collection` pour les deux (journal `dav_changes`), **films et séries** (`media` : métadonnées TMDB, sondage, plan H.264/AAC, événement NIP-71, attestation de copie privée). |
-| **`astro-facecloud`** | Reconnaissance de visages : file de photos, moteur d'inférence (Brain HTTP ou ONNX local, commutable à chaud), seuils 0,82 / 0,55, partage automatique aux amis réciproques, validation « est-ce X ? ». |
+| **`astro-db`** | `uplanet.db` : schéma, acteur d'écriture unique, pool de lecteurs WAL, recherche vectorielle `sqlite-vec` (mémoire 1024D, visages 512D), stockage des événements (remplaçables, NIP-09, NIP-40), recherche plein texte NIP-50 (FTS5), **mode de la station** (`station_mode` : Forteresse, Village, Place publique, lu en SQL), migrations légères. Base créée en `0600`. |
+| **`astro-relay`** | Relai Nostr WebSocket en **pare-feu social** : lecture publique des kinds publics, tout le reste réservé au cercle authentifié (NIP-42) selon le mode de la station, matrice de règles par kind réglable par le Capitaine ; NIP-11 ; anti-abus (débit, tailles). NIP-01, 09, 11, 17, 40, 42, 45 (`COUNT`), 50 (`search`), 59 et 70. |
+| **`astro-sync`** | `Projector` (événement → requêtes SQL, pur et indépendant de l'ordre), `replay`, `Crawler` N² clé par clé, mesure de réplication, client WebSocket (`ws://`, `wss://` rustls), envoi de messages chiffrés. |
+| **`astro-dav`** | WebDAV classe 1+2 sur uCloud chiffré (GET/Range, PUT en flux, PROPFIND, MKCOL, MOVE, COPY, LOCK, PROPPATCH), manifeste ancré sur Nostr/IPFS, tiroir système `/_/` (coffre, contacts, agenda), liens d'invité `/s/<slug>#clé` et **invitations** `/i/<jeton>`, **miniatures WebP**, dépôt hors WebDAV (`ingest`), magasin de blobs (disque / Kubo) et **bassin partagé** entre plans (`pool`, `adopt`), jetons par appareil (`devices`), **CardDAV** (`/_/Contacts`, vCard 3.0/4.0 avec `X-NOSTR-PUBKEY`/`X-G1-PUBKEY`), **CalDAV** (`/_/Calendrier`), `sync-collection` (journal `dav_changes`). |
+| **`astro-facecloud`** | Reconnaissance de visages : file de photos, moteur d'inférence (Brain HTTP ou ONNX local, commutable à chaud), seuils 0,82 / 0,55, partage automatique aux amis réciproques (seuls avec le propriétaire, ≥ 0,88), validation « est-ce X ? ». |
 | **`astro-bro`** | Agent personnel **BRO LifeOS** : mémoire sémantique `bge-m3` 1024D (4 emplacements), **cycle RÊVE** (condensation à 150 souvenirs), garde-fous anti-secrets, bus de commandes par messages privés. |
-| **`astro-p2p`** | Maillage libp2p (TCP/QUIC, Noise, Yamux, réseau privé par `swarm.key`, circuit relay, DCUtR), tunnels DRAGON `/x/<service>-<PeerID>` avec **garde par flux et watchdog de session**, échange de blobs, **routage intelligent** (Power-Score, `power`/`closest`/`random`). |
+| **`astro-p2p`** | Maillage libp2p (TCP/QUIC, Noise, Yamux, réseau privé par `swarm.key`, circuit relay, DCUtR), tunnels DRAGON `/x/<service>-<PeerID>` avec **garde par flux et watchdog de session**, échange de blobs (avec écluse par CID), **routage intelligent** (Power-Score, `power`/`closest`/`random`). |
 | **`astro-duniter`** | Client Duniter v2s natif (subxt) : soldes, virements avec mémo, surveillance des transferts, bascule entre nœuds *avant* envoi seulement, signature hors ligne. |
 | **`astro-g1-runtime`** | Métadonnées du runtime Ğ1, compilées à part pour isoler le coût de `subxt`. |
 | **`astro-economy`** | Registre **Ğ1-N²** (kind 30852) validé intégralement, règle des **3×1/3**, **Love Ledger**. |
-| **`astro-lifecycle`** | Détection des identités locales (NODE, Capitaine, MULTIPASS), machine d'état hebdomadaire (loyer → grâce → suspension), reconstruction au replay, déménagement `home:station`. |
+| **`astro-lifecycle`** | Détection des identités locales (NODE, Capitaine, MULTIPASS), machine d'état hebdomadaire (loyer → grâce → suspension), reconstruction au replay, déménagement `home:station`, **clé de secours** (Shamir 2 sur 3). |
 | **`astro-plugins`** | Runtime **WebAssembly isolé** (wasmtime) : aucune capacité, carburant et mémoire bornés, appels sans état. |
-| **`astro-ui`** | Façade web : ACME, TLS, reverse proxy, **application web embarquée** (HTML/CSS/JS sans framework, ≈ 50,5 Ko bruts, **15,7 Ko en Brotli, 17,7 Ko en Gzip**, PWA), API `/api/v1`, `/health`, flux SSE. |
+| **`astro-ui`** | Façade web : ACME, TLS, reverse proxy, **application web embarquée** (HTML/CSS/JS sans framework, PWA ; coque < 20 Ko compressés, écrans chargés à la demande, budgets vérifiés par la CI), pages publiques (`/register`, `/restore`, `/stations`, `/w`, `/claim`, `/scan`), API `/api/v1`, `/health`, flux SSE. |
 
 ---
 
@@ -344,7 +348,7 @@ Le workspace compte **16 crates** (+ le binaire `astroportd`, qui est aussi une 
 ```bash
 # Prérequis : Rust ≥ 1.85, un compilateur C (SQLite et libwebp sont compilés depuis leurs sources)
 cargo build --release
-# → target/release/astroportd
+# → target/release/astroportd ; avec l'inférence locale : cargo build --release --features onnx
 
 # Toutes les plateformes Linux supportées (x86_64, aarch64/Raspberry Pi 4-5, armv7/Pi 2-3, statiques musl) ;
 # sur un Mac : ./build-all.sh --targets aarch64-apple-darwin (voir docs/MACOS.md) :
@@ -360,8 +364,9 @@ astroportd doctor --db uplanet.db --game-dir ~/.zen/game
 ```
 
 `doctor` ne modifie rien : il vérifie l'identité locale, les permissions `0600` des secrets et de la base, le mode WAL
-et l'intégrité de SQLite, la validité des certificats ACME (alerte sous 30 jours) et l'horloge (prochain 20h12
-solaire). Code de sortie `1` si une vérification échoue.
+et l'intégrité de SQLite, la validité des certificats ACME (alerte sous 30 jours), l'horloge (prochain 20h12 solaire),
+la bibliothèque ONNX, et quelques réglages du système (`LimitNOFILE`, linger systemd, `PasswordAuthentication` de sshd,
+plafond de journald). Code de sortie `1` si une vérification échoue.
 
 ### Démarrer une station
 
@@ -369,12 +374,13 @@ solaire). Code de sortie `1` si une vérification échoue.
 # Essai local, sans domaine (HTTP en clair sur 127.0.0.1:8090) :
 astroportd serve --db uplanet.db --blobs blobs
 
-# Station publique : HTTPS automatique, maillage P2P, BRO, soldes Ğ1 :
+# Station publique : HTTPS automatique, constellation ẐEN, BRO avec Ollama, un service de plus partagé aux amis
+# (maillage P2P sur le port 4101 et nœuds Ğ1 découverts d'eux-mêmes : rien à ajouter) :
 astroportd serve --db uplanet.db --blobs blobs \
     --domain station.exemple.org --acme-email moi@exemple.org \
-    --p2p-listen /ip4/0.0.0.0/tcp/4101 --swarm-key swarm.key \
-    --p2p-expose comfyui=127.0.0.1:8188 \
-    --ollama http://127.0.0.1:11434 --duniter-rpc wss://g1.axiom-team.fr/ws
+    --swarm-key swarm.key \
+    --p2p-expose jellyfin=127.0.0.1:8096 \
+    --ollama http://127.0.0.1:11434
 
 # Derrière un reverse proxy (Nginx Proxy Manager…) : il garde le certificat, la station écoute sur 0.0.0.0:8090
 astroportd serve --db uplanet.db --blobs blobs --public-domain station.exemple.org
@@ -390,48 +396,54 @@ automatiquement dans `~/.zen/game` (`--game-dir` ou `ASTRO_GAME_DIR`).
 
 | Commande | Rôle |
 |---|---|
-| `astroportd init [--mode origin\|zen]` | Assistant d'installation : rituel **Y-Level**, choix ORIGIN/ẐEN, dossiers de la station, service systemd (`--systemd`). |
+| `astroportd init [--mode origin\|zen] [--found-constellation] [--join <jeton>]` | Assistant d'installation : rituel **Y-Level**, choix ORIGIN/ẐEN, PAF de la machine, visio, dossiers de la station, service systemd (`--systemd`). |
 | `astroportd ylevel [--verify]` | Affiche (ou vérifie, code 1 si faux) la correspondance SSH ↔ PeerID IPFS ↔ Ğ1 ↔ Nostr. |
-| `astroportd multipass create <email> [--captain]` / `multipass list` | Crée (et liste) les MULTIPASS de la station ; secrets affichés une seule fois. |
-| `astroportd parrainer` / `astroportd init --join <jeton>` | Station marraine : jeton à usage unique (24 h) qui fait rejoindre sa constellation à une nouvelle station (swarm.key chiffrée, amorçage P2P). |
+| `astroportd multipass create <email> [--captain]` · `list` · `card <email> [--part N] [--svg]` · `recover -` | Crée et liste les MULTIPASS ; réaffiche une part de la clé de secours ; rétablit un compte. |
+| `astroportd parrainer [--hours N]` | Station marraine : jeton à usage unique (24 h par défaut) qui fait rejoindre sa constellation à une nouvelle station (`init --join`). |
 | `astroportd token <email>` | Jeton de connexion d'un compte hébergé (interface web, clients WebDAV). |
-| `astroportd replay --db uplanet.db [--from ws://relai --hosted <hex>] [--blobs blobs]` | Reconstruit la base depuis les événements (et restaure uCloud depuis les manifestes). |
-| `astroportd route ollama --mode closest` | Meilleure station de la constellation qui vous ouvre un service (demande au démon qui tourne). |
+| `astroportd replay --db uplanet.db [--from ws://relai --hosted <hex>] [--blobs blobs --secrets ~/.zen/game/nostr]` | Reconstruit la base depuis les événements (et restaure uCloud depuis les manifestes). |
+| `astroportd route ollama --mode closest` · `tunnel route` | Meilleure station de la constellation qui vous ouvre un service (demande au démon qui tourne). |
 | `astroportd tunnel list \| connect <service> [--port N] \| close \| policy \| mode \| allow \| revoke \| share \| unshare` | Services des autres stations (accès local à chaud) et politique de tunnels de cette station, via `control.sock`. |
-| `astroportd id` · `swarm peers \| connect <adresse> \| addrs listen` · `bootstrap [list \| add <adresse> \| rm <adresse>]` · `p2p ls \| forward <service> \| close <service>` | Même nomenclature que `ipfs id`, `ipfs swarm`, `ipfs bootstrap` et `ipfs p2p` (`p2p` = `tunnel list\|connect\|close`), via `control.sock`. |
-| `astroportd repo stat \| gc \| verify` | Comme `ipfs repo` : poids et orphelins du bassin de blobs (`stat`), suppression des orphelins de plus de 24 h (`gc`), recalcul des empreintes d'un lot de blobs, code 1 si l'un manque ou est corrompu (`verify`, partage le curseur du contrôle de 20h12). |
+| `astroportd id` · `swarm peers \| connect <adresse> \| addrs listen` · `bootstrap [list \| add \| rm]` · `p2p ls \| forward \| close` | Même nomenclature que `ipfs id`, `ipfs swarm`, `ipfs bootstrap` et `ipfs p2p`, via `control.sock`. |
+| `astroportd repo stat \| gc \| verify` | Comme `ipfs repo` : poids et orphelins du bassin de blobs, suppression des orphelins de plus de 24 h, vérification d'un lot de blobs (code 1 si l'un manque ou est corrompu). |
 | `astroportd swarm-key` | Génère la clé d'un réseau privé de constellation. |
-| `astroportd plane-setup list \| add \| remove` · `astroportd planes [--check]` | Plusieurs UPlanet (ORIGIN, ZEN1…) dans un seul processus : assistant, puis démarrage de tous les plans. |
-| `astroportd pool-status` · `bridge-copy` | Bassin de blobs partagé entre plans : état et orphelins ; adoption sans copie d'un plan à l'autre. |
-| `astroportd pull-webdav` | Remplit un uCloud depuis un autre serveur WebDAV. |
-| `astroportd doctor` · `face-check` | Diagnostic de la station ; vérification de l'inférence faciale locale (ONNX). |
+| `astroportd plane-setup list \| add \| remove` · `astroportd planes [--check]` · `--plane <nom>` | Plusieurs UPlanet (ORIGIN, ZEN1…) dans un seul processus : assistant, démarrage de tous les plans, choix du plan d'une commande. |
+| `astroportd pool-status [--sweep]` · `bridge-copy --same-person [--cross-swarm]` | Bassin de blobs partagé entre plans : état et orphelins ; adoption sans copie d'un plan à l'autre (jamais d'un plan privé vers ORIGIN). |
+| `astroportd pull-webdav <compte> list \| add \| remove \| run` | Remplit un uCloud depuis un autre serveur WebDAV (Nextcloud, ownCloud…). |
+| `astroportd doctor` · `face-check` · `embed-check` | Diagnostic de la station ; vérification de l'inférence faciale et des embeddings locaux (ONNX) par un vrai calcul. |
 | `astroportd plugin [--dir plugins] list \| call <nom> '<json>'` | Gère les extensions Wasm. |
 | `astroportd relay`, `astroportd dav` | Le relai seul, le WebDAV seul. |
 
 ### L'économie en une page
 
 - **Loyer** : un MULTIPASS paie chaque semaine ; sociétaire : parts validées.
-- **3×1/3** : chaque semaine, le surplus est ventilé (impôt sur les sociétés marginal 15 %/25 % au seuil de 42 500,
-  prime du Capitaine 1 % du net, puis trois tiers égaux : trésorerie, R&D, actifs ; le résidu va à la trésorerie).
+- **3×PAF puis 3×1/3** : chaque semaine, la station règle 1×PAF à la machine (NODE) et 2×PAF au Capitaine, puis le
+  surplus est ventilé (impôt sur les sociétés marginal 15 %/25 % au seuil de 42 500, prime du Capitaine 1 % du net, puis
+  trois tiers égaux : trésorerie, R&D, actifs ; le résidu va à la trésorerie).
 - **Ni location ni vente de ressources** : ni disque, ni GPU ne se louent. Le quota d'un compte est un réglage de sa
   formule (MULTIPASS ou ZenCard) ; le soutien entre Capitaines, GPU compris, passe par l'entraide.
-- **Opex et Capex** : l'écran MULTIPASS sépare les **redevances d'usage** (Ẑen Opex : loyer) des **parts
-  d'investissement matériel** (Ẑen Capex, ZenCard : capital, amorti).
-- **Films et séries** : voir §10.
+- **Redevances et parts** : *Moi › Mes Ẑen* sépare les **dépenses** (le loyer) des **parts de matériel** (capital,
+  amorti).
+- **Billets papier** : des Ğ1Billets imprimables (planche de 1 à 6), avec retour automatique à l'émetteur à l'échéance.
+- **Dons OpenCollective** convertis en Ẑen, configuration coopérative partagée et charte signée par les Capitaines.
 
 ---
 
 ## 5. Sécurité
 
 - **Pare-feu social** : le relai ne sert les contenus privés (messages, données applicatives) qu'aux membres
-  authentifiés du cercle N1/N2 ; les enveloppes NIP-59 ne sont acceptées d'un inconnu que vers un MULTIPASS hébergé, avec
+  authentifiés du cercle ; le cercle dépend du mode de la station (Forteresse : hébergés et amis réciproques ;
+  Village : + N¹ et N²). Les enveloppes NIP-59 ne sont acceptées d'un inconnu que vers un MULTIPASS hébergé, avec
   limite de débit.
-- **Authentification** : NIP-98 (anti-rejeu persistant, fenêtre de 120 s, liaison URL + méthode + empreinte du corps) ou
-  jeton dérivé `HMAC(secret de station, hex du compte)`. Aucun cookie : l'API n'est pas exposée aux requêtes forgées.
+- **Authentification** : NIP-98 (anti-rejeu persistant, fenêtre de 120 s, liaison URL + méthode + empreinte du corps),
+  code PASS (verrouillé après 5 échecs) ou jeton dérivé `HMAC(secret de station, hex du compte)`. Aucun cookie : l'API
+  n'est pas exposée aux requêtes forgées. Le PASS ne se tape que sur la station du membre.
+- **Recherche de station** (`/api/v1/locate`) : bornée à 20 recherches par minute et par adresse ; elle ne révèle que
+  ce que le DID public du membre dit déjà, et n'envoie jamais vers une adresse douteuse.
 - **SSRF** : le téléchargement d'un document demandé par `#upload <URL>` ne joint que des adresses publiques (résolues
   puis vérifiées *avant* connexion, redirections revérifiées, HTTPS validé).
 - **Application web** : CSP stricte (`default-src 'none'`), aucun script ni style en ligne, aucun `innerHTML`.
-- **Plugins** : voir §7 — bulle sans capacité, bornes dures.
+- **Plugins** : voir [§7](#7-écrire-une-extension-webassembly) — bulle sans capacité, bornes dures.
 - **Code** : `unsafe` interdit (hors la seule initialisation de `sqlite-vec`), `unwrap` interdit en production,
   `clippy` sans avertissement, documentation obligatoire.
 
@@ -440,14 +452,17 @@ automatiquement dans `~/.zen/game` (`--game-dir` ou `ASTRO_GAME_DIR`).
 ## 6. Développer sur astroportd
 
 ```bash
-cargo test --workspace      # ~ 570 tests : unitaires, intégration, bout en bout (vraie base, vrai WebDAV, vrais pairs libp2p)
-cargo clippy --workspace --all-targets
+cargo test --workspace --locked                        # ≈ 930 tests : unitaires, intégration, bout en bout
+cargo clippy --workspace --all-targets -- -D warnings
+for t in crates/astro-ui/tests/*.mjs; do node "$t"; done   # règles de l'interface (cockpit, accueil, écluses…)
+python3 docs/build_guide.py --check                    # le guide HTML est à jour
 ```
 
 Conventions : montants en centimes entiers ; une erreur n'est jamais avalée (elle remonte, ou elle est dite sur le bus
 d'activité) ; les décisions qui dépendent de l'état se prennent **en SQL** pour que le replay soit indépendant de
 l'ordre ; tout test hostile (SSRF, boucle infinie, dépassement mémoire) a son cas. Le dossier `tests/` du binaire
-contient les scénarios complets : cycle de vie et économie, interface web, `#upload`.
+contient les scénarios complets (vraie base, vrai WebDAV, vrais pairs libp2p) : cycle de vie et économie, interface
+web, `#upload`. Aucun test ne requiert de service externe.
 
 ---
 
@@ -522,51 +537,33 @@ en contient, dont des modules *hostiles* (imports interdits, boucle infinie, mé
 
 ---
 
-## 8. État du projet et limites connues
+## 8. Toutes les fonctions, en bref
 
-Livré et testé : relai, uCloud chiffré avec manifeste rejouable et miniatures, FaceCloud, BRO (mémoire, RÊVE, bus),
-économie 3×1/3, cycle de vie, maillage P2P et tunnels gardés, plugins Wasm, application web PWA,
-`doctor`.
+Le détail de chacune est dans le [guide du Capitaine](docs/GUIDE.md).
 
-À connaître :
-- **MULTIPASS** : la création reprend l'essentiel de `make_NOSTRCARD.sh`, mais **pas** le découpage SSSS 2-sur-3 de
-  DISCO (remplacé par la **clé de secours** en 3 parts, P1 en QR), l'import de la clé IPNS dans Kubo, l'envoi du zine par
-  email, la ZenCard ni la primo-transaction. Retrouver un compte repose donc sur cette carte, remise **une seule fois** ;
-- **un `serve` = une constellation** : raccorder une même station à ORIGIN **et** à des UPlanet privées passe par `astroportd planes` (un seul processus, même identité Y-Level, un `serve` complet par plan : base, dossier de comptes, réseau P2P privé, port). Routage par nom d'hôte (`--front`), `--plane` sur les commandes et sélecteur de plan dans l'en-tête sont faits ; le **miroir entre plans** (règles de synchronisation, charte) reste à faire ;
-- **macOS** : le binaire est portable (POSIX, `rustix`), la détection du matériel lit `sysctl hw.memsize` et compte la
-  mémoire unifiée d'un Mac Apple Silicon comme VRAM, mais **aucune compilation sur macOS n'a encore été éprouvée** : la CI
-  macOS et les archives `*-apple-darwin` sont « au mieux » ([docs/MACOS.md](docs/MACOS.md)) ;
-- le client Duniter (`subxt`) n'a été éprouvé que hors ligne : son comportement sur un nœud réel reste à valider ;
-- une nuit de 20h12 manquée n'est rejouée qu'au démarrage et seulement pour la veille et le jour courant ;
-- l'inférence faciale a deux moteurs : un « Brain » HTTP, ou l'inférence **locale** (SCRFD + ArcFace par ONNX Runtime, `--face-models`, binaire compilé avec `--features onnx`, `astroportd face-check` pour diagnostiquer). Le binaire publié sans la fonction `onnx`, et les binaires statiques (musl, `libonnxruntime` introuvable), n'ont que le Brain HTTP ; les modèles ne sont jamais embarqués dans le binaire ;
-- les embeddings de la mémoire de BRO (et de la recherche sémantique) ont deux moteurs : Ollama (`--ollama`, `--embed-model bge-m3`) ou `bge-m3` **local** en int8 par ONNX Runtime (`--embed-models DIR`, binaire compilé avec `--features onnx`). Le dossier contient `bge-m3-int8.onnx` (`onnx/model_int8.onnx` de `Xenova/bge-m3`, MIT, ≈ 540 Mo) et `bge-m3-tokenizer.json` ; sans option, `~/.zen/astroportd/models` et `<données>/models` sont essayés. Mêmes 1024 dimensions ; le calcul reproduit `onnxruntime` sur ce fichier (cosinus 1,000), mais le modèle est quantifié : ses vecteurs ne sont pas ceux d'Ollama (écart non mesuré), gardez un seul moteur par mémoire ou ré-indexez. Pic mémoire ≈ 1,3 Go, ≈ 20 ms pour une phrase courte, ≈ 170 ms pour 200 jetons (CPU, 12 cœurs). Ollama reste nécessaire pour les résumés RÊVE ; `--embed-models` sur un binaire sans `onnx`, ou avec un dossier incomplet, est une erreur ; sans l'option, des fichiers inutilisables sont signalés puis Ollama prend le relais, jamais un repli muet ;
-- `install.sh` **s'adapte à la machine** : il mesure l'architecture, les cœurs (et AVX2/dotprod pour l'int8), la mémoire, la place libre et la **vitesse d'écriture du disque** (SD, HDD, SSD, NVMe), le GPU et Ollama, puis recommande un profil — *léger* (rien en local : visages et mémoire passent par une autre machine), *standard* (visages locaux, embeddings locaux si la machine les porte, fils de calcul limités à la moitié des cœurs) ou *confort* (tout en local, tous les cœurs ; ≥ 8 Go et ≥ 6 cœurs). Au terminal on peut le changer ; avec `--yes`, la recommandation s'applique. `--profile leger|standard|confort`, `--embed` / `--no-embed`, `--no-face` forcent un choix ; `--check-hardware` n'affiche que le diagnostic. Les modèles sont vérifiés par SHA-256 (bge-m3 : révision Hugging Face figée) ; les fils choisis sont inscrits dans `station.conf` et dans la commande de démarrage (`--face-threads`, `--embed-threads`). `astroportd embed-check` vérifie ensuite l'ensemble par un vrai calcul.
-- **adresses de la coopérative** (`src/dnslink.rs`) : la station et chaque MULTIPASS hébergé s'inscrivent dans la zone DNS OVH de la coopérative par un enregistrement DNSLink `_dnslink.<nom>.<zone>` → `/ipns/<espace IPNS>` ; toute passerelle IPFS résout alors `<nom>.<zone>`. Reprend `Astroport.ONE/admin/system/ovh.me.sh` (API OVH v1, signature HMAC-SHA1, mêmes noms que `clyuseryomail.sh`, TTL 0) : les deux outils écrivent les **mêmes** enregistrements. Identifiants dans la configuration coopérative (`OVH_APP_KEY`, `OVH_APP_SECRET`, `OVH_CONSUMER_KEY`, `OVH_ZONE`, `astroport.one` par défaut). Un MULTIPASS s'appelle `<partie locale à l'envers>.<domaine>` (`geg-la@exemple.org` → `la.geg.exemple.org`), une station `<nom de machine>-<6 derniers caractères du PeerID>` (deux « raspberrypi » ne s'écrasent pas). Un passage 90 s après le démarrage puis toutes les 15 min n'appelle l'API que pour ce qui a changé ; jamais de suppression ; un échec est dans le bilan et alerte le Capitaine une fois. Carte *Adresses de la coopérative* du cockpit, avec « Enregistrer maintenant » ;
-- **accueil des membres** (`web/m-home.js`, `#/`) : trois gestes (photos, proches, assistant), « Bien démarrer » coché d'après l'état réel, alerte seulement au-delà de 90 % d'espace ; les chiffres (solde, loyer, disque) sont dans *Mes chiffres* (`#/chiffres`). Étapes testées par `node crates/astro-ui/tests/home_steps.mjs` ;
-- **mise en service du Capitaine** (cockpit) : tant qu'elle n'est pas finie, une liste cochée d'après l'état réel (domaine, P2P, autres stations, adresses de la coopérative, premier membre) ; l'accueil du Capitaine ouvre sur une carte « Votre station » ;
-- **cockpit du Capitaine** (`crates/astro-ui/web/m-cockpit.js`, onglet *Station*, `#/cockpit`) : un verdict unique (✅ Tout va bien · 🟠 N points à regarder · 🔴 Intervention nécessaire), les **3 actions les plus urgentes** avec leur bouton, **six étages** (Machine, Station, Constellation, Services et accès, Membres, Économie) chacun avec son voyant, et l'**essaim** (une carte par station : Power-Score, distance, en ligne ou vue, services partagés). Les règles sont une fonction pure (`analyze`), rejouée par `node crates/astro-ui/tests/cockpit_rules.mjs` (aussi en CI). Elles ne s'appuient que sur des données déjà exposées (santé, constellation, comptes, tunnels, file de tâches, régie) ; une source indisponible ne produit jamais de faux rouge. Les écrans détaillés restent à un clic (*Détails techniques*) ;
-- **tunnels et accès** (`src/tunnel_policy.rs`) : chaque service partagé (`ssh`, `comfyui`, `ollama`, plus ceux de `--p2p-expose`) a un mode réglé par le Capitaine dans Options › Tunnels, à chaud : `off`, `listed` (liste nominative, durée facultative), `friends` (Capitaines amis réciproques + liste), `swarm` (tout le réseau). **SSH est fermé par défaut en ẐEN** et ouvert aux Capitaines amis en ORIGIN ; il est offert au maillage (`--p2p-ssh`, `--p2p-comfyui`, `--p2p-ollama` : `hôte:port`, ou `none` pour ne pas l'offrir ; le relai Nostr n'est pas un tunnel réglable, son pare-feu NIP-42 le protège) mais refusé tant que le Capitaine ne l'a pas ouvert. Le bloc balisé `astroportd` de `~/.ssh/authorized_keys` suit la politique (clé jumelle de chaque pair nommé : elle n'ouvre une session que pour un Capitaine au niveau Y) ; chaque session SSH est journalisée. Retirer un accès coupe les sessions ouvertes (vérification chaque minute) ;
-- **assistance entre Capitaines amis** (`src/assist.rs`) : Options › Tunnels › Assistance. Le Capitaine demande de l'aide pour un service (SSH, ComfyUI, Ollama), pour une durée, à tous ses Capitaines amis ou à un seul (ou au premier qui accepte). **Rien n'est ouvert à l'envoi** : l'accès n'est accordé, à l'ami qui accepte seulement et jusqu'à expiration, que sur sa réponse. Messages NIP-59 entre Capitaines amis réciproques ; une demande expire sans réponse au bout de 48 h ;
-- **ouvrir l'accès à un service d'un ami : ligne de commande seulement** (`src/forwards.rs`, `src/control.rs`) : il n'y a **pas de console SSH dans le navigateur**. Déclarer, partager et régler le périmètre de **ses propres** services se fait dans Options › Tunnels ; **utiliser** ceux d'un ami s'ouvre à chaud avec `astroportd tunnel connect <service> --peer <PeerID>` (accès local `127.0.0.1:<port>`, fermé à l'échéance), puis le client `ssh` du Capitaine. Le socket de contrôle est celui du système de fichiers (même utilisateur), sans HTTP ni jeton.
-- **bibliothèque** (`src/library.rs`, écran `#/library`) : « ce jour-là » (jour du navigateur), chronologie par mois chargée à la demande, recherche à filtres (nom et description, type, personne, dates, zone) paginée par curseur, doublons exacts (SHA-256 du clair) et visuels (dHash 64 bits calculé avec la miniature, distance de Hamming ≤ 6, rattrapé la nuit pour les photos déjà là) avec suppression **confirmée**, et `POST /api/v1/ucloud/have` pour qu'un client n'envoie que ce qui manque. Tout est par compte : un contenu présent chez un autre compte ne se devine jamais.
-- **santé du stockage et des tâches** : à 20h12, `src/integrity.rs` relit par lots les blobs référencés (absents ou corrompus signalés au Capitaine, rien n'est réparé ni supprimé) ; Options › File de traitement montre les tâches en attente, en cours et abandonnées, avec relance.
-- **sauvegarde privée** (`src/private_backup.rs`) : un MULTIPASS peut faire héberger ses fichiers non partagés et ses contacts, chiffrés, chez un ami **qui l'accepte** et fixe le volume (compté dans son quota). Envoi une fois par nuit à 20h12, retrait après 7 jours d'un blob dont le fichier a disparu. Le **manifeste** de l'uCloud part chez l'ami avec les fichiers. **Restauration automatique** (carte secrète, voir plus haut) : l'ami renvoie sans rien faire, mais seulement s'il est **joignable** et **réciproque** ; un fichier qu'un autre ami vous avait envoyé revient seulement si cet ami est en ligne. Sans manifeste retrouvé en 3 jours, le compte repart à neuf ;
-- le registre du capital (**ẐEN Capex**) est projeté depuis `.assets[]` du DID du NODE (kind 30800, `d` = PeerID) :
-  l'instantané le plus récent remplace le précédent, identique en temps réel et au replay ;
+| Fonction | En bref | Où |
+|---|---|---|
+| **Accueil des membres** | Quatre gestes (photos, argent, proches, assistant), *Pour vous* (ce qui attend un geste), *Bien démarrer* coché d'après l'état réel. | `web/m-home.js` · [guide](docs/GUIDE.md#etape-7) |
+| **Cockpit du Capitaine** | Un verdict (✅ / 🟠 / 🔴), les 3 actions les plus urgentes, six étages avec voyant, mise en service cochée d'après l'état réel. Règles pures rejouées par `node crates/astro-ui/tests/cockpit_rules.mjs`. | `web/m-cockpit.js` · [guide](docs/GUIDE.md#etape-7b) |
+| **Écluses et modes** | Forteresse, Village, Place publique : cercle du relai, copie, inscriptions, photos, écriture publique. | `src/locks.rs`, `astro_db::station_mode` · [guide](docs/GUIDE.md#ecluses) |
+| **Portail `/stations`** | « Je suis nouveau » / « J'ai déjà un MULTIPASS » ; connexion en deux temps. | `src/locate.rs`, `web/stations.js` · [guide](docs/GUIDE.md#annuaire) |
+| **Conversations et visio** | Messages privés chiffrés (NIP-17), une personne présente dans plusieurs UPlanet ; appels de navigateur à navigateur, STUN et relais TURN sur le port de l'interface. | `src/chat.rs`, `src/turn.rs`, `src/presence.rs` · [guide](docs/GUIDE.md#visio) |
+| **Coffre de mots de passe et agents** | Fichiers KeePass `/_/Coffre/*.kdbx` ; serveur MCP (`POST /mcp`) pour les agents, chaque demande attend l'accord du membre. | `src/agents.rs` · [guide](docs/GUIDE.md#etape-8bis-b) |
+| **Site public et vigie** | `/site/<membre>` servi depuis `/Public` ; la vigie de 20h12 signale photos géolocalisées ou signées et fichiers sensibles. | `src/public_site.rs`, `src/privacy_watch.rs` · [guide](docs/GUIDE.md#etape-8bis-m) |
+| **Bibliothèque** | « Ce jour-là », chronologie, recherche à filtres, doublons exacts (SHA-256 du clair) et visuels (dHash 64 bits, distance de Hamming ≤ 6 ; suppression confirmée), `POST /api/v1/ucloud/have`. Tout est par compte. | `src/library.rs` |
+| **Ranger et reprendre** | Rangement du uCloud par type ; reprise depuis Nextcloud/ownCloud ; un jeton confiné par appareil. | `src/organize.rs`, `src/webdav_pull.rs` · [guide](docs/GUIDE.md#etape-8bis-d) |
+| **Sauvegarde privée** | Fichiers non partagés et contacts, chiffrés, chez un ami **qui l'accepte** et fixe le volume ; envoi à 20h12 ; restauration automatique. | `src/private_backup.rs` · [guide](docs/GUIDE.md#secours) |
+| **Santé du stockage** | Relecture nocturne des blobs (absents ou corrompus signalés, rien n'est supprimé) ; file de traitement avec relance. | `src/integrity.rs` |
+| **Tunnels et accès** | Par service : fermé, liste nominative, Capitaines amis, tout le réseau ; bloc `authorized_keys` géré ; sessions journalisées et coupées au retrait. | `src/tunnel_policy.rs` · [guide](docs/GUIDE.md#etape-8ter) |
+| **Assistance entre Capitaines** | Demander de l'aide pour un service et une durée ; rien ne s'ouvre avant qu'un ami accepte. | `src/assist.rs` |
+| **Adresses de la coopérative** | DNSLink `_dnslink.<nom>.<zone>` → IPNS pour la station (`<machine>-<6 derniers caractères du PeerID>`) et chaque MULTIPASS (`geg-la@exemple.org` → `la.geg.exemple.org`) ; API OVH, mêmes enregistrements que `ovh.me.sh`, jamais de suppression. | `src/dnslink.rs` · [guide](docs/GUIDE.md#etape-9b) |
+| **Économie** | Loyer, 3×PAF, 3×1/3, Love Ledger, primo-transaction à la première connexion, garde contre les intrusions, Ğ1Billets, dons OpenCollective, capital (ZenCard) projeté depuis le DID du NODE. | `src/settlement.rs`, `src/billet.rs`, `src/oc_emission.rs` · [guide](docs/GUIDE.md#partie-3) |
+| **Plusieurs UPlanet** | ORIGIN et des UPlanet privées dans un seul processus, bassin de fichiers commun, passages contrôlés. | `src/plane.rs`, `src/bridge.rs` · [guide](docs/GUIDE.md#etape-8bis-i) |
+| **Mémoire de BRO** | Embeddings par Ollama ou `bge-m3` **local** en int8 (`--embed-models`, binaire `onnx`) ; chaque membre déclare son IA (Ollama, Anthropic, Gemini), chiffrée. | `crates/astro-bro`, `src/member_ai.rs` |
 
 ---
 
-## 9. Contribuer
-
-Les issues et les pull requests sont les bienvenues ([issues](https://github.com/papiche/astroportd/issues)). Avant de proposer un changement : `cargo test --workspace` et
-`cargo clippy --workspace --all-targets` doivent passer sans avertissement. Les messages de commit s'écrivent sans
-mention de co-auteur.
-
-*Astroport est un bien commun : forkez-le, hébergez-le, faites-le vôtre.*
-
----
-
-## 10. Films et séries : la copie privée
+## 9. Films et séries : la copie privée
 
 astroportd **ne traite pas les médias** : c'est un serveur WebDAV qui partage en P2P, N¹ ou N². Le plugin système
 [`media`](https://github.com/papiche/astroportd-plugins/tree/main/media) (héritage d'`ajouter_media.sh`) sonde, réencode,
@@ -575,7 +572,7 @@ télécharge, écrit dans l'uCloud du membre (`/Vidéos/Films`, `/Vidéos/Série
 fait de ces événements :
 
 1. **Copie privée** : le plugin pose lui-même, au premier dépôt, l'attestation locale du titulaire (dépôts pour son usage
-   strictement privé, article L. 122-5, 2° du CPI). Rien n'est publié (pas d'événement 31903) et la station n'en lit rien.
+   strictement privé, article L. 122-5, 2° du CPI). Rien n'est publié et la station n'en lit rien.
 2. **Événement vidéo** NIP-71, écrit par le plugin : **kind 21** (> 60 s) ou **22** (≤ 60 s), `imeta` (NIP-94 : `url`, `m`,
    `x`, `dim`, `duration`, `bitrate`), genres en étiquettes **NIP-32**, `series_name` / `season_number` / `episode_number` /
    `episode_name`, tag NIP-70 `["-"]`. Le relai le traite comme n'importe quel événement (test d'interopérabilité
@@ -583,8 +580,44 @@ fait de ces événements :
 3. **Cercle N¹** : le relai ne livre un kind 21/22 qu'à son **auteur** et à ceux qu'il **suit** (N¹), jamais au reste du
    cercle N². Le N¹ se lit dans le **dernier kind 3 de l'auteur** stocké sur la station, qu'il soit hébergé ici ou sur une
    station distante de la constellation ; un lecteur authentifié (NIP-42) qui y figure est servi même s'il est inconnu
-   du cercle local. Le N¹ est rechargé à chaque rafraîchissement du cercle : une liste de contacts qui change prend
-   effet à ce rythme.
+   du cercle local. Le N¹ est rechargé à chaque rafraîchissement du cercle.
 
-Limite assumée : le fichier est chiffré dans l'uCloud, l'événement n'en publie ni la clé ni une URL lisible. Pour qu'un
-ami regarde, le titulaire lui envoie un lien de partage (`/s/<slug>#clé`).
+Le fichier reste chiffré dans l'uCloud et l'événement n'en publie ni la clé ni une URL lisible : pour qu'un ami regarde,
+le titulaire lui envoie un lien de partage (`/s/<slug>#clé`).
+
+---
+
+## 10. Limites connues
+
+Ce qui n'est pas fait, ou pas encore éprouvé :
+
+- **MULTIPASS** : la création ne reprend pas de `make_NOSTRCARD.sh` l'import de la clé IPNS dans Kubo, l'envoi du zine
+  par email, ni la création de la ZenCard (sa clé n'est pas tenue par astroportd).
+- **Entre plans d'une même machine** : les fichiers passent par adoption sans copie (`bridge-copy`), mais il n'y a ni
+  **miroir automatique** (règles de synchronisation), ni **ré-chiffrement** ; c'est pourquoi un plan privé ne verse
+  jamais vers ORIGIN.
+- **Ğ1 réelle** : les virements sont signés par le client natif (`subxt`), mais le seul essai sur le réseau réel est un
+  test manuel (`ASTRO_LIVE_G1`), ignoré en CI.
+- **macOS** : archives et CI « au mieux » (CI non bloquante) ; voir [docs/MACOS.md](docs/MACOS.md).
+- **Binaires statiques (musl)** : pas d'inférence locale ONNX ; visages et embeddings passent par une autre machine
+  (Brain HTTP, Ollama). Les modèles ne sont jamais embarqués dans le binaire.
+- **Mémoire de BRO** : les vecteurs `bge-m3` locaux (int8) ne sont pas ceux d'Ollama ; gardez un seul moteur par mémoire
+  ou ré-indexez. Les résumés RÊVE demandent Ollama.
+- **Nuit de 20h12** : une station éteinte ne rattrape que la nuit du jour et celle de la veille (la clôture
+  hebdomadaire, elle, rattrape 5 semaines).
+- **Services d'un ami : ligne de commande seulement.** Il n'y a pas de console SSH dans le navigateur : on ouvre le
+  service d'un ami avec `astroportd tunnel connect <service> --peer <PeerID>`, puis son propre client.
+- **Restauration** : seuls les amis **réciproques** et **joignables** renvoient vos fichiers ; un fichier qu'un autre ami
+  vous avait envoyé ne revient que s'il est en ligne ; sans manifeste retrouvé en 3 jours, le compte repart à neuf.
+- **Vigie de 20h12** : elle prévient, elle ne retire rien. Le numéro de série de l'appareil et le nom de son
+  propriétaire ne sont lus que sur les photos envoyées depuis la 1.4.0.
+
+---
+
+## 11. Contribuer
+
+Les issues et les pull requests sont les bienvenues ([issues](https://github.com/papiche/astroportd/issues)). Avant de
+proposer un changement, les commandes du [§6](#6-développer-sur-astroportd) doivent passer sans avertissement. Les
+messages de commit s'écrivent sans mention de co-auteur.
+
+*Astroport est un bien commun : forkez-le, hébergez-le, faites-le vôtre.*

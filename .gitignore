@@ -32,4 +32,4 @@ secret.*
 .DS_Store
 /tmp/
 
-/__pycache__/
+__pycache__/

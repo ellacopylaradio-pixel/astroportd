@@ -897,7 +897,9 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let stations = Arc::new(astroportd::beacon::Stations::new(db.clone(), uplanet_name.to_string(), services_peer.clone()));
     // Une machine qui rejoint la constellation prévient le Capitaine (une alerte par station, jamais au tout premier passage).
     background.push(tokio::spawn(Arc::new(astroportd::new_stations::NewStations::new(db.clone(), stations.clone(), activity.clone())).run(stop_watch.clone())));
-    // Le relai accepte les balises des stations sœurs (même `swarm_id`) : il sert d'annuaire s'il est le relai commun.
+    // Le relai accepte les balises des stations sœurs (même `swarm_id`) : il sert d'annuaire s'il est le relai commun. En
+    // ORIGIN, il accepte aussi celles des stations ouvertes des autres UPlanet (carte de toutes les constellations).
+    circle.set_federate(uplanet_name == astroportd::init::ORIGIN_UPLANETNAME);
     {
         let (circle, stations) = (circle.clone(), stations.clone());
         background.push(tokio::spawn(async move {

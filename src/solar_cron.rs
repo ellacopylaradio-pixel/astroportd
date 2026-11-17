@@ -17,7 +17,8 @@
 //!    pour la semaine finie le dimanche, avec rattrapage jusqu'à 5 semaines si la station était éteinte ;
 //! 8. émission de l'événement de santé économique (kind 30850, `d = economic-health`).
 //!
-//! Une station arrêtée à 20h12 ne rejoue pas la nuit manquée (sauf la clôture hebdomadaire, qui se rattrape).
+//! Une station arrêtée à 20h12 rattrape au démarrage la nuit du jour et celle de la veille, pas les plus anciennes
+//! (la clôture hebdomadaire, elle, rattrape 5 semaines).
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -350,7 +351,7 @@ impl<P: Publisher> Nightly<P> {
             gps += f.gps.len();
             sensitive += f.sensitive.len();
             if let Some(bus) = &self.activity {
-                bus.publish_to(astro_core::Audience::Owner(owner.clone()), "privacy", "vigie 20h12", f.message(), Some(serde_json::json!({ "gps": f.gps, "sensitive": f.sensitive })));
+                bus.publish_to(astro_core::Audience::Owner(owner.clone()), "privacy", "vigie 20h12", f.message(), Some(serde_json::json!({ "gps": f.gps, "identity": f.identity, "sensitive": f.sensitive })));
             }
         }
         Ok(format!("{} membre(s) prévenu(s) : {gps} photo(s) géolocalisée(s), {sensitive} fichier(s) sensible(s) dans Public (rien n'est modifié)", found.len()))

@@ -1,5 +1,5 @@
 'use strict';
-// Moi › Mon argent : solde, durée couverte, espace, loyer, parts de matériel. Reprend l'ancien écran « Mes chiffres » (#/chiffres), en mots simples.
+// Moi › Mes Ẑen : solde, durée couverte, espace, loyer, parts de matériel. Reprend l'ancien écran « Mes chiffres » (#/chiffres), en mots simples.
 const zen = c => (c == null ? '—' : (c / 100).toFixed(2));
 
 export default async function money(root, K) {
@@ -11,7 +11,7 @@ export default async function money(root, K) {
     const card = (title, ...kids) => h('section', { class: 'card' }, h('h2', {}, t(title)), ...kids);
     const big = (v, unit) => h('p', { class: 'big' }, v, h('small', { class: 'muted' }, ' ' + unit));
     root.replaceChildren(
-      h('h2', {}, t('Mon argent')),
+      h('h2', {}, t('Mes Ẑen')),
       h('div', { class: 'grid' },
         card('Solde',
           b.error ? h('p', { class: 'degraded', role: 'status' }, b.error) : [big(zen(b.zen_cents), 'Ẑen'), h('p', { class: 'muted' }, `${zen(b.g1_cents)} Ğ1`), b.stale ? h('p', { class: 'muted' }, t('Dernier solde connu : le réseau est lent.')) : null,

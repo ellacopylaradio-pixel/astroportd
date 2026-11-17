@@ -1,6 +1,6 @@
 # Audit : la machinerie des plans ne doit pas fuiter vers le membre
 
-État : **constat, aucun code modifié**. Règle visée : un membre ordinaire a *un compte, un coffre, des amis*. Seul le Capitaine voit les constellations, les plans, les passerelles. (`CLAUDE.md` : « ne JAMAIS afficher de jargon cryptographique à un membre ».)
+État (2026-11-17) : **en partie corrigé**. Faites : fuites 1 et 2 (carte « Mes autres comptes » sans constellation ni clé, bloc « clés » retiré de la fiche), 3 (plus de pastilles de plan dans les conversations), 4 (message d'erreur humain). Restent : fuite 5 (`#/constellation` ouvert aux membres depuis *Mes Ẑen*, avec « INTRUSION » et « Ğ1 maître »), fuite 7 (`src/invites.rs`), l'annonce automatique des comptes liés (volet B) et un test Node de non-régression. Les écrans Capitaine sont désormais déclarés dans `m-routes.js` (espace `station`), et non plus dans `CAP` d'`app.js`. Constat d'origine ci-dessous. Règle visée : un membre ordinaire a *un compte, un coffre, des amis*. Seul le Capitaine voit les constellations, les plans, les passerelles. (`CLAUDE.md` : « ne JAMAIS afficher de jargon cryptographique à un membre ».)
 
 Méthode : recherche des mots `plan`, `plane`, `constellation`, `UPlanet`, `ORIGIN`, `bridge`, `bassin`, `swarm`, `passerelle` dans toutes les pages web (`crates/astro-ui/web/`) et dans les messages d'erreur renvoyés par l'API, puis, pour chaque occurrence, **qui peut la voir** (les écrans Capitaine sont listés dans `CAP` d'`app.js` ; les routes Capitaine sont protégées côté serveur par `captain_only`).
 

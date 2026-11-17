@@ -366,7 +366,7 @@ export default {
 "Réseau": "Red",
 "Assistant": "Asistente",
 "Sauvegarde": "Copia de seguridad",
-"Mon argent": "Mi dinero",
+"Mes Ẑen": "Mis Ẑen",
 "Mon espace": "Mi espacio",
 "Dossiers": "Carpetas",
 "Carnet": "Agenda",

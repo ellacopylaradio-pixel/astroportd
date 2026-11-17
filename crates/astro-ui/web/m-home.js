@@ -1,6 +1,6 @@
 'use strict';
-// Accueil d'un membre : trois gestes (photos, proches, assistant), « Bien démarrer » coché d'après l'état réel, et une alerte
-// seulement si quelque chose le demande. Les chiffres (solde, loyer, disque…) sont dans Mon argent : #/money.
+// Accueil d'un membre : quatre gestes (photos, argent, proches, assistant ou smartphone), « Bien démarrer » coché d'après l'état réel, et une alerte
+// seulement si quelque chose le demande. Les chiffres (solde, loyer, disque…) sont dans Mes Ẑen : #/money.
 export function steps({ dash, faces, friends, backup, me, devices }) {
   const files = dash?.sovereignty?.encrypted_files || 0;
   const list = [
@@ -20,7 +20,8 @@ export function news({ faces, shares, backup, fp }) {
   // Un ami qui a perdu sa station attend ma confirmation : toujours en tête.
   for (const r of (backup?.hosting || []).filter(x => x.rescue).slice(0, 2)) list.push({ icon: '🆘', text: ['{0} a perdu sa station et vous demande de l\'aide', r.label], label: 'Répondre', href: '#/account?tab=securite' });
   // Vigie de Public (lisible par tous).
-  if (pv?.gps + pv?.sensitive) list.push({ icon: '🔒', text: ['{0} fichier(s) de Public en disent trop (lieu, mot de passe, contacts…)', pv.gps + pv.sensitive], label: 'Voir', href: '#/cloud?p=%2FPublic' });
+  const pvn = (pv?.gps || 0) + (pv?.identity || 0) + (pv?.sensitive || 0);
+  if (pvn) list.push({ icon: '🔒', text: ['{0} fichier(s) de Public en disent trop (lieu, mot de passe, contacts…)', pvn], label: 'Voir', href: '#/cloud?p=%2FPublic' });
   for (const b of (shares?.pending || []).slice(0, 2)) list.push({ icon: '📸', text: ['{0} photo(s) de {1} attendent votre accord pour lui être envoyées', b.count, b.name], label: 'Décider', href: '#/people/tri' });
   if (sug) list.push({ icon: '🫂', text: ['{0} visage(s) à confirmer', sug], label: 'Trier en 1 clic', href: '#/people/tri?grand' });
   else if (unk) list.push({ icon: '🫂', text: ['{0} visage(s) à nommer', unk], label: 'Trier en 1 clic', href: '#/people/tri?grand' });
@@ -43,7 +44,7 @@ export default async function home(root, K) {
       me.captain ? h('a', { class: 'card hm-cap', href: '#/cockpit' }, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, '⚓'), h('div', {}, h('strong', {}, t('Votre station')), h('p', { class: 'muted' }, health?.status === 'ok' ? t('✅ Tout fonctionne. Ouvrir le cockpit.') : health ? t('🟠 Quelque chose demande votre attention : ouvrir le cockpit.') : t('État inconnu : ouvrir le cockpit.')))) : null,
       h('div', { class: 'grid hm-tiles' },
         tile('📸', 'Mes photos', s.files ? t('{0} fichier(s)', s.files) : t('Envoyer des photos'), s.files ? '#/library' : '#/cloud'),
-        tile('💰', 'Mon argent', t('Solde, loyer, espace'), '#/money'),
+        tile('💰', 'Mes Ẑen', t('Solde, loyer, espace'), '#/money'),
         tile('👥', 'Mes proches', nFriends ? t('{0} ami(s)', nFriends) : t('Retrouver vos proches'), '#/people'),
         // Sans assistant (pas de Brain), le geste mis en avant est de quitter Google et Apple : la synchro du smartphone.
         me.ai ? tile('🤖', 'Mon assistant', t('BRO vous répond'), '#/bro') : tile('📱', 'Mon smartphone', nDevices ? t('{0} appareil(s) synchronisé(s)', nDevices) : t('Quitter Google et Apple : photos, contacts, agenda'), '#/account?tab=appareils')),

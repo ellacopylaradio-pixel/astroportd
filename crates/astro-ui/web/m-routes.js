@@ -19,7 +19,7 @@ const R = [
   ['/chat', 'm-chat.js', 'me', 'people', 'Conversations', null, 'Conversations'],
   ['/people/tri', 'm-people.js', 'me', 'people', null, '/people', 'Trier les visages'],
   ['/account', 'm-account.js', 'me', 'me', 'Compte', null, 'Mon compte'],
-  ['/money', 'm-money.js', 'me', 'me', 'Mon argent', null, 'Mon argent'],
+  ['/money', 'm-money.js', 'me', 'me', 'Mes Ẑen', null, 'Mes Ẑen'],
   ['/replication', 'm-replication.js', 'me', 'me', 'Sauvegarde', null, 'Sauvegarde'],
   ['/billets', 'm-billets.js', 'me', 'me', null, '/money', 'Billets'],
   ['/constellation', 'm-constellation.js', 'both', null, null, null, 'Constellation'],
@@ -35,7 +35,7 @@ const R = [
 export const ROUTES = R.map(([path, file, space, tab, seg, parent, title]) => ({ path, file, space, tab, seg, parent, title }));
 // Les adresses d'avant la refonte continuent de marcher.
 export const ALIASES = { '/chiffres': '/money', '/station': '/cockpit', '/contacts': '/people', '/sort': '/people/tri' };
-// Une route « both » vit dans l'espace Station pour le Capitaine qui y était, sinon dans « Mon argent ».
+// Une route « both » vit dans l'espace Station pour le Capitaine qui y était, sinon dans « Mes Ẑen ».
 const BOTH = { station: { tab: 'eco', seg: 'Constellation', parent: null }, me: { tab: 'me', seg: null, parent: '/money' } };
 
 const find = p => ROUTES.filter(r => p === r.path || (r.path !== '/' && p.startsWith(r.path + '/'))).sort((a, b) => b.path.length - a.path.length)[0];

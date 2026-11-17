@@ -254,8 +254,8 @@ pub async fn generate<B: BlobStore>(st: &Arc<DavState<B>>, owner: &str, path: &s
                     tx.execute("UPDATE ucloud_entries SET data = json_set(data, '$.thumb', json(?3)) WHERE owner_hex = ?1 AND cid = ?2", params![o, c, i])?;
                     // Jamais d'écrasement : une position ou une date déjà notées (import, saisie) gardent la priorité.
                     tx.execute(
-                        "UPDATE ucloud_entries SET lat = COALESCE(lat, ?3), lon = COALESCE(lon, ?4), taken_at = COALESCE(taken_at, ?5), phash = COALESCE(phash, ?6), data = json_set(data, '$.exif_scanned', 1) WHERE owner_hex = ?1 AND cid = ?2",
-                        params![o, c, exif_meta.lat, exif_meta.lon, exif_meta.taken_at, phash],
+                        "UPDATE ucloud_entries SET lat = COALESCE(lat, ?3), lon = COALESCE(lon, ?4), taken_at = COALESCE(taken_at, ?5), phash = COALESCE(phash, ?6), data = json_set(data, '$.exif_scanned', 1, '$.exif_ident', ?7) WHERE owner_hex = ?1 AND cid = ?2",
+                        params![o, c, exif_meta.lat, exif_meta.lon, exif_meta.taken_at, phash, i64::from(exif_meta.identifying)],
                     )?;
                     Ok(true)
                 })
@@ -276,8 +276,8 @@ pub async fn generate<B: BlobStore>(st: &Arc<DavState<B>>, owner: &str, path: &s
     st.db
         .writer()
         .execute(
-            "UPDATE ucloud_entries SET lat = COALESCE(ucloud_entries.lat, s.lat), lon = COALESCE(ucloud_entries.lon, s.lon), taken_at = COALESCE(ucloud_entries.taken_at, s.taken_at), phash = COALESCE(ucloud_entries.phash, s.phash), data = json_set(ucloud_entries.data, '$.exif_scanned', 1) \
-             FROM (SELECT lat, lon, taken_at, phash FROM ucloud_entries WHERE owner_hex = ?1 AND cid = ?3 AND (lat IS NOT NULL OR taken_at IS NOT NULL OR phash IS NOT NULL) LIMIT 1) s \
+            "UPDATE ucloud_entries SET lat = COALESCE(ucloud_entries.lat, s.lat), lon = COALESCE(ucloud_entries.lon, s.lon), taken_at = COALESCE(ucloud_entries.taken_at, s.taken_at), phash = COALESCE(ucloud_entries.phash, s.phash), data = json_set(ucloud_entries.data, '$.exif_scanned', 1, '$.exif_ident', s.ident) \
+             FROM (SELECT lat, lon, taken_at, phash, COALESCE(json_extract(data, '$.exif_ident'), 0) AS ident FROM ucloud_entries WHERE owner_hex = ?1 AND cid = ?3 AND (lat IS NOT NULL OR taken_at IS NOT NULL OR phash IS NOT NULL) LIMIT 1) s \
              WHERE ucloud_entries.owner_hex = ?1 AND ucloud_entries.path = ?2",
             vec![o.into(), p.into(), cid.clone().into()],
         )
@@ -342,8 +342,8 @@ pub async fn backfill_exif<B: BlobStore>(st: &Arc<DavState<B>>, owner: &str, lim
         st.db
             .writer()
             .execute(
-                "UPDATE ucloud_entries SET lat = COALESCE(lat, ?3), lon = COALESCE(lon, ?4), taken_at = COALESCE(taken_at, ?5), data = json_set(data, '$.exif_scanned', 1) WHERE owner_hex = ?1 AND cid = ?2",
-                vec![o.into(), c.into(), meta.lat.into(), meta.lon.into(), meta.taken_at.into()],
+                "UPDATE ucloud_entries SET lat = COALESCE(lat, ?3), lon = COALESCE(lon, ?4), taken_at = COALESCE(taken_at, ?5), data = json_set(data, '$.exif_scanned', 1, '$.exif_ident', ?6) WHERE owner_hex = ?1 AND cid = ?2",
+                vec![o.into(), c.into(), meta.lat.into(), meta.lon.into(), meta.taken_at.into(), i64::from(meta.identifying).into()],
             )
             .await?;
         stats.scanned += 1;

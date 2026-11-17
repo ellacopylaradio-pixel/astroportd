@@ -167,7 +167,7 @@ details.fold[open] > summary { margin-bottom: .6rem; }
   dt { margin-top: .5rem; font-size: .8rem; }
 }
 /* Décor des styles Aurore et Kraft (Sobre n'en a pas : ses variables de couleur sont toutes l'accent). */
-.tools { display: flex; align-items: center; gap: .4rem; }
+.tools { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: .4rem; }
 .tools select { width: auto; padding: .25rem .5rem; font-size: .8rem; border-radius: 2rem; background: var(--panel2); }
 .tools button { padding: .25rem .65rem; font-size: .9rem; line-height: 1.2; }
 :root:not([data-style=sobre]) h1 { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -198,7 +198,7 @@ details.fold[open] > summary { margin-bottom: .6rem; }
 }
 .grid + .card { margin-top: 1rem; }
 main > .card, main > div:not(.grid):not(.bar) > .card { margin-top: 1rem; }
-.tools #plane{max-width:4.6rem;text-overflow:ellipsis}
+.tools #plane{max-width:8rem;text-overflow:ellipsis}
 .dup-bar{position:sticky;top:0;background:var(--bg,Canvas);z-index:2;padding:.4rem 0;align-items:center}
 .dup-row{display:flex;align-items:center;gap:.6rem;margin:.3rem 0}.dup-th{width:4.5rem;flex:none;grid-template-columns:1fr}
 #view { position: relative; }

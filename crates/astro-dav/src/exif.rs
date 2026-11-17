@@ -4,6 +4,9 @@
 //! ne rend jamais d'erreur (une photo sans EXIF, ou à l'EXIF abîmé, est une photo comme une autre) et n'invente rien :
 //! une position hors du globe, ou `0, 0` (« île nulle », valeur des appareils sans signal GPS), est ignorée, et une date
 //! hors de 1990 → demain aussi.
+//!
+//! Elle note aussi si l'EXIF **identifie** quelqu'un (numéro de série de l'appareil ou de l'objectif, nom du propriétaire,
+//! auteur) : la vigie de `/Public` prévient alors le membre, car ces champs survivent tels quels à la publication.
 
 use std::io::Cursor;
 
@@ -12,6 +15,8 @@ use exif::{In, Reader, Tag, Value};
 /// Ce que l'EXIF d'une photo apprend.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ExifMeta {
+    /// L'EXIF porte un numéro de série (appareil, objectif), le nom du propriétaire ou un auteur.
+    pub identifying: bool,
     /// Latitude en degrés décimaux (nord positif).
     pub lat: Option<f64>,
     /// Longitude en degrés décimaux (est positif).
@@ -85,7 +90,8 @@ pub fn read(bytes: &[u8], now_secs: i64) -> ExifMeta {
         .or_else(|| ascii(&e, Tag::DateTimeDigitized))
         .and_then(|t| timestamp(&t))
         .filter(|t| (631_152_000..=now_secs + 86_400).contains(t)); // 1990-01-01 → demain
-    ExifMeta { lat, lon, taken_at }
+    let identifying = [Tag::BodySerialNumber, Tag::LensSerialNumber, Tag::CameraOwnerName, Tag::Artist].into_iter().any(|t| ascii(&e, t).is_some_and(|v| !v.is_empty()));
+    ExifMeta { identifying, lat, lon, taken_at }
 }
 
 #[cfg(test)]
@@ -167,6 +173,28 @@ mod tests {
         assert_eq!(read(&jpeg_with(&tiff((43, 0, 0, "N"), (1, 0, 0, "E"), "2099:01:01 00:00:00")), NOW).taken_at, None);
         assert_eq!(read(&jpeg_with(&tiff((43, 0, 0, "N"), (1, 0, 0, "E"), "pas une date")), NOW).taken_at, None);
         assert!(read(b"pas une image", NOW).is_empty() && read(&[0xFF, 0xD8, 0xFF, 0xD9], NOW).is_empty());
+    }
+
+    #[test]
+    fn a_serial_number_or_an_owner_name_identifies_the_photo() {
+        // IFD0 à une entrée ASCII (tag, texte) placée après l'IFD.
+        let ifd0 = |tag: u16, text: &str| {
+            let mut t = b"II*\0".to_vec();
+            t.extend(8u32.to_le_bytes());
+            t.extend(1u16.to_le_bytes());
+            t.extend(tag.to_le_bytes());
+            t.extend(2u16.to_le_bytes());
+            t.extend(u32::try_from(text.len() + 1).unwrap().to_le_bytes());
+            t.extend(26u32.to_le_bytes());
+            t.extend(0u32.to_le_bytes());
+            t.extend(text.as_bytes());
+            t.push(0);
+            t
+        };
+        assert!(read(&jpeg_with(&ifd0(0x013B, "Léa Martin")), NOW).identifying, "auteur");
+        assert!(!read(&jpeg_with(&ifd0(0x013B, "     ")), NOW).identifying, "auteur blanc");
+        assert!(!read(&jpeg_with(&ifd0(0x010F, "Canon")), NOW).identifying, "la marque seule n'identifie personne");
+        assert!(!read(&jpeg_with(&tiff((43, 0, 0, "N"), (1, 0, 0, "E"), "2024:07:14 15:03:22")), NOW).identifying);
     }
 
     #[test]

@@ -375,6 +375,30 @@ mod tests {
     }
 
     #[test]
+    fn the_origin_relay_lists_the_open_stations_of_every_uplanet_but_never_a_fortress() {
+        let t = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| vec![(*k).to_owned(), (*v).to_owned()]).collect::<Vec<_>>();
+        let beacon = |mode: Option<&str>| {
+            let mut tags = t(&[("d", "economic-health"), ("swarm_id", "g1Zen1"), ("station", "12D3KooWabc")]);
+            tags.extend(mode.map(|m| vec!["station:mode".to_owned(), m.to_owned()]));
+            ev(9, kind::ECONOMIC_HEALTH, tags)
+        };
+        assert!(crate::circle::is_open_beacon(&beacon(Some("village"))), "Village : annoncée");
+        assert!(crate::circle::is_open_beacon(&beacon(Some("place"))), "Place publique : annoncée");
+        assert!(!crate::circle::is_open_beacon(&beacon(Some("forteresse"))), "Forteresse : jamais hors de sa constellation");
+        assert!(!crate::circle::is_open_beacon(&beacon(None)), "sans mode (ancienne version) : refusée");
+        let no_peer = ev(9, kind::ECONOMIC_HEALTH, t(&[("d", "economic-health"), ("swarm_id", "g1Zen1"), ("station:mode", "village")]));
+        assert!(!crate::circle::is_open_beacon(&no_peer), "sans PeerID : refusée");
+        let note = ev(9, kind::TEXT_NOTE, t(&[("swarm_id", "g1Zen1"), ("station", "12D3KooWabc"), ("station:mode", "village")]));
+        assert!(!crate::circle::is_open_beacon(&note), "rien d'autre qu'une balise");
+        // Le cercle de la base : fédérateur seulement si on le lui dit (relai ORIGIN).
+        let db_circle = crate::circle::DbCircle::new();
+        db_circle.set_swarm_id("g1Origin".into());
+        assert!(!db_circle.accepts_beacon(&beacon(Some("village"))), "relai d'une UPlanet ẐEN : seulement ses propres stations");
+        db_circle.set_federate(true);
+        assert!(db_circle.accepts_beacon(&beacon(Some("village"))) && !db_circle.accepts_beacon(&beacon(Some("forteresse"))), "relai ORIGIN : les stations ouvertes de toutes les UPlanet");
+    }
+
+    #[test]
     fn public_kinds_are_open_to_anonymous_readers() {
         let p = Policy::default();
         let c = circle();

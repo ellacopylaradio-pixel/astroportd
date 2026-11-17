@@ -64,11 +64,10 @@ Toutes les stations d'une même constellation doivent avoir **exactement la mêm
 ### Fonder votre propre constellation
 
 ```bash
-astroportd swarm-key > swarm.key    # fabrique une nouvelle clé de réseau privé
-chmod 600 swarm.key
+astroportd init --mode zen --found-constellation    # fabrique la clé de réseau privé et prépare la station
 ```
 
-Copiez ensuite ce fichier sur **chaque** station de votre réseau, par un canal sûr (clé USB, copie chiffrée), puis lancez sur chacune `astroportd init --mode zen --swarm-key ./swarm.key`.
+Pour faire entrer une autre station, le plus simple est le **parrainage** : `astroportd parrainer` sur votre station donne un jeton à usage unique (24 h par défaut), et la nouvelle station lance `astroportd init --join '<jeton>'` : elle reçoit la `swarm.key` chiffrée et s'amorce sur la vôtre. Sinon, copiez `swarm.key` à la main sur **chaque** station, par un canal sûr (clé USB, copie chiffrée), puis lancez sur chacune `astroportd init --mode zen --swarm-key ./swarm.key`.
 
 ### Créer les comptes de vos membres
 
@@ -82,7 +81,7 @@ astroportd multipass create ami@exemple.org                   # les suivants sui
 astroportd multipass list
 ```
 
-Vos membres peuvent aussi s'inscrire eux-mêmes dans leur navigateur, sur la page **`/register`** de votre station. L'inscription est **ouverte par défaut** ; vous la réglez avec `--max-accounts` (nombre maximal de comptes) et `--register-per-hour` (inscriptions par heure et par adresse), ou vous la fermez avec `--no-register`.
+Vos membres peuvent aussi s'inscrire eux-mêmes dans leur navigateur, sur la page **`/register`** de votre station. L'inscription est **ouverte par défaut** ; vous la réglez avec `--max-accounts` (nombre maximal de comptes) et `--register-per-hour` (inscriptions par heure et par adresse), ou vous la fermez avec `--no-register`. Le mode **Forteresse** (*Ma station › Réseau › Écluses*) la ferme aussi, ainsi que les restaurations ; les invitations d'un membre restent possibles.
 
 > ⚠️ **Attention.** Les secrets d'un compte (SALT, PEPPER, nsec, code PASS, jeton web) ne sont affichés **qu'une seule fois**. Le membre doit les noter tout de suite. Détails à l'[étape 6 du guide](GUIDE.md#etape-5).
 
@@ -157,7 +156,7 @@ La même `swarm.key` donne le droit d'entrer ; le chemin entre les stations se f
 
 ### Ce que vous décidez : qui ouvre quoi
 
-Votre station offre au maillage trois services : **SSH** (l'accès à distance), **Ollama** (un moteur d'IA) et **ComfyUI** (un générateur d'images), plus ceux que vous ajoutez. Pour chacun, vous choisissez dans *Options › Tunnels* qui peut l'ouvrir :
+Votre station offre au maillage trois services : **SSH** (l'accès à distance), **Ollama** (un moteur d'IA) et **ComfyUI** (un générateur d'images), plus ceux que vous ajoutez. Pour chacun, vous choisissez dans *Ma station › Réseau › Réglages › Tunnels et accès* qui peut l'ouvrir :
 
 | Réglage | Qui peut ouvrir le service |
 |---|---|
@@ -179,7 +178,7 @@ Réglages de départ : Ollama et ComfyUI sont sur `friends`. Le SSH est **fermé
 FaceCloud reconnaît les visages sur vos photos et les partage avec les personnes concernées, dans le cercle de confiance :
 
 - **N¹**, ce sont vos amis réciproques : les personnes que vous suivez *et* qui vous suivent. **N²**, ce sont les amis de vos amis.
-- Quand FaceCloud reconnaît un ami N¹ sur une photo, il la **lui partage automatiquement** : copie dans son dossier `/Partages/De_<nom>/` s'il est sur la même station, sinon message chiffré vers sa station.
+- Quand FaceCloud reconnaît un ami N¹ **seul avec vous** sur une photo, il la **lui partage automatiquement** : copie dans son dossier `/Partages/De_<nom>/` s'il est sur la même station, sinon message chiffré vers sa station. Dès qu'une autre personne y paraît nettement, la photo attend votre accord ; chaque membre peut couper l'envoi automatique, et en mode Forteresse tout attend un accord.
 - Pour quelqu'un hors du cercle, vous créez un **lien secret** `/s/<slug>#clé`. La clé est après le `#` : le navigateur ne l'envoie jamais au serveur, la station ne peut donc pas lire le fichier.
 - Les **vidéos** ne sont livrées qu'à leur auteur et à ses amis N¹, jamais à tout le cercle N².
 - Le relai Nostr de la station réserve les contenus privés aux membres authentifiés du cercle N¹/N².
@@ -190,7 +189,7 @@ La reconnaissance des visages se fait soit par un service externe (`--face-engin
 
 Votre station va chercher régulièrement les profils et messages publics de ses membres, de leurs amis (N¹) et des amis de leurs amis (N²), auprès des autres stations de la constellation. Par défaut, un passage toutes les 15 minutes (`--crawl-every`, 900 secondes ; `--no-crawl` pour couper). Elle passe **par le maillage P2P**, sans port public, auprès des stations auxquelles elle est reliée. Si une station annonce aussi une adresse publique, celle-ci ne sert que de **solution de repli** quand le maillage échoue.
 
-L'écran **Réplication** de l'interface vous montre, pour vos derniers messages et vos derniers fichiers, **où** ils existent aussi (sur quelles stations) et **chez qui** (vos proches, les proches de vos proches, ou d'autres stations). Il indique aussi par quelle voie chaque station a été jointe. Une station qui ne répond pas est marquée « injoignable », jamais comptée comme « 0 copie ». La mesure des fichiers demande l'option `--kubo`.
+L'écran **Moi › Sauvegarde** de l'interface vous montre, pour vos derniers messages et vos derniers fichiers, **où** ils existent aussi (sur quelles stations) et **chez qui** (vos proches, les proches de vos proches, ou d'autres stations). Il indique aussi par quelle voie chaque station a été jointe. Une station qui ne répond pas est marquée « injoignable », jamais comptée comme « 0 copie ». La mesure des fichiers demande l'option `--kubo`.
 
 ---
 
@@ -208,15 +207,15 @@ S'il manque de l'argent (recettes inférieures à la PAF), le manque est couvert
 
 ## Qui fait quoi : astroportd et Astroport.ONE
 
-astroportd (version 1.3.0) remplace peu à peu les scripts bash d'[Astroport.ONE](https://github.com/papiche/Astroport.ONE). Les deux fonctionnent ensemble ; voici ce que chacun fait aujourd'hui.
+astroportd (version 1.4.0) remplace peu à peu les scripts bash d'[Astroport.ONE](https://github.com/papiche/Astroport.ONE). Les deux fonctionnent ensemble ; voici ce que chacun fait aujourd'hui.
 
 | Fonction | astroportd | Astroport.ONE |
 |---|:---:|:---:|
 | Y-Level (SSH → IPFS → Ğ1 → Nostr) | ✔ `init`, `ylevel` | ✔ `Ylevel.sh` |
 | Réseau privé `swarm.key` (ẐEN), réseau ouvert (ORIGIN) | ✔ | ✔ |
 | Tunnels P2P entre stations (dont SSH) | ✔ politique par service, bloc géré dans `authorized_keys` | ✔ `DRAGON_p2p_ssh.sh` |
-| Suivi entre Capitaines (kind 30850) | ✔ manuel (écran *Capitaines*) | ✔ automatique |
-| Création d'un MULTIPASS | ✔ `multipass create`, page `/register` (version allégée) | ✔ `make_NOSTRCARD.sh` (complet : SSSS, QR, zine, ZenCard) |
+| Suivi entre Capitaines (liste de contacts, kind 3) | ✔ manuel (*Réseau › Essaim*, carte *Capitaines*) | ✔ automatique (d'après les balises kind 30850) |
+| Création d'un MULTIPASS | ✔ `multipass create`, page `/register`, clé de secours 2 sur 3 en QR, primo-transaction à la première connexion | ✔ `make_NOSTRCARD.sh` (avec zine et ZenCard) |
 | uCloud chiffré, FaceCloud, liens secrets | ✔ | ✔ (version bash/Python) |
 | Relai Nostr avec pare-feu social N¹/N² | ✔ intégré | ✔ strfry + filtres NIP-101 |
 | Économie Ẑen (règlement hebdomadaire, 3×1/3, Love Ledger) | ✔ | ✔ |
@@ -227,7 +226,7 @@ astroportd (version 1.3.0) remplace peu à peu les scripts bash d'[Astroport.ONE
 
 ### Détection ORIGIN / ẐEN
 
-- *astroportd* : `serve --swarm-key FICHIER` active le réseau privé libp2p (clé pré-partagée, ou PSK) ; sans cette option, le démarrage affiche « réseau ouvert » (`src/serve.rs`). `astroportd init --mode origin|zen` prépare la station dans ce sens.
+- *astroportd* : `serve --swarm-key FICHIER` active le réseau privé libp2p (clé pré-partagée, ou PSK) ; sans cette option, le démarrage affiche « réseau ouvert » (`src/serve/p2p.rs`). `astroportd init --mode origin|zen` prépare la station dans ce sens.
 - *Astroport.ONE* : `tools/my.sh` définit `UPLANETNAME` comme la dernière ligne de `~/.ipfs/swarm.key`, ou 64 zéros (`000…0`) s'il n'y en a pas.
 
 | | ORIGIN | ẐEN |
@@ -248,11 +247,13 @@ Les nouveaux MULTIPASS utilisent la formule de clés dite **isolated** : `(SALT,
 
 `~/.zen/game/nostr/<email>/` : `.secret.nostr`, `.secret.dunikey`, `.keyformula`, `.pass`, `.multipass.json` (en `0600`, lisibles par le seul propriétaire), plus `HEX`, `NPUB`, `G1PUBNOSTR`, `LANG`, `NOSTRNS`. Et trois événements signés par le compte : profil (kind 0), suivi du Capitaine (kind 3), DID W3C (kind 30800).
 
-**Non repris de `make_NOSTRCARD.sh`** : le découpage SSSS 2-sur-3 de DISCO chiffré vers le Capitaine, les QR codes, l'import de la clé IPNS dans Kubo, l'envoi du zine par email, la ZenCard et la primo-transaction. Retrouver un compte repose sur le SALT/PEPPER remis une fois au titulaire (et sur le `nsec`).
+**Clé de secours** : le secret du compte est découpé en trois parts, dont deux suffisent (P1 : QR remis au membre, `multipass card --svg` ; P2 : la station ; P3 : les amis qui hébergent sa sauvegarde) ; `multipass recover` ou `/restore` rétablit le compte. La primo-transaction part à la première connexion du membre. **Non repris de `make_NOSTRCARD.sh`** : l'import de la clé IPNS dans Kubo, l'envoi du zine par email et la ZenCard.
 
 ### Plusieurs plans dans un processus
 
-`astroportd planes` : un seul processus, la même identité Y-Level, et par plan un réseau P2P privé, une base, un dossier de comptes et un port ; chaque MULTIPASS est rattaché à son plan. Le routage par nom d'hôte (`--front`) et `--plane` sont disponibles ; le miroir entre plans (règles de synchronisation, charte) ne l'est pas encore.
+![Une machine, plusieurs UPlanet : chaque plan a sa swarm.key, sa base et ses comptes ; les fichiers chiffrés vont dans un bassin commun ; ORIGIN vers ẐEN permis, ẐEN vers ORIGIN refusé, ẐEN vers ẐEN avec --cross-swarm.](img/plans.svg)
+
+`astroportd planes` : un seul processus, la même identité Y-Level, et par plan un réseau P2P privé, une base, un dossier de comptes et un port ; chaque MULTIPASS est rattaché à son plan. Le routage par nom d'hôte (`--front`) et `--plane` sont disponibles. Entre plans, les fichiers passent par `bridge-copy` (adoption sans copie dans le bassin commun, `--same-person` ; un plan privé ne verse jamais vers ORIGIN, et vers un autre plan privé seulement avec `--cross-swarm`), et une même personne relie ses comptes par un lien signé des deux clés (kind 31903 `plane-link`). Le **miroir** automatique entre plans (règles de synchronisation, charte) reste à faire.
 
 ### La chaîne de dérivation Y-Level
 

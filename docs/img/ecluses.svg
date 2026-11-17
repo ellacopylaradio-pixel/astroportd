@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="ill ek" viewBox="0 0 520 744" role="img" aria-labelledby="ek-t ek-d" width="520" height="744">
+<title id="ek-t">Les écluses de la station : du coffre au public, selon le mode</title>
+<desc id="ek-d">Un canal à six bassins, du plus intime au plus ouvert : coffre, uCloud chiffré, amis réciproques, cercle N1 et N2, constellation, public. Entre deux bassins, une porte ouverte, filtrée ou fermée. Le schéma passe en boucle par les trois modes. Forteresse : photos sur accord, seuls les amis réciproques entrent, copie des amis seulement, le public lit seulement. Village, le mode par défaut : photos envoyées quand l&#x27;ami est seul avec le membre, le cercle écrit sur le relai, copie des amis d&#x27;amis, le public lit seulement. Place publique : comme Village, et tout le monde peut publier. Le coffre n&#x27;est jamais partagé.</desc>
+<style>.ek{--ink:#1b1f2a;--mut:#454c61;--pan:#eef1f9;--pan2:#e2e8f8;--line:#6b7390;--acc:#2a46c8;--ok:#14663a;--warn:#8f3b06;--bad:#b3261e;--bg:#ffffff;--wat:#d6e2fb;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){.ek{--ink:#eef0f8;--mut:#bcc3da;--pan:#1c2133;--pan2:#262d47;--line:#8790ad;--acc:#9bb0ff;--ok:#7fdca6;--warn:#ffb98a;--bad:#ff8a80;--bg:#12151f;--wat:#22305a}}
+.ek .bg{fill:var(--bg)}.ek .t{fill:var(--ink);font-size:17px;font-weight:700}.ek .s{fill:var(--mut);font-size:13.5px}.ek .m{text-anchor:middle}
+.ek .wat{fill:var(--wat);stroke:var(--line);stroke-width:1.5}.ek .rn{fill:var(--ink);font-size:15.5px;font-weight:700}.ek .rw{fill:var(--mut);font-size:12.5px}
+.ek .why{font-size:13.5px;font-weight:700}.ek .door{transform-box:fill-box}.ek .dl{transform-origin:left center}.ek .dr{transform-origin:right center}
+.ek .pill{fill:var(--pan);stroke:var(--line);stroke-width:1.2}.ek .pn{fill:var(--mut);font-size:14px;font-weight:700}
+.ek .boat{fill:var(--acc)}.ek .ripple{fill:none;stroke:var(--acc);stroke-width:1;opacity:.35}
+.ek .lay,.ek .on,.ek .boat,.ek .door{animation-duration:12s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+.ek .ek-p0 .door{transform:scaleX(1.0);fill:var(--bad);animation-name:ek-p0}
+.ek .ek-p0 .why{fill:var(--bad)}
+@keyframes ek-p0{0%,30%{transform:scaleX(1.0);fill:var(--bad)}33.3%,63.3%{transform:scaleX(1.0);fill:var(--bad)}66.6%,96.6%{transform:scaleX(1.0);fill:var(--bad)}100%{transform:scaleX(1.0);fill:var(--bad)}}
+.ek .ek-p1 .door{transform:scaleX(0.12);fill:var(--ok);animation-name:ek-p1}
+.ek .ek-p1 .why{fill:var(--ok)}
+@keyframes ek-p1{0%,30%{transform:scaleX(0.7);fill:var(--warn)}33.3%,63.3%{transform:scaleX(0.12);fill:var(--ok)}66.6%,96.6%{transform:scaleX(0.12);fill:var(--ok)}100%{transform:scaleX(0.7);fill:var(--warn)}}
+.ek .ek-p2 .door{transform:scaleX(0.12);fill:var(--ok);animation-name:ek-p2}
+.ek .ek-p2 .why{fill:var(--ok)}
+@keyframes ek-p2{0%,30%{transform:scaleX(1.0);fill:var(--bad)}33.3%,63.3%{transform:scaleX(0.12);fill:var(--ok)}66.6%,96.6%{transform:scaleX(0.12);fill:var(--ok)}100%{transform:scaleX(1.0);fill:var(--bad)}}
+.ek .ek-p3 .door{transform:scaleX(0.7);fill:var(--warn);animation-name:ek-p3}
+.ek .ek-p3 .why{fill:var(--warn)}
+@keyframes ek-p3{0%,30%{transform:scaleX(0.7);fill:var(--warn)}33.3%,63.3%{transform:scaleX(0.7);fill:var(--warn)}66.6%,96.6%{transform:scaleX(0.12);fill:var(--ok)}100%{transform:scaleX(0.7);fill:var(--warn)}}
+.ek .L0{opacity:0;animation-name:ek-l0}
+@keyframes ek-l0{0%,30%{opacity:1}33.0%,96.6%{opacity:0}100%{opacity:1}}
+.ek .P0{opacity:0;animation-name:ek-l0}
+.ek .L1{opacity:1;animation-name:ek-l1}
+@keyframes ek-l1{0%,30.0%{opacity:0}33.3%,63.3%{opacity:1}66.3%,100%{opacity:0}}
+.ek .P1{opacity:1;animation-name:ek-l1}
+.ek .L2{opacity:0;animation-name:ek-l2}
+@keyframes ek-l2{0%,63.3%{opacity:0}66.6%,96.6%{opacity:1}99.6%,100%{opacity:0}}
+.ek .P2{opacity:0;animation-name:ek-l2}
+@keyframes ek-boat{0%{transform:translateY(0);opacity:0}3%{opacity:1}18%,28%{transform:translateY(92.0px);opacity:1}31%{transform:translateY(92.0px);opacity:0}33.3%{transform:translateY(0);opacity:0}36%{opacity:1}58%{transform:translateY(368.0px);opacity:1}62%,66.5%{transform:translateY(368.0px);opacity:0}66.6%{transform:translateY(0);opacity:0}70%{opacity:1}92%{transform:translateY(368.0px);opacity:1}96%,100%{transform:translateY(368.0px);opacity:0}}
+.ek .boat{opacity:0;animation-name:ek-boat}
+@media (prefers-reduced-motion:reduce){.ek .lay,.ek .on,.ek .boat,.ek .door{animation:none}}</style>
+<rect class="bg" width="520" height="744" rx="14"/>
+<text x="260.0" y="32" class="t m">Les écluses : jusqu'où vont vos données ?</text>
+<rect class="pill" x="16" y="50" width="156" height="34" rx="17"/>
+<rect class="on P0" x="16" y="50" width="156" height="34" rx="17" style="fill:var(--pan2);stroke:var(--acc);stroke-width:2.5"/>
+<text x="94.0" y="72" class="pn m">🏰 Forteresse</text>
+<rect class="pill" x="182" y="50" width="156" height="34" rx="17"/>
+<rect class="on P1" x="182" y="50" width="156" height="34" rx="17" style="fill:var(--pan2);stroke:var(--acc);stroke-width:2.5"/>
+<text x="260.0" y="72" class="pn m">🏡 Village (défaut)</text>
+<rect class="pill" x="348" y="50" width="156" height="34" rx="17"/>
+<rect class="on P2" x="348" y="50" width="156" height="34" rx="17" style="fill:var(--pan2);stroke:var(--acc);stroke-width:2.5"/>
+<text x="426.0" y="72" class="pn m">🎪 Place publique</text>
+<text x="260.0" y="110" class="s m lay L0" style="font-style:italic">Seuls les amis réciproques entrent, pas d&#x27;inscription libre</text>
+<text x="260.0" y="110" class="s m lay L1" style="font-style:italic">Les amis d&#x27;amis écrivent, rien de privé ne sort</text>
+<text x="260.0" y="110" class="s m lay L2" style="font-style:italic">Tout le monde peut publier profil et notes</text>
+<text x="166.0" y="140" class="s m">qui y est</text>
+<text x="418.0" y="140" class="s m">ce qui passe la porte</text>
+<rect class="wat" x="16" y="152" width="300" height="62" rx="10"/>
+<text x="30" y="179" class="rn">🔐 Coffre</text>
+<text x="30" y="199" class="rw">le membre seul</text>
+<rect class="wat" x="16" y="244" width="300" height="62" rx="10"/>
+<text x="30" y="271" class="rn">☁️ uCloud chiffré</text>
+<text x="30" y="291" class="rw">les membres hébergés</text>
+<rect class="wat" x="16" y="336" width="300" height="62" rx="10"/>
+<text x="30" y="363" class="rn">🤝 Amis réciproques</text>
+<text x="30" y="383" class="rw">ils se suivent l&#x27;un l&#x27;autre</text>
+<rect class="wat" x="16" y="428" width="300" height="62" rx="10"/>
+<text x="30" y="455" class="rn">👥 Cercle N¹ + N²</text>
+<text x="30" y="475" class="rw">suivis, amis d&#x27;amis</text>
+<rect class="wat" x="16" y="520" width="300" height="62" rx="10"/>
+<text x="30" y="547" class="rn">🌐 Constellation</text>
+<text x="30" y="567" class="rw">stations ORIGIN ou ẐEN</text>
+<rect class="wat" x="16" y="612" width="300" height="62" rx="10"/>
+<text x="30" y="639" class="rn">🌍 Public</text>
+<text x="30" y="659" class="rw">tout le monde</text>
+<g class="ek-p0">
+<path d="M22 229.0 H310" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+<rect class="door dl" x="16" y="224.0" width="150.0" height="10" rx="3"/>
+<rect class="door dr" x="166.0" y="224.0" width="150.0" height="10" rx="3"/>
+<text x="334" y="234.0" class="why">Jamais partagé</text>
+</g>
+<g class="ek-p1">
+<path d="M22 321.0 H310" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+<rect class="door dl" x="16" y="316.0" width="150.0" height="10" rx="3"/>
+<rect class="door dr" x="166.0" y="316.0" width="150.0" height="10" rx="3"/>
+<text x="334" y="326.0" class="why lay L0" style="fill:var(--warn)">Photos sur accord</text>
+<text x="334" y="326.0" class="why lay L1" style="fill:var(--ok)">Photos seul à seul</text>
+<text x="334" y="326.0" class="why lay L2" style="fill:var(--ok)">Photos seul à seul</text>
+</g>
+<g class="ek-p2">
+<path d="M22 413.0 H310" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+<rect class="door dl" x="16" y="408.0" width="150.0" height="10" rx="3"/>
+<rect class="door dr" x="166.0" y="408.0" width="150.0" height="10" rx="3"/>
+<text x="334" y="418.0" class="why lay L0" style="fill:var(--bad)">Réciproques seulement</text>
+<text x="334" y="418.0" class="why lay L1" style="fill:var(--ok)">Écrire sur le relai</text>
+<text x="334" y="418.0" class="why lay L2" style="fill:var(--ok)">Écrire sur le relai</text>
+</g>
+<g class="ek-p1">
+<path d="M22 505.0 H310" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+<rect class="door dl" x="16" y="500.0" width="150.0" height="10" rx="3"/>
+<rect class="door dr" x="166.0" y="500.0" width="150.0" height="10" rx="3"/>
+<text x="334" y="510.0" class="why lay L0" style="fill:var(--warn)">Copie des amis seulement</text>
+<text x="334" y="510.0" class="why lay L1" style="fill:var(--ok)">Copie des amis d&#x27;amis</text>
+<text x="334" y="510.0" class="why lay L2" style="fill:var(--ok)">Copie des amis d&#x27;amis</text>
+</g>
+<g class="ek-p3">
+<path d="M22 597.0 H310" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+<rect class="door dl" x="16" y="592.0" width="150.0" height="10" rx="3"/>
+<rect class="door dr" x="166.0" y="592.0" width="150.0" height="10" rx="3"/>
+<text x="334" y="602.0" class="why lay L0" style="fill:var(--warn)">Lecture seule</text>
+<text x="334" y="602.0" class="why lay L1" style="fill:var(--warn)">Lecture seule</text>
+<text x="334" y="602.0" class="why lay L2" style="fill:var(--ok)">Tout le monde publie</text>
+</g>
+<g class="boat"><circle cx="282" cy="275.0" r="8"/><circle class="ripple" cx="282" cy="275.0" r="13"/></g>
+<rect x="70" y="705" width="26" height="10" rx="3" style="fill:var(--ok)"/>
+<text x="104" y="714" class="s">ouverte</text>
+<rect x="210" y="705" width="26" height="10" rx="3" style="fill:var(--warn)"/>
+<text x="244" y="714" class="s">filtrée</text>
+<rect x="350" y="705" width="26" height="10" rx="3" style="fill:var(--bad)"/>
+<text x="384" y="714" class="s">fermée</text>
+</svg>

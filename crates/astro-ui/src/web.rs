@@ -37,7 +37,7 @@ fn mime_of(path: &str) -> &'static str {
     }
 }
 
-/// Taille cumulée des fichiers embarqués, en octets (budget : 52 Ko bruts, 20 Ko transférés compressés ; 48 Ko et 15 Ko avant la refonte visuelle du 2026-10-31 : trois styles et leurs icônes).
+/// Taille cumulée des fichiers embarqués, en octets (budget : 60 Ko bruts, 20 Ko transférés compressés ; 52 Ko, puis 48 Ko et 15 Ko avant la refonte visuelle du 2026-10-31 : trois styles et leurs icônes).
 pub fn embedded_bytes() -> usize {
     shell_files().map(|(_, f)| f.data.len()).sum()
 }

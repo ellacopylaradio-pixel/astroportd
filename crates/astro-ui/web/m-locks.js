@@ -103,7 +103,7 @@ export default async function locks(root, K) {
       !g.crawl && t('Copie des amis d\'amis coupée au lancement (--no-crawl).'),
       g.open_writes.length > 0 && t('Tout le monde peut publier ces kinds sur le relai : {0}.', g.open_writes.join(', ')),
       v.faces.auto_off_members > 0 && t('{0} membre(s) ont coupé l\'envoi automatique de leurs photos.', v.faces.auto_off_members),
-      (v.public.gps + v.public.sensitive) > 0 ? t('Vigie de 20h12 : {0} fichier(s) de Public en disent trop, chez {1} membre(s) prévenu(s).', v.public.gps + v.public.sensitive, v.public.members) : t('Vigie de 20h12 : rien de sensible dans les dossiers Public.'),
+      (v.public.gps + (v.public.identity || 0) + v.public.sensitive) > 0 ? t('Vigie de 20h12 : {0} fichier(s) de Public en disent trop, chez {1} membre(s) prévenu(s).', v.public.gps + (v.public.identity || 0) + v.public.sensitive, v.public.members) : t('Vigie de 20h12 : rien de sensible dans les dossiers Public.'),
     ].filter(Boolean).map(x => h('li', {}, x)));
   };
 

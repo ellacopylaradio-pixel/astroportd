@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="ill pl" viewBox="0 0 520 500" role="img" aria-labelledby="pl-t pl-d" width="520" height="500">
+<title id="pl-t">Une machine, plusieurs UPlanet</title>
+<desc id="pl-d">Une même machine sert trois UPlanet : ORIGIN, réseau ouvert sans swarm.key où Kubo est possible, et deux UPlanet privées ẐEN 1 et ẐEN 2, chacune avec sa swarm.key, son port P2P, sa base et ses comptes, sans Kubo. Toutes rangent leurs fichiers chiffrés dans un bassin commun : un fichier n&#x27;y est stocké qu&#x27;une fois, et chaque plan ne sert aux autres stations que les fichiers que sa base référence. Les passages entre plans : d&#x27;ORIGIN vers une UPlanet privée, permis pour une même personne ; d&#x27;une UPlanet privée vers ORIGIN, toujours refusé ; d&#x27;une UPlanet privée vers une autre, seulement avec --cross-swarm.</desc>
+<style>.pl{--ink:#1b1f2a;--mut:#454c61;--pan:#eef1f9;--pan2:#e2e8f8;--line:#6b7390;--acc:#2a46c8;--ok:#14663a;--warn:#8f3b06;--bad:#b3261e;--bg:#ffffff;--wat:#d6e2fb;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){.pl{--ink:#eef0f8;--mut:#bcc3da;--pan:#1c2133;--pan2:#262d47;--line:#8790ad;--acc:#9bb0ff;--ok:#7fdca6;--warn:#ffb98a;--bad:#ff8a80;--bg:#12151f;--wat:#22305a}}
+.pl .bg{fill:var(--bg)}.pl .pan{fill:var(--pan);stroke:var(--line);stroke-width:1.5}.pl .okp{fill:var(--pan);stroke:var(--ok);stroke-width:2.5}
+.pl .wat{fill:var(--wat);stroke:var(--acc);stroke-width:2}.pl .mach{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:6 5}
+.pl .t{fill:var(--ink);font-size:17px;font-weight:700}.pl .n{fill:var(--ink);font-size:15.5px;font-weight:700}.pl .s{fill:var(--mut);font-size:12.5px}.pl .m{text-anchor:middle}
+.pl .cap{font-size:14px;font-weight:700}.pl .ln{stroke:var(--line);stroke-width:2;fill:none}.pl .arc{fill:none;stroke-width:2.5;stroke-dasharray:6 5}
+.pl .lay,.pl .tok{animation-duration:12s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+.pl .L0{opacity:1;animation-name:pl-l0}@keyframes pl-l0{0%,30%{opacity:1}33.0%,96.6%{opacity:0}100%{opacity:1}}
+.pl .L1{opacity:0;animation-name:pl-l1}@keyframes pl-l1{0%,30.0%{opacity:0}33.3%,63.3%{opacity:1}66.3%,100%{opacity:0}}
+.pl .L2{opacity:0;animation-name:pl-l2}@keyframes pl-l2{0%,63.3%{opacity:0}66.6%,96.6%{opacity:1}99.6%,100%{opacity:0}}
+@keyframes pl-tok{0.0%{transform:translate(0.0px,0.0px);opacity:0}1.5%{transform:translate(0.0px,0.0px);opacity:1}4.5%{transform:translate(21.0px,-20.6px);opacity:1}7.5%{transform:translate(42.0px,-35.2px);opacity:1}10.5%{transform:translate(63.0px,-44.1px);opacity:1}13.5%{transform:translate(84.0px,-47.0px);opacity:1}16.5%{transform:translate(105.0px,-44.1px);opacity:1}19.5%{transform:translate(126.0px,-35.2px);opacity:1}22.5%{transform:translate(147.0px,-20.6px);opacity:1}25.5%{transform:translate(168.0px,0.0px);opacity:1}30.0%{transform:translate(168.0px,0.0px);opacity:0}33.3%{transform:translate(168.0px,0.0px);opacity:0}34.8%{transform:translate(168.0px,0.0px);opacity:1}37.5%{transform:translate(147.0px,-20.6px);opacity:1}40.1%{transform:translate(126.0px,-35.2px);opacity:1}42.8%{transform:translate(105.0px,-44.1px);opacity:1}45.5%{transform:translate(84.0px,-47.0px);opacity:1}48.1%{transform:translate(84.0px,-47.0px);opacity:1}50.8%{transform:translate(105.0px,-44.1px);opacity:1}53.5%{transform:translate(126.0px,-35.2px);opacity:1}56.1%{transform:translate(147.0px,-20.6px);opacity:1}58.8%{transform:translate(168.0px,0.0px);opacity:1}63.3%{transform:translate(168.0px,0.0px);opacity:0}66.6%{transform:translate(168.0px,0.0px);opacity:0}68.1%{transform:translate(168.0px,0.0px);opacity:1}71.1%{transform:translate(189.0px,-20.6px);opacity:1}74.1%{transform:translate(210.0px,-35.2px);opacity:1}77.1%{transform:translate(231.0px,-44.1px);opacity:1}80.1%{transform:translate(252.0px,-47.0px);opacity:1}83.1%{transform:translate(273.0px,-44.1px);opacity:1}86.1%{transform:translate(294.0px,-35.2px);opacity:1}89.1%{transform:translate(315.0px,-20.6px);opacity:1}92.1%{transform:translate(336.0px,0.0px);opacity:1}96.6%{transform:translate(336.0px,0.0px);opacity:0}100%{transform:translate(0,0);opacity:0}}.pl .tok{opacity:0;animation-name:pl-tok}
+@media (prefers-reduced-motion:reduce){.pl .lay,.pl .tok{animation:none}}</style>
+<rect class="bg" width="520" height="500" rx="14"/>
+<text x="260.0" y="32" class="t m">Une machine, plusieurs UPlanet</text>
+<text x="260.0" y="58" class="cap m lay L0" style="fill:var(--ok)">ORIGIN → ẐEN 1 : permis (même personne)</text>
+<g class="lay L0"><path class="arc" d="M92 146 Q176.0 52 260 146" style="stroke:var(--ok)"/><text x="176.0" y="94" class="m" style="font-size:20px">✅</text></g>
+<text x="260.0" y="58" class="cap m lay L1" style="fill:var(--bad)">ẐEN 1 → ORIGIN : refusé, toujours</text>
+<g class="lay L1"><path class="arc" d="M260 146 Q176.0 52 92 146" style="stroke:var(--bad)"/><text x="176.0" y="94" class="m" style="font-size:20px">⛔</text></g>
+<text x="260.0" y="58" class="cap m lay L2" style="fill:var(--warn)">ẐEN 1 → ẐEN 2 : seulement avec --cross-swarm</text>
+<g class="lay L2"><path class="arc" d="M260 146 Q344.0 52 428 146" style="stroke:var(--warn)"/><text x="344.0" y="94" class="m" style="font-size:20px">🟠</text></g>
+<rect class="mach" x="8" y="136" width="504" height="326" rx="14"/>
+<text x="260.0" y="452" class="s m">une machine · un NODE · une identité Y-Level</text>
+<rect class="pan" x="16" y="150" width="152" height="150" rx="12"/>
+<text x="92" y="178" class="n m">🌐 ORIGIN</text>
+<text x="92" y="202" class="s m">pas de swarm.key</text>
+<text x="92" y="222" class="s m">réseau ouvert</text>
+<text x="92" y="242" class="s m">P2P 4101</text>
+<text x="92" y="262" class="s m">sa base, ses comptes</text>
+<text x="92" y="282" class="s m">Kubo possible</text>
+<path class="ln" d="M92 300 V362"/>
+<circle cx="92" cy="331.0" r="13" style="fill:var(--bg);stroke:var(--line);stroke-width:1.5"/><text x="92" y="336.0" class="m" style="font-size:13px">🔒</text>
+<rect class="okp" x="184" y="150" width="152" height="150" rx="12"/>
+<text x="260" y="178" class="n m">✨ ẐEN 1</text>
+<text x="260" y="202" class="s m">swarm.key A</text>
+<text x="260" y="222" class="s m">réseau privé A</text>
+<text x="260" y="242" class="s m">P2P 4102</text>
+<text x="260" y="262" class="s m">sa base, ses comptes</text>
+<text x="260" y="282" class="s m">sans Kubo</text>
+<path class="ln" d="M260 300 V362"/>
+<circle cx="260" cy="331.0" r="13" style="fill:var(--bg);stroke:var(--line);stroke-width:1.5"/><text x="260" y="336.0" class="m" style="font-size:13px">🔒</text>
+<rect class="okp" x="352" y="150" width="152" height="150" rx="12"/>
+<text x="428" y="178" class="n m">✨ ẐEN 2</text>
+<text x="428" y="202" class="s m">swarm.key B</text>
+<text x="428" y="222" class="s m">réseau privé B</text>
+<text x="428" y="242" class="s m">P2P 4103</text>
+<text x="428" y="262" class="s m">sa base, ses comptes</text>
+<text x="428" y="282" class="s m">sans Kubo</text>
+<path class="ln" d="M428 300 V362"/>
+<circle cx="428" cy="331.0" r="13" style="fill:var(--bg);stroke:var(--line);stroke-width:1.5"/><text x="428" y="336.0" class="m" style="font-size:13px">🔒</text>
+<rect class="wat" x="24" y="362" width="472" height="70" rx="12"/>
+<text x="260.0" y="388" class="n m">🗄️ Bassin de fichiers commun (chiffrés)</text>
+<text x="260.0" y="410" class="s m">un fichier stocké une seule fois ; chaque plan ne sert</text>
+<text x="260.0" y="426" class="s m">aux autres stations que les fichiers de sa propre base</text>
+<text x="260.0" y="484" class="s m">Les passages entre plans : astroportd bridge-copy --same-person</text>
+<g class="tok"><circle cx="92" cy="146" r="8" style="fill:var(--acc)"/><text x="92" y="150" class="m" style="font-size:10px;fill:var(--bg)">📄</text></g>
+</svg>

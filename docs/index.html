@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Astroport — vos photos, vos contacts, votre agenda, chez quelqu'un que vous connaissez</title>
-<meta name="description" content="Astroport remplace Google Photos et iCloud par la station d'un Capitaine que vous connaissez : vos fichiers chiffrés, une copie de secours chez vos amis, des comptes publics. Rejoindre une station ou ouvrir la sienne.">
+<meta name="description" content="Astroport remplace Google Photos et iCloud par la station d'un Capitaine que vous connaissez : vos fichiers chiffrés, une copie de secours chez un ami que vous choisissez, des comptes publics. Rejoindre une station ou ouvrir la sienne.">
 <style>
-/* Projet de page d'accueil (docs/accueil.html). Polices système : aucune ressource tierce n'est chargée. */
+/* Page d'accueil (docs/index.html). Polices système : aucune ressource tierce n'est chargée. */
 :root{--paper:#ffffff;--mist:#eef1fa;--ink:#18204a;--mut:#4a5272;--line:#cdd3e6;--blue:#2a46c8;--blueink:#ffffff;--gold:#c98a00;--star:#f2b705;--ok:#14663a;--code:#141a36;--codeink:#e8ebf4}
 @media (prefers-color-scheme:dark){:root{--paper:#11152a;--mist:#1a2040;--ink:#eef0fa;--mut:#b8bfd9;--line:#343c63;--blue:#9db0ff;--blueink:#10142a;--gold:#f2c14e;--star:#f2c14e;--ok:#7fdca6;--code:#0b0e1e;--codeink:#e8ebf4}}
 *{box-sizing:border-box}
@@ -152,7 +152,7 @@ footer p{max-width:none;margin:.3em 0}
 <div class="wrap hero">
   <div>
     <h1>Vos photos, vos contacts, votre agenda. Chez quelqu'un que vous connaissez.</h1>
-    <p class="lead">Astroport remplace Google Photos et iCloud par la station d'un Capitaine de votre entourage. Vos fichiers sont chiffrés avant de quitter votre téléphone, et vos amis en gardent une copie de secours.</p>
+    <p class="lead">Astroport remplace Google Photos et iCloud par la station d'un Capitaine de votre entourage. Vos fichiers sont chiffrés avant de quitter votre téléphone, et un ami que vous choisissez en garde une copie de secours.</p>
     <div class="ctas">
       <a class="btn main" href="https://map.astroport.one">Trouver une station près de chez moi</a>
       <a class="btn alt" href="#ouvrir">Ouvrir ma station</a>
@@ -162,7 +162,7 @@ footer p{max-width:none;margin:.3em 0}
 
   <svg class="sky" viewBox="0 0 520 420" role="img" aria-labelledby="sky-t sky-d">
     <title id="sky-t">Votre constellation</title>
-    <desc id="sky-d">Votre téléphone envoie vos photos chiffrées à la station de votre Capitaine. La station en confie des copies chiffrées aux stations de vos amis.</desc>
+    <desc id="sky-d">Votre téléphone envoie vos photos chiffrées à la station de votre Capitaine. La station en confie une copie chiffrée à la station d'un ami qui l'accepte.</desc>
     <circle class="orbit" cx="290" cy="215" r="170"/>
     <path id="p-phone" class="link" d="M92 214 C150 214 200 216 244 216"/>
     <path id="p-a" class="copy" d="M312 196 C360 150 400 120 446 100"/>
@@ -264,7 +264,7 @@ footer p{max-width:none;margin:.3em 0}
       <div class="piece">
         <svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="15" cy="16" r="6" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="30" cy="16" r="6" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M4 36 C5 28 25 28 26 36 M19 36 C20 28 40 28 41 36" fill="none" stroke="currentColor" stroke-width="2.5"/></svg>
         <h3>Chez vos amis</h3>
-        <p>Les amis qui vous suivent en retour en gardent chacun un exemplaire.</p>
+        <p>Un ami qui vous suit en retour, et qui accepte, en garde un exemplaire.</p>
       </div>
     </div>
     <p class="rule">Deux morceaux sur trois suffisent pour tout retrouver, sur n'importe quelle station.</p>
@@ -307,7 +307,7 @@ footer p{max-width:none;margin:.3em 0}
 </main>
 
 <footer class="wrap">
-  <p>Astroport est un logiciel libre (licence AGPL-3.0), au cœur de l'écosystème coopératif UPlanet. Préversion 1.3.1.</p>
+  <p>Astroport est un logiciel libre (licence AGPL-3.0), au cœur de l'écosystème coopératif UPlanet. Préversion 1.4.0.</p>
   <p><a href="guide.html">Guide du Capitaine</a> · <a href="UPLANET_ManuelDesMembresEtDesContributeurs.html">Manuel des membres et des contributeurs</a> · <a href="https://github.com/papiche/astroportd">Code source</a> · <a href="https://qo-op.com">La coopérative</a> · Contact : support@qo-op.com</p>
 </footer>
 

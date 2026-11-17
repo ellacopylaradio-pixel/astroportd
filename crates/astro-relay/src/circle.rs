@@ -91,6 +91,8 @@ pub struct DbCircle {
     inner: RwLock<Snapshot>,
     /// `swarm_id` de l'UPlanet de la station (voir [`CircleProvider::accepts_beacon`]) ; aucune balise acceptée sans lui.
     swarm: std::sync::OnceLock<String>,
+    /// Relai ORIGIN : accepte aussi les balises des stations ouvertes (Village, Place publique) des autres UPlanet.
+    federate: std::sync::atomic::AtomicBool,
     /// Clés que la station signe elle-même (la coopérative) : admises en écriture sans être dans le N¹/N² d'un membre.
     station_keys: RwLock<HashSet<String>>,
 }
@@ -104,6 +106,11 @@ impl DbCircle {
     /// Fixe l'UPlanet dont les balises de station sont acceptées (une seule fois).
     pub fn set_swarm_id(&self, swarm_id: String) {
         let _ = self.swarm.set(swarm_id);
+    }
+
+    /// Relai ORIGIN (« réunit toutes les UPlanet ») : accepte aussi les balises des stations ouvertes des autres UPlanet.
+    pub fn set_federate(&self, on: bool) {
+        self.federate.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Admet une clé que la station détient (clé de la coopérative : témoins de Ğ1Billets, configuration…) : sans cela, ses
@@ -185,8 +192,15 @@ impl CircleProvider for DbCircle {
     }
 
     fn accepts_beacon(&self, e: &astro_nostr_proto::Event) -> bool {
-        is_beacon_of(e, self.swarm.get().map(String::as_str))
+        is_beacon_of(e, self.swarm.get().map(String::as_str)) || (self.federate.load(std::sync::atomic::Ordering::Relaxed) && is_open_beacon(e))
     }
+}
+
+/// Le 30850 `e` est-il la balise d'une station **ouverte** (Village, Place publique) d'une UPlanet quelconque ? Ce que le
+/// relai ORIGIN accepte : une Forteresse, ou une balise sans mode (ancienne version), n'y entre pas.
+pub fn is_open_beacon(e: &astro_nostr_proto::Event) -> bool {
+    let swarm = e.tag_value("swarm_id").filter(|s| !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric()));
+    swarm.is_some() && matches!(e.tag_value("station:mode"), Some("village" | "place")) && is_beacon_of(e, swarm)
 }
 
 /// Le 30850 `e` est-il la balise d'une station de l'UPlanet `swarm` (même `swarm_id`, un PeerID libp2p) ?

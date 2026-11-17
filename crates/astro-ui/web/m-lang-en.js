@@ -365,7 +365,7 @@ export default {
 "Réseau": "Network",
 "Assistant": "Assistant",
 "Sauvegarde": "Backup",
-"Mon argent": "My money",
+"Mes Ẑen": "My Ẑen",
 "Mon espace": "My space",
 "Dossiers": "Folders",
 "Carnet": "Address book",
