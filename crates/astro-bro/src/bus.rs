@@ -204,7 +204,7 @@ impl<S: Services, R: Reply> CommandBus<S, R> {
             }
         };
         let (sender, rumor) = (opened.sender, opened.rumor);
-        if rumor.kind != kind::CHAT || sender == self.station_hex {
+        if rumor.kind != kind::CHAT || sender == self.station_hex || rumor.is_station_protocol() {
             stats.ignored += 1;
             return;
         }

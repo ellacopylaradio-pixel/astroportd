@@ -406,7 +406,8 @@ impl<P: Publisher> Beacon<P> {
         if let Err(e) = &local {
             notes.push(e.clone());
         }
-        if let Some(coop) = coop_relay(&self.db, &self.stations.uplanet_name).await.filter(|r| !self.relays.contains(r)) {
+        let coop = coop_relay(&self.db, &self.stations.uplanet_name).await;
+        if let Some(coop) = coop.clone().filter(|r| !self.relays.contains(r)) {
             match self.client.publish(&coop, &event).await {
                 Ok((true, _)) => accepted = true,
                 Ok((false, why)) => notes.push(format!("{coop} : {why}")),
@@ -416,8 +417,9 @@ impl<P: Publisher> Beacon<P> {
         // Station ẐEN ouverte : la balise est aussi annoncée sur le relai ORIGIN, qui réunit toutes les UPlanet (carte des
         // stations). Une Forteresse ne s'annonce jamais hors de sa constellation.
         let open = !event.tags.iter().any(|t| t.first().map(String::as_str) == Some("station:mode") && t.get(1).map(String::as_str) == Some("forteresse"));
-        if let Some(origin) = crate::coop_config::origin_relay(&self.db, &self.stations.uplanet_name).await.filter(|r| open && !self.relays.contains(r)) {
-            if let Err(e) | Ok((false, e)) = self.client.publish(&origin, &event).await.map_err(|e| e.to_string()) {
+        let origins = if open { crate::coop_config::origin_relays(&self.db, &self.stations.uplanet_name).await } else { Vec::new() };
+        for origin in origins.iter().filter(|r| !self.relays.contains(r) && coop.as_ref() != Some(r)) {
+            if let Err(e) | Ok((false, e)) = self.client.publish(origin, &event).await.map_err(|e| e.to_string()) {
                 notes.push(format!("{origin} : {e}"));
             }
         }
@@ -433,6 +435,14 @@ impl<P: Publisher> Beacon<P> {
         let mut relays = self.relays.clone();
         if let Some(coop) = coop_relay(&self.db, &self.stations.uplanet_name).await.filter(|r| !relays.contains(r)) {
             relays.push(coop);
+        }
+        // ORIGIN : toutes les stations ORIGIN s'annoncent sur le relai de la carte ; l'annuaire le relit pour les connaître.
+        if self.stations.uplanet_name == crate::init::ORIGIN_UPLANETNAME {
+            for r in crate::coop_config::origin_relays(&self.db, &self.stations.uplanet_name).await {
+                if !relays.contains(&r) {
+                    relays.push(r);
+                }
+            }
         }
         let filter = Filter {
             kinds: Some(vec![kind::ECONOMIC_HEALTH]),

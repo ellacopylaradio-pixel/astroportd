@@ -24,11 +24,17 @@ pub struct SplitConfig {
     pub is_high_bp: u32,
     /// Seuil annuel du taux réduit (42 500 ẐEN).
     pub is_threshold: Amount,
+    /// Poids de la trésorerie (`CASH`) dans le partage du reste, en points de base (33 % = 3300).
+    pub treasury_bp: u32,
+    /// Poids de la R&D.
+    pub rnd_bp: u32,
+    /// Poids des actifs durables.
+    pub assets_bp: u32,
 }
 
 impl Default for SplitConfig {
     fn default() -> Self {
-        Self { captain_bonus_bp: 100, is_low_bp: 1500, is_high_bp: 2500, is_threshold: Amount(4_250_000) }
+        Self { captain_bonus_bp: 100, is_low_bp: 1500, is_high_bp: 2500, is_threshold: Amount(4_250_000), treasury_bp: 3300, rnd_bp: 3300, assets_bp: 3300 }
     }
 }
 
@@ -82,7 +88,10 @@ impl Allocation {
 
 impl SplitConfig {
     fn check(&self) -> Result<(), SplitError> {
-        if [self.captain_bonus_bp, self.is_low_bp, self.is_high_bp].iter().any(|bp| *bp > 10_000) {
+        if [self.captain_bonus_bp, self.is_low_bp, self.is_high_bp, self.treasury_bp, self.rnd_bp, self.assets_bp].iter().any(|bp| *bp > 10_000) {
+            return Err(SplitError::BadRate);
+        }
+        if self.treasury_bp + self.rnd_bp + self.assets_bp == 0 {
             return Err(SplitError::BadRate);
         }
         Ok(())
@@ -103,17 +112,20 @@ impl SplitConfig {
         let is_provision = Amount(self.is_due(after).0 - self.is_due(ytd_profit).0).min(surplus);
         let net = Amount(surplus.0 - is_provision.0);
         let captain_bonus = Amount(u64::try_from(u128::from(net.0) * u128::from(self.captain_bonus_bp) / 10_000).map_err(|_| SplitError::Overflow)?);
+        // Le reste est partagé selon les poids (trois tiers égaux par défaut) ; les centimes d'arrondi vont à `CASH`.
         let rest = net.0 - captain_bonus.0;
-        let third = rest / 3;
+        let weights = u128::from(self.treasury_bp + self.rnd_bp + self.assets_bp);
+        let share = |bp: u32| u64::try_from(u128::from(rest) * u128::from(bp) / weights).map_err(|_| SplitError::Overflow);
+        let (rnd, assets) = (share(self.rnd_bp)?, share(self.assets_bp)?);
         Ok(Allocation {
             week: week.to_owned(),
             surplus,
             is_provision,
             net,
             captain_bonus,
-            cash: Amount(rest - 2 * third),
-            rnd: Amount(third),
-            assets: Amount(third),
+            cash: Amount(rest - rnd - assets),
+            rnd: Amount(rnd),
+            assets: Amount(assets),
         })
     }
 }
@@ -158,10 +170,20 @@ mod tests {
 
     #[test]
     fn rates_are_configurable_and_validated() {
-        let cfg = SplitConfig { captain_bonus_bp: 0, is_low_bp: 0, is_high_bp: 0, is_threshold: Amount(0) };
+        let cfg = SplitConfig { captain_bonus_bp: 0, is_low_bp: 0, is_high_bp: 0, is_threshold: Amount(0), ..SplitConfig::default() };
         let a = cfg.allocate("w", Amount(300), Amount(0)).unwrap();
         assert_eq!((a.captain_bonus, a.cash, a.rnd, a.assets), (Amount(0), Amount(100), Amount(100), Amount(100)));
         assert_eq!(SplitConfig { is_low_bp: 10_001, ..SplitConfig::default() }.allocate("w", Amount(1), Amount(0)), Err(SplitError::BadRate));
         assert_eq!(SplitConfig::default().allocate("w", Amount(u64::MAX), Amount(1)), Err(SplitError::Overflow));
+        assert_eq!(SplitConfig { treasury_bp: 0, rnd_bp: 0, assets_bp: 0, ..SplitConfig::default() }.allocate("w", Amount(1), Amount(0)), Err(SplitError::BadRate));
+    }
+
+    #[test]
+    fn unequal_weights_share_the_rest_and_lose_no_cent() {
+        // 50 / 25 / 25 sans impôt ni prime : 1 000,01 Ẑ → R&D 250,00, actifs 250,00, trésorerie 500,01.
+        let cfg = SplitConfig { captain_bonus_bp: 0, is_low_bp: 0, is_high_bp: 0, treasury_bp: 5000, rnd_bp: 2500, assets_bp: 2500, ..SplitConfig::default() };
+        let a = cfg.allocate("w", Amount(100_001), Amount(0)).unwrap();
+        assert_eq!((a.cash, a.rnd, a.assets), (Amount(50_001), Amount(25_000), Amount(25_000)));
+        assert_eq!(a.total(), 100_001);
     }
 }

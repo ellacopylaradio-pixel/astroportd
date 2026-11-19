@@ -67,6 +67,24 @@ async fn a_message_reaches_the_friend_unread_and_the_sender_keeps_a_copy() {
 }
 
 #[tokio::test]
+async fn service_messages_between_stations_never_show_up_in_the_conversation() {
+    let (dir, db, chat) = rig("service", false).await;
+    // Sauvegarde chez un ami et assistance voyagent en kind 14 ; seul un vrai message doit apparaître chez Bob.
+    for (t, content) in [("astro-backup", "sauvegarde privée"), ("astro-assist", "assistance")] {
+        let rumor = astro_crypto::nip59::Rumor { pubkey: hex(&ALICE), created_at: 1_800_000_000, kind: 14, tags: vec![vec!["p".into(), hex(&BOB)], vec!["t".into(), t.into()], vec!["op".into(), "share".into()]], content: content.into() };
+        let wrap = astro_crypto::nip59::gift_wrap(&ALICE, &hex(&BOB), &rumor, 1_800_000_000).unwrap();
+        db.writer().transaction(move |tx| insert_event(tx, &wrap).map(|_| ())).await.unwrap();
+    }
+    chat.poll_once().await;
+    assert!(chat.conversations(&hex(&BOB)).await.unwrap()["conversations"].as_array().unwrap().is_empty(), "aucun message de service dans le chat");
+    chat.send(&hex(&ALICE), &hex(&BOB), "Coucou").await.unwrap();
+    chat.poll_once().await;
+    let m = chat.messages(&hex(&BOB), &hex(&ALICE), None).await.unwrap();
+    assert_eq!(m["messages"].as_array().unwrap().iter().map(|x| x["text"].as_str().unwrap()).collect::<Vec<_>>(), ["Coucou"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn a_stranger_who_is_not_followed_is_ignored_but_a_followed_one_gets_through() {
     let (dir, db, chat) = rig("filter", false).await;
     // Eve écrit à Alice : ni suivie, ni hébergée ici.

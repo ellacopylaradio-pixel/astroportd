@@ -114,6 +114,7 @@ pub(super) fn routes<B: CoopApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/me/zen/preview", post(member_zen_preview::<B>))
         .route("/api/v1/me/zen/send", post(member_zen_send::<B>))
         .route("/api/v1/station/oc/donations", get(oc_donations::<B>))
+        .route("/api/v1/station/oc/peek", get(oc_peek::<B>))
         .route("/api/v1/station/oc/sync", post(oc_sync::<B>))
         .route("/api/v1/station/constellation", get(constellation::<B>))
         .route("/api/v1/station/economy", get(economy::<B>))
@@ -272,6 +273,11 @@ async fn member_zen_send<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Authed(p
 
 async fn oc_donations<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
     no_store(reply(st.backend.zen_credit(&p, "oc_status", Value::Null).await))
+}
+
+/// État des dons sans aucun crédit (dernier bilan) : pour l'écran de configuration, qui montre sans agir.
+async fn oc_peek<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    no_store(reply(st.backend.zen_credit(&p, "oc_peek", Value::Null).await))
 }
 
 async fn oc_sync<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain, Json(body): Json<Value>) -> Response {

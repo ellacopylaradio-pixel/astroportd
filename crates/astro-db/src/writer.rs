@@ -44,6 +44,8 @@ pub enum VectorTable {
     UcloudDesc,
     /// `dream_vectors` : 768 dimensions.
     Dream,
+    /// `search_vision_vectors` : 768 dimensions (SigLIP 2 base), photos et images clés de vidéos.
+    SearchVision,
 }
 
 impl VectorTable {
@@ -54,6 +56,7 @@ impl VectorTable {
             Self::Memory => "memory_vectors",
             Self::UcloudDesc => "ucloud_desc_vectors",
             Self::Dream => "dream_vectors",
+            Self::SearchVision => "search_vision_vectors",
         }
     }
 
@@ -64,6 +67,7 @@ impl VectorTable {
             Self::Memory => "mem_id",
             Self::UcloudDesc => "emb_id",
             Self::Dream => "dream_id",
+            Self::SearchVision => "vis_id",
         }
     }
 
@@ -72,7 +76,7 @@ impl VectorTable {
         match self {
             Self::Face => 512,
             Self::Memory | Self::UcloudDesc => 1024,
-            Self::Dream => 768,
+            Self::Dream | Self::SearchVision => 768,
         }
     }
 
@@ -429,6 +433,20 @@ mod tests {
         assert_eq!(hits.len(), 1);
         let bob = db.readers().knn(VectorTable::Face, "bob", &unit(512, 0), 5).await.unwrap();
         assert_eq!(bob.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn search_vectors_and_text_stay_with_their_owner() {
+        let tmp = TempDir::new("media");
+        let db = open_db(&tmp);
+        let w = db.writer();
+        w.upsert_vector(VectorTable::SearchVision, 1, "alice", &unit(768, 0)).await.unwrap();
+        w.upsert_vector(VectorTable::SearchVision, 2, "bob", &unit(768, 0)).await.unwrap();
+        let hits = db.readers().knn(VectorTable::SearchVision, "alice", &unit(768, 0), 5).await.unwrap();
+        assert_eq!(hits.iter().map(|h| h.0).collect::<Vec<_>>(), vec![1]);
+        w.execute("INSERT INTO search_text(body, owner_hex, sha, src, t_ms) VALUES ('Facturé : électricité', 'alice', 's1', 'ocr', 0), ('facture', 'bob', 's2', 'ocr', 0)", vec![]).await.unwrap();
+        let found = db.readers().read(|c| Ok(c.query_row("SELECT group_concat(sha) FROM search_text WHERE search_text MATCH 'facture electricite' AND owner_hex = 'alice'", [], |r| r.get::<_, String>(0))?)).await.unwrap();
+        assert_eq!(found, "s1", "sans accents, et seulement les textes d'alice");
     }
 
     #[tokio::test]

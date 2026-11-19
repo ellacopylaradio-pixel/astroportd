@@ -1,6 +1,6 @@
 //! Réseau pair-à-pair souverain des stations : libp2p (TCP + QUIC, Noise, Yamux), réseau privé par clé
 //! `swarm.key`, circuit relay v2 et hole punching (DCUtR) pour traverser les box, tunnels TCP « DRAGON »
-//! (`/x/<service>-<peerid>`) et échange direct de blobs chiffrés (`/astro/blob/1.0.0`), sans Kubo.
+//! (`/x/<service>-<peerid>`) et échange direct de blobs chiffrés (`/astro/blob/1.1.0`, plages et reprise), sans Kubo.
 //!
 //! Routage intelligent du swarm ([`routing`]) : Power-Score du matériel local et choix du meilleur nœud pour un
 //! service distant (`power`, `closest`, `random`), héritage d'`astrosystemctl`.

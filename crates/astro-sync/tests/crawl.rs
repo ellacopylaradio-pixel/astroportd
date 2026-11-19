@@ -111,8 +111,10 @@ async fn a_second_crawl_is_idempotent_and_the_cursor_picks_up_new_events() {
     crawler.run_until_stable(&[], 6).await.unwrap();
 
     let again = crawler.run_until_stable(&[], 6).await.unwrap();
-    assert_eq!(again.inserted, 0, "rien de nouveau : tout est dédupliqué");
-    assert!(again.duplicates > 0, "la marge de relecture est absorbée par `claimed`");
+    assert_eq!(again.inserted, 0, "rien de nouveau");
+    // Le relai astroportd parle NIP-77 : la marge de relecture ne fait plus voyager un seul événement déjà connu.
+    assert!(again.negentropy > 0, "lots réconciliés par Negentropy");
+    assert_eq!((again.fetched, again.duplicates), (0, 0), "aucun événement retéléchargé");
     assert_eq!(count(&db, "SELECT count(*) FROM nostr_events").await, 9);
 
     // Un nouvel événement de Carol arrive sur le relai source.

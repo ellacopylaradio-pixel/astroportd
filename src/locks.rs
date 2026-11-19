@@ -69,7 +69,7 @@ impl Locks {
             .await
             .map_err(|e| e.to_string())?;
         let privacy = crate::privacy_watch::sweep(&self.db).await.map_err(|e| e.to_string())?;
-        let (gps, identity, sensitive) = privacy.iter().fold((0, 0, 0), |(g, i, s), (_, f)| (g + f.gps.len(), i + f.identity.len(), s + f.sensitive.len()));
+        let (gps, identity, sensitive) = privacy.iter().fold((0, 0, 0), |(g, i, s), (_, f)| (g + f.gps.len(), i + f.identity.len(), s + f.sensitive.len() + f.papers.len()));
         let mode = crate::station_admin::station_mode(&self.db).await;
         let f = &self.facts;
         Ok(json!({

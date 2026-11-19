@@ -1,0 +1,34 @@
+[package]
+name = "astro-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["net", "time", "sync", "process", "rt"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+axum.workspace = true
+sha2.workspace = true
+hex.workspace = true
+image.workspace = true
+astro-facecloud.workspace = true
+astro-dav.workspace = true
+ort = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[features]
+# OCR (et les moteurs des lots suivants) par ONNX Runtime chargé à l'exécution.
+onnx = ["dep:ort", "dep:tokenizers", "astro-facecloud/onnx"]
+
+[lints]
+workspace = true

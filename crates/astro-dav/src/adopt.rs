@@ -42,16 +42,37 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
 }
 
+/// Dossier de bibliothèque où une copie de média peut être rangée telle que chez l'ami : sous `/Vidéos/` ou `/Musique/`,
+/// normalisé, sans segment caché ni plus de 6 niveaux. Tout autre chemin (tiroir système, `/Public`…) : `None`.
+pub fn library_dir(dir: &str) -> Option<String> {
+    let d = vfs::normalize_path(dir).ok()?;
+    let segs: Vec<&str> = d.split('/').filter(|s| !s.is_empty()).collect();
+    let ok = matches!(segs.first(), Some(&"Vidéos") | Some(&"Musique")) && segs.len() <= 6 && segs.iter().all(|s| !s.starts_with('.') && s.chars().count() <= 120);
+    ok.then_some(d)
+}
+
 /// Range `file` dans `/Partages/De_<label>/` chez `recipient` (nom suffixé par la fin du CID en cas de collision) et
 /// rend son chemin. `origin` : provenance notée dans l'entrée (`facecloud-share`, `friend-share`).
 pub async fn adopt_shared_file(db: &Db, recipient: &str, sender_hex: &str, label: &str, file: &SharedFile, origin: &str) -> Result<String, VfsError> {
+    adopt_shared_file_into(db, recipient, sender_hex, label, file, origin, None).await
+}
+
+/// Comme [`adopt_shared_file`], mais une copie de film ou de morceau demandée par la médiathèque se range **à la même place que
+/// chez l'ami** (`library` : son dossier, accepté seulement s'il passe [`library_dir`]) ; sinon `/Partages/De_<label>/`. Jamais
+/// d'écrasement : un nom déjà pris par un autre contenu reçoit un suffixe.
+pub async fn adopt_shared_file_into(db: &Db, recipient: &str, sender_hex: &str, label: &str, file: &SharedFile, origin: &str, library: Option<&str>) -> Result<String, VfsError> {
     let (recipient, sender_hex, file, origin) = (recipient.to_owned(), sender_hex.to_owned(), file.clone(), origin.to_owned());
-    let dir = format!("/Partages/De_{}", sender_label(Some(label), &sender_hex));
+    let library = library.and_then(library_dir);
+    let dir = library.clone().unwrap_or_else(|| format!("/Partages/De_{}", sender_label(Some(label), &sender_hex)));
     vfs_tx(db, move |tx| {
-        for d in ["/Partages", dir.as_str()] {
-            match vfs::mkdir_tx(tx, &recipient, d, now()) {
-                Ok(()) | Err(VfsError::Exists) => {}
-                Err(e) => return Err(e),
+        if library.is_some() {
+            vfs::mkdir_p_tx(tx, &recipient, &dir, now())?;
+        } else {
+            for d in ["/Partages", dir.as_str()] {
+                match vfs::mkdir_tx(tx, &recipient, d, now()) {
+                    Ok(()) | Err(VfsError::Exists) => {}
+                    Err(e) => return Err(e),
+                }
             }
         }
         let name = safe_file_name(&file.name);

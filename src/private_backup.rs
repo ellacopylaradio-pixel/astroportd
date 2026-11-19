@@ -69,7 +69,7 @@ const SEND_PACE: std::time::Duration = std::time::Duration::from_millis(250);
 const LOOKBACK_SECS: i64 = 30 * 24 * 3600;
 const BATCH: usize = 50;
 const MAX_TRIES: u32 = 12;
-const MAX_BYTES: u64 = 1 << 30;
+const MAX_BYTES: u64 = astro_p2p::blob::MAX_BLOB_BYTES;
 /// Une demande de restauration est renouvelée toutes les 6 h tant que le manifeste n'est pas rétabli.
 const RESTORE_RETRY_SECS: i64 = 6 * 3600;
 /// Sans manifeste retrouvé au bout de 3 jours, le compte repart à neuf : la publication de manifestes est débloquée.

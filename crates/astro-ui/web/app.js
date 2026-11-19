@@ -133,7 +133,7 @@ h('button', { class: 'ghost', onclick: () => share([it.path]) }, 'Partager'));
 photos().then(m => { if (items[at] === it) $('#view-t').append(...m.actions(it, isImg)); });
 try {
 const u = await blobUrl(it.path);
-if (items[at] === it) box.replaceChildren(kindOf(it.mime) === 'video' ? h('video', { src: u, controls: true, autoplay: true }) : h('img', { src: u, alt: lastName(it.path) }));
+if (items[at] === it) box.replaceChildren(kindOf(it.mime) === 'video' ? h('video', { src: u, controls: true, autoplay: true, onloadedmetadata: e => { if (it.at_ms) e.target.currentTime = it.at_ms / 1000; } }) : h('img', { src: u, alt: lastName(it.path) }));
 } catch (e) { box.replaceChildren(h('p', { class: 'err' }, e.message)); }
 }
 function open(list, i) { items = list; viewer.showModal(); show(i); }

@@ -14,6 +14,10 @@ pub trait SocialApi: Auth {
     fn set_ai_params(&self, _who: &Principal, _patch: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("paramètres IA non disponibles sur cette station")) }
     }
+    /// « Lecture de vos documents » : vue, stations proposées, accord, arrêt.
+    fn reading(&self, _who: &Principal, _op: ReadingOp) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("lecture des documents non disponible sur cette station")) }
+    }
     /// Carnet d'adresses : une opération ([`BookOp`]) sur les fiches du titulaire.
     fn book(&self, _who: &Principal, _op: BookOp) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("le carnet d'adresses n'est pas disponible sur cette station")) }
@@ -87,6 +91,8 @@ pub(super) fn routes<B: SocialApi>() -> Router<Arc<UiState<B>>> {
     Router::new()
         .route("/api/v1/activity", get(activity_stream::<B>))
         .route("/api/v1/me/ai", get(ai_params::<B>).post(set_ai_params::<B>))
+        .route("/api/v1/me/reading", get(reading_view::<B>).post(reading_set::<B>))
+        .route("/api/v1/me/reading/offers", get(reading_offers::<B>))
         .route("/api/v1/book", get(book_list::<B>))
         .route("/api/v1/book/card", get(book_get::<B>).post(book_save::<B>))
         .route("/api/v1/book/delete", post(book_delete::<B>))
@@ -307,6 +313,35 @@ async fn chat_read<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): A
 
 async fn ai_params<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
     reply(st.backend.ai_params(&p).await)
+}
+
+async fn reading_view<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.reading(&p, ReadingOp::View).await)
+}
+
+async fn reading_offers<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.reading(&p, ReadingOp::Offers).await)
+}
+
+/// `{ accept: { peers, tasks } }`, `{ revoke: true }` (toutes les stations), `{ revoke: "<PeerID>" }` (une seule),
+/// `{ pause: true | false }` ou `{ erase: true }`.
+async fn reading_set<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    let ok = |s: &&str| !s.is_empty() && s.len() <= 128;
+    let op = if let Some(on) = b["pause"].as_bool() {
+        ReadingOp::Pause(on)
+    } else if b["erase"] == true {
+        ReadingOp::Erase
+    } else if b["revoke"] == true {
+        ReadingOp::Revoke(None)
+    } else if let Some(peer) = b["revoke"].as_str().filter(ok) {
+        ReadingOp::Revoke(Some(peer.to_owned()))
+    } else if let (Some(peers), Some(tasks)) = (b["accept"]["peers"].as_array(), b["accept"]["tasks"].as_array()) {
+        let list = |v: &Vec<Value>| v.iter().filter_map(Value::as_str).filter(ok).take(8).map(str::to_owned).collect::<Vec<_>>();
+        ReadingOp::Accept { peers: list(peers), tasks: list(tasks) }
+    } else {
+        return reply(Err(ApiError::bad_request("attendu : { accept: { peers, tasks } }, { revoke: true | \"<station>\" }, { pause: true | false } ou { erase: true }")));
+    };
+    reply(st.backend.reading(&p, op).await)
 }
 
 async fn set_ai_params<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(patch): Json<Value>) -> Response {

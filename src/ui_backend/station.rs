@@ -123,16 +123,19 @@ impl<B: BlobStore> StationApi for StationBackend<B> {
         let info = plane::describe(&file, home).map_err(|e| ApiError::internal(e.to_string()))?;
         let multi = !plane::running().is_empty();
         let pending: Vec<&str> = info.iter().filter(|p| !p.running).map(|p| p.name.as_str()).collect();
+        // Servis mais retirés de la configuration (ORIGIN après « Basculer en ẐEN ») : ils s'arrêteront au redémarrage.
+        let stopping: Vec<&str> = plane::running().iter().filter(|n| !info.iter().any(|p| &p.name == *n)).map(String::as_str).collect();
         // Démarrage automatique : une unité qui lance encore `serve` ne servira que ORIGIN, même avec plusieurs plans configurés.
         let unit = crate::systemd_unit::unit_path(home);
         let state = crate::systemd_unit::state_of(&unit);
         let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("astroportd"));
         let service = json!({
             "unit": state.as_str(), "path": unit.display().to_string(), "command": crate::systemd_unit::planes_exec(&exe, None),
-            "mismatch": info.len() > 1 && state == crate::systemd_unit::UnitState::Serve,
+            "mismatch": (info.len() > 1 || !info.iter().any(|p| p.origin)) && state == crate::systemd_unit::UnitState::Serve,
             "restart": crate::station_domain::restart_available(),
         });
-        Ok(json!({ "configured": existed, "multi_process": multi, "front": plane::front(), "planes": info, "restart_needed": !pending.is_empty(), "pending": pending, "path": path.display().to_string(), "service": service }))
+        let origin_paused = !info.iter().any(|p| p.origin);
+        Ok(json!({ "configured": existed, "multi_process": multi, "front": plane::front(), "planes": info, "origin_paused": origin_paused, "origin_members": origin_members(&file, home), "restart_needed": !pending.is_empty() || !stopping.is_empty(), "pending": pending, "stopping": stopping, "path": path.display().to_string(), "service": service }))
     }
     async fn plane_add(&self, _who: &Principal, name: String, swarm_key: Option<String>) -> Result<Value, ApiError> {
         use crate::plane;
@@ -166,6 +169,39 @@ impl<B: BlobStore> StationApi for StationBackend<B> {
         let rep = crate::systemd_unit::apply(home, &self.unit_exe(), &path, &mut file, unix_now()).map_err(ApiError::internal)?;
         self.services.activity.publish_to(astro_core::Audience::Captain, "system", "ui:planes", format!("démarrage automatique : {}", rep.state), None);
         Ok(rep.to_json())
+    }
+    async fn plane_origin(&self, _who: &Principal, action: String, heir: Option<String>) -> Result<Value, ApiError> {
+        use crate::plane;
+        let home = self.planes_home()?;
+        let path = plane::default_path(home);
+        let kept_path = plane::paused_origin_path(&path);
+        let (mut file, _) = plane::load(&path, home).map_err(|e| ApiError::internal(e.to_string()))?;
+        if action == "stop" {
+            // Choix de la coopérative : on ne coupe jamais l'accès d'un membre par surprise. Tant qu'ORIGIN héberge des MULTIPASS,
+            // la station garde les deux constellations (elle accueille les nouveaux).
+            let members = origin_members(&file, home);
+            if members > 0 {
+                return Err(ApiError::bad_request(format!("ORIGIN héberge encore {members} MULTIPASS : la station garde les deux constellations tant qu'ils y sont")));
+            }
+            let kept = plane::stop_origin(&mut file, home, heir.as_deref()).map_err(|e| ApiError::bad_request(e.to_string()))?;
+            let text = serde_json::to_string_pretty(&kept).map_err(|e| ApiError::internal(e.to_string()))?;
+            std::fs::write(&kept_path, text + "\n").map_err(|e| ApiError::internal(format!("{} non écrit : {e}", kept_path.display())))?;
+        } else {
+            let kept = std::fs::read_to_string(&kept_path).ok().and_then(|t| serde_json::from_str::<plane::PausedOrigin>(&t).ok());
+            plane::restore_origin(&mut file, home, kept).map_err(|e| ApiError::bad_request(e.to_string()))?;
+        }
+        plane::save(&path, &file).map_err(|e| ApiError::internal(format!("planes.json non écrit : {e}")))?;
+        if action == "restore" {
+            let _ = std::fs::remove_file(&kept_path);
+        }
+        // `serve` relancerait ORIGIN : l'unité doit lancer `planes`, qui ne sert que ce que dit planes.json.
+        let service = match crate::systemd_unit::apply(home, &self.unit_exe(), &path, &mut file, unix_now()) {
+            Ok(r) => r.to_json(),
+            Err(e) => json!({ "state": "error", "error": e }),
+        };
+        let said = if action == "stop" { "station basculée en ẐEN : au prochain démarrage, ORIGIN n'est plus servi (données gardées) et ẐEN reprend son adresse et son port P2P ; si cette station figure dans P2P_RELAYS avec son ancien port, corrigez la ligne (Configuration coopérative)" } else { "ORIGIN remis en service au prochain démarrage, à son adresse" };
+        self.services.activity.publish_to(astro_core::Audience::Captain, "system", "ui:planes", said.to_owned(), None);
+        Ok(json!({ "state": if action == "stop" { "stopped" } else { "restored" }, "service": service }))
     }
     async fn plane_remove(&self, _who: &Principal, name: String) -> Result<Value, ApiError> {
         use crate::plane;
@@ -341,4 +377,13 @@ impl<B: BlobStore> StationApi for StationBackend<B> {
         });
         out
     }
+}
+
+/// MULTIPASS hébergés par le plan ORIGIN (sa base, ouverte en lecture seule) ; 0 sans ORIGIN ou sans base.
+fn origin_members(file: &crate::plane::PlanesFile, home: &std::path::Path) -> i64 {
+    let Some(db) = crate::plane::plan(file, home).ok().and_then(|ps| ps.into_iter().find(|p| p.origin)).map(|p| p.db).filter(|d| d.exists()) else { return 0 };
+    rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .and_then(|c| c.query_row("SELECT COUNT(*) FROM identities WHERE role = 'multipass' AND hosted = 1", [], |r| r.get(0)))
+        // Base illisible : on ne sait pas, donc on ne bascule pas (un membre pourrait y être).
+        .unwrap_or(1)
 }

@@ -93,13 +93,15 @@ pub struct ReadFailure {
 pub type ReadFailureHook = Arc<dyn Fn(&ReadFailure) + Send + Sync>;
 
 impl DavConfig {
-    /// Réglages par défaut : 1 Go / 4 Go par fichier, 10 Go / 128 Go de quota (valeurs du legacy).
+    /// Réglages par défaut : 4 Gio / 16 Gio par fichier (un film entier ; le legacy plafonnait à 1 / 4), 10 Go / 128 Go
+    /// de quota (valeurs du legacy). Le plus gros doit rester sous `astro_p2p::blob::MAX_BLOB_BYTES`, sinon un ami ne
+    /// pourrait pas le rapatrier (vérifié par un test de `share_inbox`).
     pub fn new(station_secret: Vec<u8>) -> Self {
         Self {
             mount: "/dav".into(),
             public_base_url: None,
-            max_file_multipass: GIB,
-            max_file_zencard: 4 * GIB,
+            max_file_multipass: 4 * GIB,
+            max_file_zencard: 16 * GIB,
             quota_multipass: 10 * GIB,
             quota_zencard: 128 * GIB,
             propfind_infinity_cap: 10_000,

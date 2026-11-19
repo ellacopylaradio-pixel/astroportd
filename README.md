@@ -11,7 +11,7 @@ vos amis, vous fait **sauvegarder par vos proches** (et retrouver votre compte s
 une **comptabilité coopérative en Ẑen** (monnaie libre Ğ1) — sans plateforme, sans abonnement, sans serveur central.
 C'est le cœur souverain d'[Astroport.ONE](https://github.com/papiche/Astroport.ONE) et d'UPlanet, réécrit en Rust.
 
-> **Version 1.4.0.** Testé de bout en bout (≈ 930 tests, `clippy` sans avertissement) ; lisez aussi
+> **Version 1.5.0.** Testé de bout en bout (≈ 1 020 tests, `clippy` sans avertissement) ; lisez aussi
 > [les limites connues](#10-limites-connues). Licence **AGPL-3.0** · Auteur : Fred (support@qo-op.com) · Rust 2024 (≥ 1.85).
 
 **Par où commencer ?** Découvrir sans rien installer : [la page d'accueil](docs/index.html) · Ouvrir sa station :
@@ -577,13 +577,21 @@ fait de ces événements :
    `x`, `dim`, `duration`, `bitrate`), genres en étiquettes **NIP-32**, `series_name` / `season_number` / `episode_number` /
    `episode_name`, tag NIP-70 `["-"]`. Le relai le traite comme n'importe quel événement (test d'interopérabilité
    `tests/plugin_media_interop.rs`).
-3. **Cercle N¹** : le relai ne livre un kind 21/22 qu'à son **auteur** et à ceux qu'il **suit** (N¹), jamais au reste du
+3. **Cercle N¹** : le relai ne livre un kind 21/22 (vidéo ou morceau) ni une playlist 30005 qu’à son **auteur** et à ceux qu'il **suit** (N¹), jamais au reste du
    cercle N². Le N¹ se lit dans le **dernier kind 3 de l'auteur** stocké sur la station, qu'il soit hébergé ici ou sur une
    station distante de la constellation ; un lecteur authentifié (NIP-42) qui y figure est servi même s'il est inconnu
    du cercle local. Le N¹ est rechargé à chaque rafraîchissement du cercle.
+4. **Musique et mix** : un morceau est un kind 21 (ou 22) dont l'`imeta` est audio (`m audio/mpeg`, pochette en `image`,
+   `t music`) ; un mix de DJ (`media-add --type mix`) devient un mp3 par morceau dans `/Musique/<DJ>/<mix>` et une playlist
+   **NIP-51 kind 30005** qui liste leurs événements (`e`). Le relai réserve ces playlists au même N¹ que les morceaux
+   (`friend_kinds`) : une playlist n'est pas plus lisible que ce qu'elle désigne. Un mix sans tracklist est gardé entier.
 
 Le fichier reste chiffré dans l'uCloud et l'événement n'en publie ni la clé ni une URL lisible : pour qu'un ami regarde,
 le titulaire lui envoie un lien de partage (`/s/<slug>#clé`).
+
+Le titulaire, lui, retrouve tout dans **Fichiers › Médiathèque** (`src/media.rs`, `m-media.js`) : films, séries, albums et
+mix, recherche sur les fiches, lecture en flux par `/play/<jeton>` (jeton signé, 12 h, `Range`), file d'écoute qui suit
+la navigation, et correction des fiches depuis l'écran.
 
 ---
 

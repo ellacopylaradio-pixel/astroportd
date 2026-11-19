@@ -5,8 +5,10 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::collections::HashSet;
 use std::time::Duration;
 
+use astro_nostr_proto::negentropy::{Item, Negentropy, Storage};
 use astro_nostr_proto::{ClientMessage, Event, Filter, RelayMessage, UnsignedEvent, kind};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -36,7 +38,29 @@ pub enum ClientError {
     /// Message illisible.
     #[error("message illisible : {0}")]
     Protocol(String),
+    /// Le relai ne connaît pas la réconciliation Negentropy (NIP-77).
+    #[error("réconciliation non prise en charge par le relai : {0}")]
+    Unsupported(String),
 }
+
+/// Résultat d'une synchronisation : ce que le relai a et que je n'avais pas, et ce que j'avais et qu'il n'a plus.
+#[derive(Debug, Default)]
+pub struct SyncResult {
+    /// Événements du relai absents de l'ensemble local.
+    pub missing: Vec<Event>,
+    /// Identifiants locaux que le relai n'a pas (supprimés, ou jamais vus de lui).
+    pub gone: Vec<String>,
+    /// La réconciliation Negentropy a servi (sinon : lecture complète, différence calculée ici).
+    pub negentropy: bool,
+}
+
+/// Taille d'un message Negentropy envoyé par le client.
+const NEG_FRAME: usize = 256 * 1024;
+/// Identifiants demandés par `REQ` après une réconciliation.
+const IDS_PER_REQ: usize = 400;
+/// Un relai qui ignore `NEG-OPEN` sans rien répondre (certains taisent les messages inconnus) est tenu pour sans NIP-77
+/// passé ce délai.
+const NEG_FIRST_REPLY: Duration = Duration::from_secs(5);
 
 /// Clé de signature de la station pour répondre aux défis NIP-42, effacée de la mémoire à la destruction.
 #[derive(Clone)]
@@ -62,12 +86,24 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait RelaySession: Send {
     /// Comme [`RelayClient::fetch`], sur la connexion de la session.
     fn fetch<'s>(&'s mut self, filter: &'s Filter) -> BoxFuture<'s, Result<Vec<Event>, ClientError>>;
+
+    /// Réconciliation Negentropy (NIP-77) de `local` avec `filter`, **sans repli** : un relai qui ne la connaît pas rend
+    /// [`ClientError::Unsupported`], et l'appelant garde son propre chemin (pages du crawl). Par défaut : non prise en charge.
+    fn sync<'s>(&'s mut self, _filter: &'s Filter, _local: &'s [(u64, String)]) -> BoxFuture<'s, Result<SyncResult, ClientError>> {
+        Box::pin(async { Err(ClientError::Unsupported("session sans NIP-77".into())) })
+    }
 }
 
 /// Source d'événements : un relai interrogeable par filtre.
 pub trait RelayClient: Send + Sync {
     /// Tous les événements du relai `relay` correspondant à `filter`, du plus récent au plus ancien.
     fn fetch<'a>(&'a self, relay: &'a str, filter: &'a Filter) -> impl Future<Output = Result<Vec<Event>, ClientError>> + Send + 'a;
+
+    /// Synchronise `local` avec ce que `relay` a pour `filter` (Negentropy, NIP-77 ; un relai qui ne la connaît pas est lu en
+    /// entier). Par défaut : non prise en charge, l'appelant lit par [`RelayClient::fetch`].
+    fn sync<'a>(&'a self, _relay: &'a str, _filter: &'a Filter, _local: &'a [(u64, String)]) -> impl Future<Output = Result<SyncResult, ClientError>> + Send + 'a {
+        async { Err(ClientError::Unsupported("client sans NIP-77".into())) }
+    }
 
     /// Session vers `relay` pour plusieurs requêtes. Par défaut, chaque requête repasse par [`RelayClient::fetch`]
     /// (sources sans connexion durable : relais simulés, maillage) ; [`WsClient`] garde, lui, une seule connexion.
@@ -143,6 +179,19 @@ impl WsClient {
         tokio::time::timeout(self.timeout, work).await.map_err(|_| ClientError::Timeout)?
     }
 
+    /// Synchronise l'ensemble `local` (`(created_at, id)` déjà connus) avec ce que le relai a pour `filter` : réconciliation
+    /// Negentropy (NIP-77), puis seuls les événements manquants sont demandés. Un relai sans NIP-77 est lu en entier et la
+    /// différence calculée ici : le résultat est le même, seul le coût change.
+    pub async fn sync_as(&self, connect: &str, auth_as: &str, filter: &Filter, local: &[(u64, String)]) -> Result<SyncResult, ClientError> {
+        let work = async {
+            let mut session = self.connect_session(connect, auth_as).await?;
+            let result = session.sync(filter, local).await;
+            session.close().await;
+            result
+        };
+        tokio::time::timeout(self.timeout, work).await.map_err(|_| ClientError::Timeout)?
+    }
+
     /// Ouvre une session durable vers `connect` (NIP-42 au nom de `auth_as`, voir [`WsClient::fetch_as`]) : la
     /// connexion est établie tout de suite, pour qu'un appelant puisse choisir une autre voie si elle échoue.
     pub async fn open_session_as(&self, connect: &str, auth_as: &str) -> Result<WsSession<'_>, ClientError> {
@@ -151,7 +200,7 @@ impl WsClient {
 
     async fn connect_session(&self, connect: &str, auth_as: &str) -> Result<WsSession<'_>, ClientError> {
         let (ws, _) = connect_async_tls_with_config(connect, None, false, Some(self.connector()?)).await.map_err(|e| ClientError::Connection(e.to_string()))?;
-        Ok(WsSession { client: self, auth_as: auth_as.to_owned(), ws, challenge: None, authenticated: false, next_sub: 0, broken: None })
+        Ok(WsSession { client: self, auth_as: auth_as.to_owned(), ws, challenge: None, authenticated: false, next_sub: 0, broken: None, no_negentropy: false })
     }
 }
 
@@ -167,6 +216,8 @@ pub struct WsSession<'a> {
     /// Raison pour laquelle la connexion n'est plus utilisable (délai dépassé au milieu d'une souscription, envoi
     /// impossible) : les requêtes suivantes échouent avec elle au lieu de lire un flux désynchronisé.
     broken: Option<String>,
+    /// Le relai a montré qu'il ne parle pas NIP-77 : les réconciliations suivantes sur cette session sont sautées.
+    no_negentropy: bool,
 }
 
 impl std::fmt::Debug for WsSession<'_> {
@@ -223,7 +274,108 @@ impl WsSession<'_> {
                 RelayMessage::Closed { sub_id, message } if sub_id == sub => return Err(ClientError::Closed(message)),
                 // Restes d'une souscription précédente (événements en direct arrivés avant notre `CLOSE`).
                 RelayMessage::Event { .. } | RelayMessage::Eose(_) | RelayMessage::Closed { .. } => {}
-                RelayMessage::Notice(_) | RelayMessage::Ok { .. } | RelayMessage::Count { .. } => {}
+                RelayMessage::Notice(_) | RelayMessage::Ok { .. } | RelayMessage::Count { .. } | RelayMessage::NegMsg { .. } | RelayMessage::NegErr { .. } => {}
+            }
+        }
+    }
+
+    /// Réconciliation **sans repli** : [`ClientError::Unsupported`] si le relai ne connaît pas NIP-77.
+    pub async fn sync_strict(&mut self, filter: &Filter, local: &[(u64, String)]) -> Result<SyncResult, ClientError> {
+        let (need, gone) = self.reconcile(filter, storage_of(local)).await?;
+        let mut missing = Vec::new();
+        for chunk in need.chunks(IDS_PER_REQ) {
+            let ids = Filter { ids: Some(chunk.to_vec()), ..Filter::default() };
+            missing.extend(self.req(&ids).await?);
+        }
+        Ok(SyncResult { missing, gone, negentropy: true })
+    }
+
+    /// Voir [`WsClient::sync_as`].
+    pub async fn sync(&mut self, filter: &Filter, local: &[(u64, String)]) -> Result<SyncResult, ClientError> {
+        let items: Vec<Item> = local
+            .iter()
+            .filter_map(|(t, id)| {
+                let mut b = [0u8; 32];
+                hex::decode_to_slice(id, &mut b).ok()?;
+                Some(Item { timestamp: *t, id: b })
+            })
+            .collect();
+        let (need, gone) = match self.reconcile(filter, Storage::new(items)).await {
+            Ok(diff) => diff,
+            Err(ClientError::Unsupported(_)) => {
+                // Relai sans NIP-77 : tout est lu, la différence est faite ici.
+                let events = self.req(filter).await?;
+                let theirs: HashSet<&str> = events.iter().map(|e| e.id.as_str()).collect();
+                let mine: HashSet<&str> = local.iter().map(|(_, id)| id.as_str()).collect();
+                let gone = local.iter().filter(|(_, id)| !theirs.contains(id.as_str())).map(|(_, id)| id.clone()).collect();
+                let missing = events.into_iter().filter(|e| !mine.contains(e.id.as_str())).collect();
+                return Ok(SyncResult { missing, gone, negentropy: false });
+            }
+            Err(e) => return Err(e),
+        };
+        let mut missing = Vec::new();
+        for chunk in need.chunks(IDS_PER_REQ) {
+            let ids = Filter { ids: Some(chunk.to_vec()), ..Filter::default() };
+            missing.extend(self.req(&ids).await?);
+        }
+        Ok(SyncResult { missing, gone, negentropy: true })
+    }
+
+    /// Réconciliation NIP-77 : `(identifiants que le relai a seul, identifiants que j'ai seul)`.
+    async fn reconcile(&mut self, filter: &Filter, storage: Storage) -> Result<(Vec<String>, Vec<String>), ClientError> {
+        if self.no_negentropy {
+            return Err(ClientError::Unsupported("relai sans NIP-77".into()));
+        }
+        let result = self.reconcile_once(filter, storage).await;
+        if matches!(result, Err(ClientError::Unsupported(_))) {
+            self.no_negentropy = true;
+        }
+        result
+    }
+
+    async fn reconcile_once(&mut self, filter: &Filter, storage: Storage) -> Result<(Vec<String>, Vec<String>), ClientError> {
+        self.next_sub += 1;
+        let sub = format!("neg-{}", self.next_sub);
+        let mut neg = Negentropy::new(storage.clone(), NEG_FRAME);
+        let open = |neg: &mut Negentropy| ClientMessage::NegOpen { sub_id: sub.clone(), filter: filter.clone(), message: hex::encode(neg.initiate()) }.to_json();
+        send(&mut self.ws, open(&mut neg)).await?;
+        let (mut need, mut have) = (Vec::new(), Vec::new());
+        let mut answered = false;
+        loop {
+            let next = if answered { Ok(self.ws.next().await) } else { tokio::time::timeout(NEG_FIRST_REPLY, self.ws.next()).await };
+            let Ok(next) = next else { return Err(ClientError::Unsupported("aucune réponse à NEG-OPEN".into())) };
+            let frame = next.ok_or_else(|| ClientError::Connection("connexion fermée".into()))?;
+            let Message::Text(text) = frame.map_err(|e| ClientError::Connection(e.to_string()))? else { continue };
+            match RelayMessage::parse(text.as_str()) {
+                Ok(RelayMessage::Auth(c)) => self.challenge = Some(c),
+                Ok(RelayMessage::NegMsg { sub_id, message }) if sub_id == sub => {
+                    answered = true;
+                    let bytes = hex::decode(&message).map_err(|_| ClientError::Protocol("message Negentropy illisible".into()))?;
+                    let round = neg.reconcile(&bytes).map_err(|e| ClientError::Protocol(e.to_string()))?;
+                    need.extend(round.need.iter().map(hex::encode));
+                    have.extend(round.have.iter().map(hex::encode));
+                    match round.next {
+                        Some(next) => send(&mut self.ws, ClientMessage::NegMsg { sub_id: sub.clone(), message: hex::encode(next) }.to_json()).await?,
+                        None => {
+                            send(&mut self.ws, ClientMessage::NegClose(sub).to_json()).await?;
+                            return Ok((need, have));
+                        }
+                    }
+                }
+                Ok(RelayMessage::NegErr { sub_id, reason }) if sub_id == sub && reason.starts_with("auth-required") && !self.authenticated => {
+                    let (Some(signer), Some(challenge)) = (&self.client.signer, &self.challenge) else { return Err(ClientError::AuthRequired) };
+                    authenticate(&mut self.ws, signer, &self.auth_as, challenge).await?;
+                    self.authenticated = true;
+                    neg = Negentropy::new(storage.clone(), NEG_FRAME);
+                    need.clear();
+                    have.clear();
+                    send(&mut self.ws, open(&mut neg)).await?;
+                }
+                Ok(RelayMessage::NegErr { sub_id, reason }) if sub_id == sub => return Err(ClientError::Closed(reason)),
+                // Un relai qui ne connaît pas NEG-OPEN le dit par un NOTICE (ou ne comprend pas sa propre réponse).
+                Ok(RelayMessage::Notice(n)) => return Err(ClientError::Unsupported(n)),
+                Err(e) => return Err(ClientError::Unsupported(e.to_string())),
+                Ok(_) => {}
             }
         }
     }
@@ -239,6 +391,38 @@ impl RelaySession for WsSession<'_> {
     fn fetch<'s>(&'s mut self, filter: &'s Filter) -> BoxFuture<'s, Result<Vec<Event>, ClientError>> {
         Box::pin(WsSession::fetch(self, filter))
     }
+
+    fn sync<'s>(&'s mut self, filter: &'s Filter, local: &'s [(u64, String)]) -> BoxFuture<'s, Result<SyncResult, ClientError>> {
+        Box::pin(async move {
+            if let Some(reason) = &self.broken {
+                return Err(ClientError::Connection(format!("connexion inutilisable : {reason}")));
+            }
+            let outcome = match tokio::time::timeout(self.client.timeout, self.sync_strict(filter, local)).await {
+                Ok(r) => r,
+                Err(_) => Err(ClientError::Timeout),
+            };
+            // Un relai sans NIP-77 répond (NOTICE) sans désynchroniser la connexion : les pages suivent sur la même session.
+            if let Err(e) = &outcome
+                && !matches!(e, ClientError::Closed(_) | ClientError::AuthRequired | ClientError::AuthRejected(_) | ClientError::Unsupported(_))
+            {
+                self.broken = Some(e.to_string());
+            }
+            outcome
+        })
+    }
+}
+
+fn storage_of(local: &[(u64, String)]) -> Storage {
+    Storage::new(
+        local
+            .iter()
+            .filter_map(|(t, id)| {
+                let mut b = [0u8; 32];
+                hex::decode_to_slice(id, &mut b).ok()?;
+                Some(Item { timestamp: *t, id: b })
+            })
+            .collect(),
+    )
 }
 
 impl WsClient {
@@ -267,6 +451,10 @@ impl WsClient {
 impl RelayClient for WsClient {
     async fn fetch(&self, relay: &str, filter: &Filter) -> Result<Vec<Event>, ClientError> {
         self.fetch_as(relay, relay, filter).await
+    }
+
+    async fn sync(&self, relay: &str, filter: &Filter, local: &[(u64, String)]) -> Result<SyncResult, ClientError> {
+        self.sync_as(relay, relay, filter, local).await
     }
 
     async fn session<'a>(&'a self, relay: &'a str) -> Result<Box<dyn RelaySession + 'a>, ClientError> {

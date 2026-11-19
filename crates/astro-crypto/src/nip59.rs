@@ -42,6 +42,13 @@ impl Rumor {
     pub fn tag_value(&self, name: &str) -> Option<&str> {
         self.tags.iter().find(|t| t.first().map(String::as_str) == Some(name)).and_then(|t| t.get(1)).map(String::as_str)
     }
+
+    /// Message de service entre stations (sauvegarde privée, assistance, médiathèque…), reconnu à son étiquette
+    /// `t = astro-…` : il voyage parfois en kind 14 mais n'est **pas** une ligne de conversation, et ne doit être lu ni par
+    /// le chat ni par l'agent.
+    pub fn is_station_protocol(&self) -> bool {
+        self.tags.iter().any(|t| t.first().map(String::as_str) == Some("t") && t.get(1).is_some_and(|v| v.starts_with("astro-")))
+    }
 }
 
 /// Erreurs NIP-59.
@@ -162,6 +169,15 @@ mod tests {
 
     fn rumor(secret: &[u8; 32]) -> Rumor {
         Rumor { pubkey: astro_nostr_proto::pubkey_of(secret).unwrap(), created_at: NOW, kind: kind::FILE, tags: vec![vec!["cid".into(), "bafkrei…".into()]], content: "ipfs://x".into() }
+    }
+
+    #[test]
+    fn a_service_message_is_told_apart_from_a_conversation_line() {
+        let with = |tags: Vec<Vec<&str>>| Rumor { pubkey: String::new(), created_at: NOW, kind: 14, tags: tags.into_iter().map(|t| t.into_iter().map(String::from).collect()).collect(), content: "x".into() };
+        assert!(with(vec![vec!["p", "ab"], vec!["t", "astro-backup"]]).is_station_protocol());
+        assert!(with(vec![vec!["t", "voyage"], vec!["t", "astro-assist"]]).is_station_protocol(), "une étiquette parmi d'autres suffit");
+        assert!(!with(vec![vec!["t", "voyage"]]).is_station_protocol(), "un sujet de conversation reste un message");
+        assert!(!with(vec![vec!["p", "astro-backup"], vec!["t"]]).is_station_protocol());
     }
 
     #[test]

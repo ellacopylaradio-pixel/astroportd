@@ -241,7 +241,7 @@ def build():
 
 
 # Documents annexes publiés en HTML (GitHub Pages sert les .md bruts) : même feuille de style que le guide.
-PAGES = ["CONSTELLATIONS", "MACOS", "CHARTE_UPLANET", "UPLANET_ManuelDesMembresEtDesContributeurs", "BIENVENUE"]
+PAGES = ["CONSTELLATIONS", "MACOS", "CHARTE_UPLANET", "UPLANET_ManuelDesMembresEtDesContributeurs", "BIENVENUE", "CONFIG_COOP"]
 LINKED = {**{f"{n}.md": f"{n}.html" for n in PAGES}, "GUIDE.md": "guide.html"}
 
 
@@ -268,6 +268,8 @@ def build_page(name: str) -> str:
     m = re.match(r"#\s+(.*)", text)
     title = m.group(1).strip() if m else name
     body = render(INTRO.get(name, "") + "\n\n" + re.sub(r"^#\s+.*\n", "", text, count=1))
+    # `## Titre {#id}` : ancre stable, visée par un lien de l'interface (CONFIG_COOP : un id par section de `#/coop`).
+    body = re.sub(r"<h([23])>(.*?) \{#([a-z0-9-]+)\}</h\1>", r'<h\1 id="\3">\2</h\1>', body)
     back = '<p class="back"><a href="index.html">Accueil</a> · <a href="guide.html">Guide du Capitaine</a></p>'
     return link_md(f'<!doctype html>\n<html lang="fr">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>{html.escape(strip_tags(title))} — astroportd</title>\n{style}\n</head>\n<body>\n<main class="pg">\n{back}\n<h1>{md.renderInline(title)}</h1>\n{body}\n{back}\n</main>\n</body>\n</html>\n')
 

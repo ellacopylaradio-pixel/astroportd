@@ -406,9 +406,96 @@ pub fn add(file: &mut PlanesFile, new: &NewPlane, home: &Path) -> Result<Added, 
 pub fn remove(file: &mut PlanesFile, name: &str) -> Result<(), PlaneError> {
     let i = file.planes.iter().position(|p| p.name == name).ok_or_else(|| rule(name, "plan inconnu"))?;
     if file.planes[i].swarm_key.is_none() {
-        return Err(rule(name, "ORIGIN est le plan de base de la station : il n'est pas retiré"));
+        return Err(rule(name, "ORIGIN est le plan de base de la station : il n'est pas retiré (pour ne servir que ẐEN : « Basculer en ẐEN »)"));
     }
     file.planes.remove(i);
+    Ok(())
+}
+
+/// Où garder la description d'ORIGIN pendant une bascule en ẐEN seul (à côté de `planes.json`, pour que celui-ci reste lisible
+/// par les versions qui refusent les champs inconnus).
+pub fn paused_origin_path(planes_path: &Path) -> PathBuf {
+    planes_path.with_file_name("planes.origin-paused.json")
+}
+
+/// ORIGIN mis en pause par [`stop_origin`] : sa description, et la constellation ẐEN qui a repris son adresse HTTP.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PausedOrigin {
+    /// Description d'ORIGIN (ports figés).
+    pub origin: PlaneSpec,
+    /// Plan qui a repris l'adresse HTTP d'ORIGIN.
+    pub heir: Option<String>,
+    /// Adresse HTTP qu'avait ce plan avant, rendue par [`restore_origin`].
+    pub heir_http: Option<String>,
+    /// Écoutes libp2p qu'avait ce plan avant, rendues par [`restore_origin`].
+    #[serde(default)]
+    pub heir_p2p: Vec<String>,
+}
+
+/// Écrit dans chaque plan ses ports **effectifs** (HTTP et libp2p) : un port par défaut dépend du rang du plan, et retirer ou
+/// remettre ORIGIN décalerait les rangs, donc les ports (une constellation changerait de port P2P et ses adresses de relais
+/// deviendraient fausses).
+fn freeze(file: &mut PlanesFile, home: &Path) -> Result<(), PlaneError> {
+    let planes = plan(file, home)?;
+    for (spec, p) in file.planes.iter_mut().zip(planes) {
+        spec.http_listen = Some(p.http.clone());
+        if spec.p2p_listen.is_empty() && !spec.args.iter().any(|x| x == "--no-p2p") {
+            // Les écoutes ajoutées par défaut précèdent les arguments libres du plan.
+            let auto = &p.args[..p.args.len() - spec.args.len()];
+            spec.p2p_listen = auto.windows(2).filter(|w| w[0] == "--p2p-listen").map(|w| w[1].clone()).collect();
+        }
+    }
+    Ok(())
+}
+
+/// **Bascule en ẐEN** : ORIGIN n'est plus servi au prochain démarrage et la constellation `heir` (la seule constellation ẐEN
+/// si `None`) **prend sa place** : son adresse HTTP (le DNS et le proxy mènent à elle) et son port libp2p (la redirection de
+/// la box sert telle quelle). Les autres plans gardent leurs ports. Rien n'est effacé : base, comptes et dossier d'ORIGIN
+/// restent sur le disque.
+pub fn stop_origin(file: &mut PlanesFile, home: &Path, heir: Option<&str>) -> Result<PausedOrigin, PlaneError> {
+    let Some(i) = file.planes.iter().position(|p| p.swarm_key.is_none()) else { return Err(rule("origin", "ORIGIN n'est déjà plus servi")) };
+    let zen: Vec<String> = file.planes.iter().filter(|p| p.swarm_key.is_some()).map(|p| p.name.clone()).collect();
+    let heir = match (heir, zen.as_slice()) {
+        (_, []) => return Err(rule("origin", "ajoutez d'abord une constellation ẐEN (sa swarm.key) : sans elle, la station ne servirait plus rien")),
+        (Some(h), _) if zen.iter().any(|z| z == h) => h.to_owned(),
+        (Some(h), _) => return Err(rule(h, "pas une constellation ẐEN de cette station")),
+        (None, [one]) => one.clone(),
+        (None, _) => return Err(rule("origin", format!("plusieurs constellations ẐEN ({}) : choisissez celle qui reprend l'adresse d'ORIGIN", zen.join(", ")))),
+    };
+    freeze(file, home)?;
+    let origin = file.planes.remove(i);
+    let h = file.planes.iter_mut().find(|p| p.name == heir).ok_or_else(|| rule(&heir, "plan inconnu"))?;
+    let heir_http = std::mem::replace(&mut h.http_listen, origin.http_listen.clone());
+    // Une station sans P2P côté ORIGIN (`--no-p2p`) n'a pas de port à céder : l'héritière garde le sien.
+    let heir_p2p = if origin.p2p_listen.is_empty() { h.p2p_listen.clone() } else { std::mem::replace(&mut h.p2p_listen, origin.p2p_listen.clone()) };
+    plan(file, home)?;
+    Ok(PausedOrigin { origin, heir: Some(heir), heir_http, heir_p2p })
+}
+
+/// Remet ORIGIN en service, en tête, avec ses ports d'avant ; la constellation qui avait repris son adresse HTTP retrouve la
+/// sienne. Sans description gardée : celle d'une station neuve. Refusé si ORIGIN est déjà servi.
+pub fn restore_origin(file: &mut PlanesFile, home: &Path, kept: Option<PausedOrigin>) -> Result<(), PlaneError> {
+    if file.planes.iter().any(|p| p.swarm_key.is_none()) {
+        return Err(rule("origin", "ORIGIN est déjà servi"));
+    }
+    freeze(file, home)?;
+    let kept = kept.filter(|k| k.origin.swarm_key.is_none());
+    let spec = kept.as_ref().map_or_else(|| PlaneSpec { name: "origin".into(), dir: Some("~/.zen/astroportd".into()), game: None, swarm_key: None, http_listen: Some("127.0.0.1:8090".into()), p2p_listen: Vec::new(), kubo: Some("http://127.0.0.1:5001".into()), args: Vec::new() }, |k| k.origin.clone());
+    if file.planes.iter().any(|p| p.name == spec.name) {
+        return Err(rule(&spec.name, "un plan porte déjà ce nom"));
+    }
+    if let Some(k) = &kept {
+        if let Some(h) = file.planes.iter_mut().find(|p| Some(&p.name) == k.heir.as_ref()) {
+            if h.http_listen == spec.http_listen {
+                h.http_listen.clone_from(&k.heir_http);
+            }
+            if !spec.p2p_listen.is_empty() && h.p2p_listen == spec.p2p_listen {
+                h.p2p_listen.clone_from(&k.heir_p2p);
+            }
+        }
+    }
+    file.planes.insert(0, spec);
+    plan(file, home)?;
     Ok(())
 }
 
@@ -521,6 +608,37 @@ mod tests {
         assert!(e(r#"{ "planes": [ { "name": "z", "swarm_key": "/k" }, { "name": "z", "swarm_key": "/k2" } ] }"#).contains("nom déjà pris"));
         assert!(e(r#"{ "planes": [] }"#).contains("aucun plan"));
         assert!(parse(r#"{ "planes": [ { "name": "z", "kubo_url": "x" } ] }"#).is_err(), "une faute de frappe dans la configuration est refusée");
+    }
+
+    #[test]
+    fn origin_can_be_paused_for_zen_and_restored_exactly() {
+        let home = Path::new("/h");
+        let mut f = file(r#"{ "planes": [ { "name": "origin", "dir": "/o", "kubo": "http://127.0.0.1:5001", "args": ["--lat", "43.6"] } ] }"#);
+        assert!(stop_origin(&mut f, home, None).unwrap_err().to_string().contains("constellation ẐEN"), "seul : la station ne servirait plus rien");
+        // Ports par défaut (rang) : ORIGIN 8090 / 4101, zen1 8091 / 4102.
+        let mut f = file(r#"{ "planes": [ { "name": "origin", "dir": "/o", "kubo": "http://127.0.0.1:5001", "args": ["--lat", "43.6"] }, { "name": "zen1", "swarm_key": "/k1" } ] }"#);
+        let before = plan(&f, home).unwrap();
+        assert_eq!((before[1].http.as_str(), arg_of(&before[1], "--p2p-listen")), ("127.0.0.1:8091", vec!["/ip4/0.0.0.0/tcp/4102".to_owned()]));
+        let kept = stop_origin(&mut f, home, None).unwrap();
+        let after = plan(&f, home).unwrap();
+        assert_eq!(after.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["zen1"]);
+        assert_eq!(after[0].http, "127.0.0.1:8090", "zen1 reprend l'adresse HTTP d'ORIGIN : DNS et proxy inchangés");
+        assert_eq!(arg_of(&after[0], "--p2p-listen"), ["/ip4/0.0.0.0/tcp/4101"], "et son port P2P : la redirection 4101 de la box sert telle quelle");
+        assert!(stop_origin(&mut f, home, None).is_err(), "déjà arrêté");
+        restore_origin(&mut f, home, Some(kept)).unwrap();
+        let back = plan(&f, home).unwrap();
+        assert_eq!(back.iter().map(|p| (p.name.as_str(), p.http.as_str())).collect::<Vec<_>>(), [("origin", "127.0.0.1:8090"), ("zen1", "127.0.0.1:8091")], "chacun retrouve son adresse");
+        assert_eq!((arg_of(&back[0], "--p2p-listen"), arg_of(&back[1], "--p2p-listen")), (vec!["/ip4/0.0.0.0/tcp/4101".to_owned()], vec!["/ip4/0.0.0.0/tcp/4102".to_owned()]));
+        assert_eq!((f.planes[0].dir.as_deref(), f.planes[0].args.clone()), (Some("/o"), vec!["--lat".to_owned(), "43.6".to_owned()]), "ORIGIN remis tel quel");
+        assert!(restore_origin(&mut f, home, None).is_err(), "déjà servi");
+        // Plusieurs constellations ẐEN : il faut dire laquelle reprend l'adresse.
+        let mut g = file(r#"{ "planes": [ { "name": "origin" }, { "name": "zen1", "swarm_key": "/k1" }, { "name": "zen2", "swarm_key": "/k2" } ] }"#);
+        assert!(stop_origin(&mut g, home, None).unwrap_err().to_string().contains("choisissez"));
+        assert!(stop_origin(&mut g, home, Some("origin")).is_err(), "ORIGIN n'est pas une héritière");
+        stop_origin(&mut g, home, Some("zen2")).unwrap();
+        let zen = plan(&g, home).unwrap();
+        assert_eq!(zen.iter().map(|p| (p.name.as_str(), p.http.as_str())).collect::<Vec<_>>(), [("zen1", "127.0.0.1:8091"), ("zen2", "127.0.0.1:8090")]);
+        assert_eq!((arg_of(&zen[0], "--p2p-listen"), arg_of(&zen[1], "--p2p-listen")), (vec!["/ip4/0.0.0.0/tcp/4102".to_owned()], vec!["/ip4/0.0.0.0/tcp/4101".to_owned()]), "seule l'héritière change de port");
     }
 
     #[test]

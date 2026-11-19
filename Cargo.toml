@@ -1,6 +1,6 @@
 [package]
 name = "astroportd"
-version = "1.4.0"
+version = "1.5.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,6 +21,7 @@ astro-plugins.workspace = true
 astro-economy.workspace = true
 astro-core.workspace = true
 astro-duniter.workspace = true
+astro-index.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 getrandom.workspace = true
@@ -51,12 +52,13 @@ sha1.workspace = true
 hmac.workspace = true
 md-5.workspace = true
 crc32fast.workspace = true
+flate2.workspace = true
 if-addrs.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal", "process"] }
 
 [features]
 # Moteur FaceID local (SCRFD + ArcFace) par ONNX Runtime : `astroportd serve --face-models DIR`. Désactivé par défaut.
-onnx = ["astro-facecloud/onnx", "astro-bro/onnx"]
+onnx = ["astro-facecloud/onnx", "astro-bro/onnx", "astro-index/onnx"]
 
 [dev-dependencies]
 rcgen.workspace = true
@@ -86,10 +88,11 @@ members = [
     "crates/astro-ui",
     "crates/astro-nostr-proto",
     "crates/astro-lifecycle",
+    "crates/astro-index",
 ]
 
 [workspace.package]
-version = "1.4.0"
+version = "1.5.0"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
@@ -184,6 +187,7 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-c
 rust-embed = { version = "8", features = ["debug-embed", "include-exclude"] }
 astro-bro = { path = "crates/astro-bro" }
 astro-plugins = { path = "crates/astro-plugins" }
+astro-index = { path = "crates/astro-index" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -213,6 +217,8 @@ opt-level = "s"
 [profile.release.package.astro-facecloud]
 opt-level = 3
 [profile.release.package.image]
+opt-level = 3
+[profile.release.package.astro-index]
 opt-level = 3
 [profile.release.package.ort]
 opt-level = 3

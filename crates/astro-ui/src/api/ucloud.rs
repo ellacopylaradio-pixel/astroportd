@@ -68,6 +68,44 @@ pub trait UcloudApi: Auth {
     fn library(&self, _who: &Principal, _q: LibraryQuery) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("bibliothèque non disponible sur cette station")) }
     }
+    /// Médiathèque : `{ items: [résumé de fiche], pending }` (films, séries, vidéos, morceaux déposés avec leur fiche).
+    fn media_list(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque non disponible sur cette station")) }
+    }
+    /// Adresses de lecture en flux (`/play/<jeton>`, Range) des fichiers `paths` : `{ urls: {chemin: url}, expires_at }`.
+    fn media_play(&self, _who: &Principal, _paths: Vec<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque non disponible sur cette station")) }
+    }
+    /// Champs modifiables de la fiche `path` (`<nom>.media.json`).
+    fn media_fiche(&self, _who: &Principal, _path: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque non disponible sur cette station")) }
+    }
+    /// Corrige la fiche `path` avec les champs de `set` ; rend `{ item }`, son nouveau résumé.
+    fn media_edit(&self, _who: &Principal, _path: String, _set: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque non disponible sur cette station")) }
+    }
+    /// Médiathèque des amis : leurs films et morceaux partagés avec leur cercle, `{ items, friends }` ; `force` relit tout.
+    fn media_friends(&self, _who: &Principal, _force: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque des amis non disponible sur cette station")) }
+    }
+    /// Un ami a-t-il déjà l'œuvre `work` ? `{ match }` : sa meilleure copie (résumé de la médiathèque des amis, avec
+    /// `event_id` à demander), ou `null`. Le plugin `media` le demande avant un dépôt : une copie du même blob plutôt
+    /// qu'un nouveau fichier.
+    fn media_friend_match(&self, _who: &Principal, _work: MediaWork) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque des amis non disponible sur cette station")) }
+    }
+    /// Demande à son auteur la copie du média `event_id` (liste des amis) : `{ state: copied | asked | sent }`.
+    fn media_friend_request(&self, _who: &Principal, _event_id: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque des amis non disponible sur cette station")) }
+    }
+    /// Partage (`on`) ou retire les fiches `paths` (dans l'ordre) ; `list` : la série ou l'album qu'elles forment.
+    fn media_share(&self, _who: &Principal, _paths: Vec<String>, _on: bool, _list: Option<(String, String)>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station")) }
+    }
+    /// Trace du partage d'une fiche : `{ shared, from, copies, reshared }`.
+    fn media_trace(&self, _who: &Principal, _path: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station")) }
+    }
     /// Proches réciproques du compte (double suivi) : `{ friends: [{ hex, label, hosted }] }`.
     fn friends(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("envoi à des proches non disponible sur cette station")) }
@@ -118,8 +156,18 @@ pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/ucloud/timeline", get(library_timeline::<B>))
         .route("/api/v1/ucloud/search", get(library_search::<B>))
         .route("/api/v1/ucloud/duplicates", get(library_duplicates::<B>))
+        .route("/api/v1/ucloud/text", get(library_text::<B>))
         .route("/api/v1/ucloud/map", get(library_map::<B>))
         .route("/api/v1/ucloud/share", post(ucloud_share::<B>))
+        .route("/api/v1/ucloud/media", get(media_list::<B>))
+        .route("/api/v1/ucloud/media/play", post(media_play::<B>))
+        .route("/api/v1/ucloud/media/fiche", get(media_fiche::<B>))
+        .route("/api/v1/ucloud/media/edit", post(media_edit::<B>))
+        .route("/api/v1/ucloud/media/friends", get(media_friends::<B>))
+        .route("/api/v1/ucloud/media/share", post(media_share::<B>))
+        .route("/api/v1/ucloud/media/trace", get(media_trace::<B>))
+        .route("/api/v1/ucloud/media/friends/request", post(media_friend_request::<B>))
+        .route("/api/v1/ucloud/media/friends/match", get(media_friend_match::<B>))
         .route("/api/v1/pull", get(pull_list::<B>).post(pull_add::<B>))
         .route("/api/v1/pull/remove", post(pull_remove::<B>))
         .route("/api/v1/pull/run", post(pull_run::<B>))
@@ -148,6 +196,141 @@ struct ListQuery {
 
 async fn ucloud_list<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<ListQuery>) -> Response {
     reply(st.backend.ucloud_list(&p, q.path.unwrap_or_else(|| "/".into())).await)
+}
+
+async fn media_list<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.media_list(&p).await)
+}
+
+#[derive(Deserialize)]
+struct PlayBody {
+    paths: Vec<String>,
+}
+
+async fn media_play<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<PlayBody>) -> Response {
+    if b.paths.is_empty() || b.paths.len() > 16 || b.paths.iter().any(|x| x.len() > 1024) {
+        return reply(Err(ApiError::bad_request("1 à 16 fichiers à lire")));
+    }
+    reply(st.backend.media_play(&p, b.paths).await)
+}
+
+#[derive(Deserialize)]
+struct FicheQuery {
+    path: String,
+}
+
+async fn media_fiche<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<FicheQuery>) -> Response {
+    reply(st.backend.media_fiche(&p, q.path).await)
+}
+
+#[derive(Deserialize)]
+struct FriendsQuery {
+    force: Option<u8>,
+}
+
+async fn media_friends<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<FriendsQuery>) -> Response {
+    reply(st.backend.media_friends(&p, q.force == Some(1)).await)
+}
+
+#[derive(Deserialize)]
+struct MediaShareList {
+    kind: String,
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct MediaShareBody {
+    paths: Vec<String>,
+    on: bool,
+    list: Option<MediaShareList>,
+}
+
+async fn media_share<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<MediaShareBody>) -> Response {
+    if b.paths.is_empty() || b.paths.len() > 500 || b.paths.iter().any(|x| x.len() > 1024) {
+        return reply(Err(ApiError::bad_request("1 à 500 fiches")));
+    }
+    if b.list.as_ref().is_some_and(|l| !matches!(l.kind.as_str(), "series" | "album") || l.title.trim().is_empty() || l.title.len() > 300) {
+        return reply(Err(ApiError::bad_request("liste : series ou album, avec un titre")));
+    }
+    reply(st.backend.media_share(&p, b.paths, b.on, b.list.map(|l| (l.kind, l.title))).await)
+}
+
+async fn media_trace<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<FicheQuery>) -> Response {
+    reply(st.backend.media_trace(&p, q.path).await)
+}
+
+/// Œuvre cherchée chez les amis (`GET /api/v1/ucloud/media/friends/match`) : un film (`tmdb`), une vidéo ou un morceau
+/// (`youtube`), un épisode (`season` + `episode`, et la série par `tv` ou `series`).
+#[derive(Debug, Default, Deserialize)]
+pub struct MediaWork {
+    /// Film TMDB.
+    pub tmdb: Option<i64>,
+    /// Série TMDB d'un épisode.
+    pub tv: Option<i64>,
+    /// Nom de la série d'un épisode.
+    pub series: Option<String>,
+    /// Saison.
+    pub season: Option<i64>,
+    /// Épisode.
+    pub episode: Option<i64>,
+    /// Vidéo ou morceau YouTube (11 caractères).
+    pub youtube: Option<String>,
+}
+
+impl MediaWork {
+    /// Une œuvre désignée sans ambiguïté, aux champs bornés : sinon le message de refus.
+    fn check(&self) -> Result<(), &'static str> {
+        let id = |v: Option<i64>| v.is_none_or(|n| (1..=1_000_000_000).contains(&n));
+        if !(id(self.tmdb) && id(self.tv) && id(self.season.map(|s| s.saturating_add(1))) && id(self.episode)) {
+            return Err("identifiant hors limites");
+        }
+        if self.youtube.as_deref().is_some_and(|y| y.len() != 11 || !y.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')) {
+            return Err("identifiant YouTube invalide");
+        }
+        if self.series.as_deref().is_some_and(|s| s.trim().is_empty() || s.len() > 200) {
+            return Err("nom de série : 1 à 200 caractères");
+        }
+        let episode = self.tv.is_some() || self.series.is_some();
+        if episode && (self.season.is_none() || self.episode.is_none()) {
+            return Err("un épisode exige sa saison et son numéro");
+        }
+        if self.tmdb.is_none() && self.youtube.is_none() && !episode {
+            return Err("précisez tmdb, youtube, ou la série avec saison et épisode");
+        }
+        Ok(())
+    }
+}
+
+async fn media_friend_match<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(w): Query<MediaWork>) -> Response {
+    if let Err(why) = w.check() {
+        return reply(Err(ApiError::bad_request(why)));
+    }
+    reply(st.backend.media_friend_match(&p, w).await)
+}
+
+#[derive(Deserialize)]
+struct RequestBody {
+    event_id: String,
+}
+
+async fn media_friend_request<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<RequestBody>) -> Response {
+    if b.event_id.len() != 64 || !b.event_id.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return reply(Err(ApiError::bad_request("identifiant de média invalide")));
+    }
+    reply(st.backend.media_friend_request(&p, b.event_id).await)
+}
+
+#[derive(Deserialize)]
+struct EditBody {
+    path: String,
+    set: Value,
+}
+
+async fn media_edit<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<EditBody>) -> Response {
+    if b.path.len() > 1024 || serde_json::to_string(&b.set).map_or(true, |s| s.len() > 64 * 1024) {
+        return reply(Err(ApiError::bad_request("correction trop volumineuse")));
+    }
+    reply(st.backend.media_edit(&p, b.path, b.set).await)
 }
 
 #[derive(Deserialize)]
@@ -218,6 +401,18 @@ struct DuplicatesQuery {
 
 async fn library_duplicates<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<DuplicatesQuery>) -> Response {
     reply(st.backend.library(&p, LibraryQuery::Duplicates(q.all == Some(1))).await)
+}
+
+#[derive(Deserialize)]
+struct TextQuery {
+    path: Option<String>,
+}
+
+async fn library_text<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<TextQuery>) -> Response {
+    match q.path.filter(|p| p.starts_with('/') && p.len() <= 4096) {
+        Some(path) => reply(st.backend.library(&p, LibraryQuery::Text(path)).await),
+        None => reply(Err(ApiError::bad_request("chemin attendu (?path=/…)"))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -424,4 +619,29 @@ async fn backup_rescue<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p
         return reply(Err(ApiError::bad_request("clé de l'ami : 64 caractères hexadécimaux attendus")));
     }
     reply(st.backend.backup_rescue(&p, body.owner.to_ascii_lowercase(), body.accept).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MediaWork;
+
+    #[test]
+    fn a_work_query_names_one_work_with_bounded_fields() {
+        let ok = |w: MediaWork| w.check().is_ok();
+        assert!(ok(MediaWork { tmdb: Some(129), ..MediaWork::default() }));
+        assert!(ok(MediaWork { youtube: Some("dQw4w9WgXcQ".into()), ..MediaWork::default() }));
+        assert!(ok(MediaWork { series: Some("Kaamelott".into()), season: Some(0), episode: Some(1), ..MediaWork::default() }), "saison 0 : les épisodes spéciaux");
+        assert!(ok(MediaWork { tv: Some(1), season: Some(1), episode: Some(1), ..MediaWork::default() }));
+        // Hostile : vide, ambigu, hors limites, injecté.
+        assert!(!ok(MediaWork::default()), "aucune œuvre");
+        assert!(!ok(MediaWork { series: Some("Kaamelott".into()), ..MediaWork::default() }), "épisode sans saison ni numéro");
+        assert!(!ok(MediaWork { series: Some("  ".into()), season: Some(1), episode: Some(1), ..MediaWork::default() }));
+        assert!(!ok(MediaWork { series: Some("x".repeat(201)), season: Some(1), episode: Some(1), ..MediaWork::default() }));
+        assert!(!ok(MediaWork { tmdb: Some(-1), ..MediaWork::default() }));
+        assert!(!ok(MediaWork { tmdb: Some(i64::MAX), ..MediaWork::default() }));
+        assert!(!ok(MediaWork { tv: Some(1), season: Some(i64::MAX), episode: Some(1), ..MediaWork::default() }), "pas de débordement");
+        assert!(!ok(MediaWork { tv: Some(1), season: Some(-1), episode: Some(1), ..MediaWork::default() }));
+        assert!(!ok(MediaWork { youtube: Some("../../etc/pa".into()), ..MediaWork::default() }));
+        assert!(!ok(MediaWork { youtube: Some("short".into()), ..MediaWork::default() }));
+    }
 }

@@ -54,6 +54,11 @@ pub const DEFAULT_WATCH_EVERY: Duration = Duration::from_secs(60);
 /// Temps accordé à une garde pour répondre ; au-delà, le flux est refusé (on ferme, on n'ouvre jamais par défaut).
 const GATE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Carnet des pairs d'un service exposé : adresse locale de chaque connexion que le tunnel ouvre vers la cible → pair distant.
+/// Le service (qui voit cette adresse comme celle de son client) sait ainsi **qui** l'appelle, sans pouvoir être trompé par un
+/// en-tête déclaré. Une entrée vit le temps de la connexion.
+pub type PeerBook = Arc<std::sync::Mutex<HashMap<std::net::SocketAddr, PeerId>>>;
+
 /// Contrôle d'accès et limites d'un service exposé.
 #[derive(Clone)]
 pub struct ExposeOpts {
@@ -66,6 +71,8 @@ pub struct ExposeOpts {
     /// Période du watchdog : la garde est reconsultée pour chaque flux ouvert, et le flux est **coupé** dès qu'elle
     /// refuse (autorisation retirée en cours de session). 60 s par défaut ; ignoré sans garde.
     pub watch_every: Duration,
+    /// Carnet des pairs à tenir pour ce service (`None` : le service ne sait pas qui l'appelle).
+    pub peers: Option<PeerBook>,
 }
 
 impl std::fmt::Debug for ExposeOpts {
@@ -76,7 +83,7 @@ impl std::fmt::Debug for ExposeOpts {
 
 impl Default for ExposeOpts {
     fn default() -> Self {
-        Self { allow: None, max_streams: 64, gate: None, watch_every: DEFAULT_WATCH_EVERY }
+        Self { allow: None, max_streams: 64, gate: None, watch_every: DEFAULT_WATCH_EVERY, peers: None }
     }
 }
 
@@ -130,7 +137,7 @@ pub fn expose(handle: &P2pHandle, service: &str, target: String, opts: ExposeOpt
     let limit = Arc::new(Semaphore::new(opts.max_streams.max(1)));
     let per_peer: Arc<Mutex<HashMap<PeerId, usize>>> = Arc::default();
     let per_peer_cap = (opts.max_streams / 4).max(4).min(opts.max_streams.max(1));
-    let (gate, service, watch_every) = (opts.gate.clone(), service.to_owned(), opts.watch_every.max(Duration::from_millis(10)));
+    let (gate, service, watch_every, book) = (opts.gate.clone(), service.to_owned(), opts.watch_every.max(Duration::from_millis(10)), opts.peers.clone());
     let task = tokio::spawn(async move {
         while let Some((peer, stream)) = incoming.next().await {
             if opts.allow.as_ref().is_some_and(|a| !a.contains(&peer)) {
@@ -140,7 +147,7 @@ pub fn expose(handle: &P2pHandle, service: &str, target: String, opts: ExposeOpt
             // jusqu'à 5 s) : au plus le quart du total (4 au minimum), pour que les autres pairs passent toujours.
             let Some(_slot) = PeerSlot::take(&per_peer, peer, per_peer_cap) else { continue };
             let Ok(permit) = limit.clone().try_acquire_owned() else { continue };
-            let (target, gate, service) = (target.clone(), gate.clone(), service.clone());
+            let (target, gate, service, book) = (target.clone(), gate.clone(), service.clone(), book.clone());
             tokio::spawn(async move {
                 let (_permit, _slot) = (permit, _slot);
                 if let Some(gate) = &gate {
@@ -150,6 +157,10 @@ pub fn expose(handle: &P2pHandle, service: &str, target: String, opts: ExposeOpt
                     }
                 }
                 if let Ok(mut tcp) = TcpStream::connect(&target).await {
+                    let me = tcp.local_addr().ok();
+                    if let (Some(b), Some(a)) = (&book, me) {
+                        b.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(a, peer);
+                    }
                     let mut tunnel = stream.compat();
                     let relay = copy_bidirectional(&mut tunnel, &mut tcp);
                     tokio::pin!(relay);
@@ -167,6 +178,9 @@ pub fn expose(handle: &P2pHandle, service: &str, target: String, opts: ExposeOpt
                                 }
                             }
                         }
+                    }
+                    if let (Some(b), Some(a)) = (&book, me) {
+                        b.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&a);
                     }
                 }
             });

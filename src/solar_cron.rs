@@ -176,8 +176,11 @@ pub struct Nightly<P: Publisher> {
     pub public_url: Option<String>,
     /// Charges hebdomadaires (PAF) à déduire des recettes pour la clôture.
     pub weekly_costs: Amount,
-    /// Réglages de la ventilation 3×1/3.
+    /// Réglages de la ventilation 3×1/3, avant ceux de la coopérative.
     pub split: SplitConfig,
+    /// UPlanet dont la configuration coopérative (kind 30800) fixe les taux de la ventilation ; `None` : `split` seul (ORIGIN :
+    /// sa configuration peut être signée par n'importe qui, ses taux ne sont donc jamais suivis).
+    pub coop_plane: Option<String>,
     /// Purge des liens d'invités expirés.
     pub purge_shares: Option<Hook>,
     /// Balayage RÊVE.
@@ -351,7 +354,7 @@ impl<P: Publisher> Nightly<P> {
             gps += f.gps.len();
             sensitive += f.sensitive.len();
             if let Some(bus) = &self.activity {
-                bus.publish_to(astro_core::Audience::Owner(owner.clone()), "privacy", "vigie 20h12", f.message(), Some(serde_json::json!({ "gps": f.gps, "identity": f.identity, "sensitive": f.sensitive })));
+                bus.publish_to(astro_core::Audience::Owner(owner.clone()), "privacy", "vigie 20h12", f.message(), Some(serde_json::json!({ "gps": f.gps, "identity": f.identity, "sensitive": f.sensitive, "papers": f.papers })));
             }
         }
         Ok(format!("{} membre(s) prévenu(s) : {gps} photo(s) géolocalisée(s), {sensitive} fichier(s) sensible(s) dans Public (rien n'est modifié)", found.len()))
@@ -379,7 +382,11 @@ impl<P: Publisher> Nightly<P> {
             let revenue = revenue(&self.db, start, start + 7 * DAY).await?;
             let (cash_balance, ytd_profit) = books(&self.db, &week).await?;
             let input = WeekInput { week: week.clone(), revenue, costs: self.weekly_costs, cash_balance, ytd_profit };
-            let outcome = close_week(&self.split, &input).map_err(|e| format!("{week} : {e}"))?;
+            let split = match &self.coop_plane {
+                Some(plane) => crate::coop_config::split_config(&self.db, plane, self.split.clone()).await,
+                None => self.split.clone(),
+            };
+            let outcome = close_week(&split, &input).map_err(|e| format!("{week} : {e}"))?;
             let label = match &outcome {
                 WeekOutcome::Split(a) => format!("{week} ventilée (surplus {} Ẑ)", a.surplus),
                 WeekOutcome::Drawdown { gap, .. } => format!("{week} : trésorerie entamée de {gap} Ẑ"),

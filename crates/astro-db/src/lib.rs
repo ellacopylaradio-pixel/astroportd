@@ -211,6 +211,12 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
         "CREATE INDEX IF NOT EXISTS faces_owner_contact ON faces(owner_hex, contact_uid) WHERE contact_uid IS NOT NULL; \
          CREATE INDEX IF NOT EXISTS identity_links_uid ON identity_links(owner_hex, uid) WHERE uid IS NOT NULL;",
     )?;
+    // Base antérieure à la recherche multimédia : les fiches de la Médiathèque déjà résumées sont relues une fois (le cache
+    // `media_index` est rejouable), pour entrer dans `search_text` avec les nouvelles.
+    conn.execute_batch(
+        "UPDATE media_index SET cid = '' WHERE item IS NOT NULL AND cid <> '' \
+         AND NOT EXISTS (SELECT 1 FROM search_text WHERE src = 'fiche');",
+    )?;
     // Base antérieure à l'index de recherche : les événements déjà là sont indexés une fois (les triggers font le reste).
     let (indexed, stored): (i64, i64) = conn.query_row("SELECT (SELECT count(*) FROM nostr_fts_docsize), (SELECT count(*) FROM nostr_events WHERE kind NOT IN (4, 1059))", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
     if indexed == 0 && stored > 0 {
@@ -262,6 +268,18 @@ mod tests {
 
     fn vec_literal(dim: usize, hot: usize) -> Vec<u8> {
         (0..dim).flat_map(|i| if i == hot { 1.0f32 } else { 0.0 }.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn existing_mediatheque_fiches_are_reread_once_for_the_search() {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch("INSERT INTO media_index(owner_hex, path, cid, item) VALUES ('a', '/f.media.json', 'bafy', '{}'), ('a', '/g.media.json', 'bafz', NULL)").unwrap();
+        migrate(&conn).unwrap();
+        let cids = |c: &Connection| c.prepare("SELECT cid FROM media_index ORDER BY path").unwrap().query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(cids(&conn), ["", "bafz"], "fiche résumée : relue ; fiche illisible : inchangée");
+        conn.execute_batch("UPDATE media_index SET cid = 'bafy' WHERE path = '/f.media.json'; INSERT INTO search_text(body, owner_hex, sha, src, t_ms, ref) VALUES ('x', 'a', 's', 'fiche', 0, '/f.media.json')").unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(cids(&conn), ["bafy", "bafz"], "une seule fois");
     }
 
     #[test]

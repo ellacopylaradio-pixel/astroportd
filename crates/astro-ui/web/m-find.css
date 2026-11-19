@@ -1,0 +1,12 @@
+/* Recherche dans tout le uCloud (m-find.js). */
+.fd-chips { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.fd-refine summary { cursor: pointer; min-height: 2.6rem; display: inline-flex; align-items: center; color: var(--accent); }
+.fd-refine label { display: inline-flex; gap: .3rem; align-items: center; }
+ul.files.fd li { align-items: flex-start; }
+.fd-what { flex: 1; display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+ul.files.fd .fd-what button.link { flex: none; min-height: 2rem; }
+ul.files.fd .fd-where { flex: none; color: var(--muted); font-size: .8rem; }
+.fd-what small { color: var(--muted); overflow-wrap: anywhere; }
+.fd-at { align-self: flex-start; min-height: 2.4rem; }
+.fd-best .photos { margin-bottom: .6rem; }
+.card h3 small { font-weight: 400; color: var(--muted); }

@@ -44,6 +44,12 @@ TOKEN = 'a1' * 16
 QR = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 CARD = 'astro-share:v1|alice@example.org|' + 'ab' * 32 + '|isolated|0123456789abcdef|1|c2VjcmV0c2VjcmV0|abcd'
 STATE = dict(faces=make_faces(), posts=[], deleted=[], chat=[])
+# Lecture des documents : vue du membre (état modifiable par le test) et réglages du Capitaine.
+READING = dict(state='off', blocked=None, stations=[], local=[], progress=dict(read=0, by_friend=0, failed=0, waiting=37, more=False), photos=None, tasks=[dict(id='ocr', ready=True)], paused=False, pack=None)
+OFFERS = dict(stations=[dict(peer='12D3KooWMarie', name='La station de Marie', distance_km=12.4, power=31.0), dict(peer='12D3KooWAtelier', name='Atelier du Lez', distance_km=None, power=12.0)], silent=1)
+ACCOUNTS = [dict(hex='bb' * 32, email='bob@example.org', status='cooperative_member', quota_bytes=10 ** 10, used_bytes=2 * 10 ** 9, unlimited=False, weekly_zen=1, files=420),
+            dict(hex='cc' * 32, email='chloe@example.org', status='active_rental', quota_bytes=10 ** 10, used_bytes=10 ** 8, unlimited=False, weekly_zen=1, files=12)]
+ADMIN['index'] = dict(enabled=True, default=True, engine=[], lend=None, members=[dict(hex='bb' * 32, email='bob@example.org', enabled=True, own=False, read=120, friend='La station de Marie'), dict(hex='cc' * 32, email='chloe@example.org', enabled=False, own=True, read=0, friend=None)])
 
 def people():
     by = {}
@@ -65,6 +71,35 @@ REPL = dict(mine=dict(at=1, events=30, replicated=27, unreachable=1, peers=[
     media=dict(files=8, replicated=5, lookup_failed=1, peers=[dict(node_id='12D3A', name='poppy', have=5)])),
     crawl=dict(at=1, ms=4200, relays=3, keys=40, fetched=120, inserted=12, errors=[dict(relay='p2p://12D3C', key='ab', reason='connexion fermée')]),
     routes=[dict(target='p2p://12D3A|wss://relay.poppy.example', via='p2p', at=1, error=None), dict(target='p2p://12D3C', via='down', at=1, error='tunnel : connexion fermée')])
+
+# Médiathèque : deux films, une série de deux épisodes, un mix de trois morceaux (fiches résumées comme les rend la station).
+def _wav(seconds=2, rate=8000):
+    import math, struct
+    n = seconds * rate
+    data = b''.join(struct.pack('<h', int(8000 * math.sin(2 * math.pi * 440 * i / rate))) for i in range(n))
+    return b'RIFF' + struct.pack('<I', 36 + len(data)) + b'WAVEfmt ' + struct.pack('<IHHIIHH', 16, 1, 1, rate, rate * 2, 2, 16) + b'data' + struct.pack('<I', len(data)) + data
+WAV = _wav()
+def _m(path, typ, title, **kw):
+    base = dict(path=path, fiche=path.rsplit('.', 1)[0] + '.media.json', type=typ, title=title, genres=[], keywords=[], cast=[], directors=[], art={}, subtitles=[], level='private', duration_s=245, mime='audio/mpeg' if typ == 'music' else 'video/mp4')
+    return {**base, **kw}
+MEDIA = [
+    _m('/Vidéos/Films/Le Voyage de Chihiro (2001).mp4', 'film', 'Le Voyage de Chihiro', year=2001, duration_s=7500, genres=['Animation', 'Fantastique'], directors=['Hayao Miyazaki'], cast=['Rumi Hiiragi', 'Miyu Irino'], keywords=['esprits'], overview="Chihiro, dix ans, découvre un monde peuplé d'esprits.", **{'art_': 1}),
+    _m('/Vidéos/Autres/Atelier vélo (2024).mp4', 'video', 'Atelier vélo', year=2024, duration_s=600, level='circle'),
+    _m('/Vidéos/Séries/Kaamelott/Saison 01/Kaamelott S01E01.mp4', 'episode', 'Heat', series=dict(name='Kaamelott', season=1, episode=1), duration_s=210),
+    _m('/Vidéos/Séries/Kaamelott/Saison 01/Kaamelott S01E02.mp4', 'episode', 'Les Tartes aux myrtilles', series=dict(name='Kaamelott', season=1, episode=2), duration_s=212),
+] + [_m(f'/Musique/DJ Test/Mon Mix/0{i} - {a} - {t}.mp3', 'music', t, music=dict(artist=a, album='Mon Mix', album_artist='DJ Test', track=i, mix_start_s=(i - 1) * 200), level='circle' if i == 1 else 'private')
+     for i, (a, t) in enumerate([('Artiste A', 'Titre Un'), ('Artiste B', 'Titre Deux'), ('Artiste C', 'Titre Trois')], 1)]
+for it in MEDIA:
+    if it.pop('art_', None): it['art'] = dict(poster=it['path'].rsplit('.', 1)[0] + '.poster.jpg')
+    if it['type'] == 'music': it['art'] = dict(cover=it['path'].rsplit('.', 1)[0] + '.cover.jpg')
+
+# Chez mes amis : Léa et Paul ont le même film (deux sources), Léa partage aussi un morceau ; Paul a une station hors ligne.
+FRIENDS = dict(items=[
+    dict(event_id='e1' * 32, x='a1' * 32, type='film', title='Le Château dans le ciel (1986)', year=1986, duration_s=7440, genres=['Animation'], author='11' * 32, author_label='Léa',
+         seeders=[dict(hex='11' * 32, label='Léa'), dict(hex='22' * 32, label='Paul')], copied=None, asked_at=None, error=None),
+    dict(event_id='e2' * 32, x='a2' * 32, type='music', title='Artiste Z — Matin', duration_s=200, genres=[], music=dict(artist='Artiste Z', album='Aube', album_artist=None, track=1),
+         author='11' * 32, author_label='Léa', seeders=[dict(hex='11' * 32, label='Léa')], copied=None, asked_at=None, error=None)],
+    friends=[dict(hex='11' * 32, label='Léa', at=1, error=None), dict(hex='22' * 32, label='Paul', at=1, error='tunnel : connexion fermée')])
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -134,6 +169,19 @@ class H(BaseHTTPRequestHandler):
             if p == '/api/v1/book/photo-choices': return self.send(200, dict(faces=[7]))
             if p == '/api/v1/book/duplicates': return self.send(200, dict(groups=[dict(reasons=['même téléphone'], cards=[dict(path='/Contacts/Lea.vcf', name='Léa Martin', emails=[], phones=['+33 6 12']), dict(path='/Contacts/Lea2.vcf', name='L. Martin', emails=[], phones=['06 12'])])]))
         if p == '/api/v1/ucloud/memories': return self.send(200, dict(memories=[]))
+        if p == '/api/v1/ucloud/list': return self.send(200, dict(dav='/dav', entries=[dict(name='Documents', path='/Documents', type='dir', mime=None, size=None, mtime=1790000000), dict(name='notes.txt', path='/notes.txt', type='file', mime='text/plain', size=120, mtime=1790000000)]))
+        if p == '/api/v1/me/reading': return self.send(200, READING)
+        if p == '/api/v1/me/reading/offers': return self.send(200, OFFERS)
+        if p == '/api/v1/station/accounts': return self.send(200, dict(accounts=ACCOUNTS))
+        if p == '/api/v1/station/hosting': return self.send(200, dict(default_quota_bytes=10 ** 10, default_weekly_zen=1))
+        if p == '/api/v1/ucloud/search':  # un scan et un PDF retrouvés par le texte lu dedans (OCR), une photo par son nom
+            from urllib.parse import parse_qs, urlsplit
+            STATE.setdefault('searches', []).append(parse_qs(urlsplit(self.path).query))
+            hit = lambda path, mime, x: dict(path=path, mime=mime, size=10, mtime=1790000000, taken_at=None, t=1790000000, thumb=None, lat=None, lon=None, **({'found': 'text', 'excerpt': x} if x else {}))
+            items = [hit('/Scans/scan001.jpg', 'image/jpeg', '…FACTURE N° 2026-117 Électricité du hameau des Écluses…'), hit('/Documents/contrat-énergie.pdf', 'application/pdf', '…fourniture d’électricité, échéance trimestrielle…'), hit('/Photos/electricien.jpg', 'image/jpeg', None), dict(hit('/Photos/anniv.jpg', 'image/jpeg', None), found='seen'), dict(hit('/Vidéos/plage.mp4', 'video/mp4', None), found='seen', at_ms=83000), dict(hit('/Vidéos/Films/Le Voyage de Chihiro (2001).mkv', 'video/x-matroska', '…un voyage au pays des esprits…'), found='fiche', media=True)]
+            if 'zanzibar' in self.path: return self.send(200, dict(items=[], next=None, understood=[], maybe=[items[3], items[1]]))
+            return self.send(200, dict(items=items, next=None, understood=[dict(text='lea', **{'as': ['person']}, people=['Léa Martin'], month=None)], best=[items[1], items[4], items[0]]))
+        if p == '/api/v1/ucloud/text': return self.send(200, dict(text='FACTURE N° 2026-117\nÉlectricité du hameau des Écluses' if 'scan001' in self.path else None))
         if p == '/api/v1/ucloud/timeline':
             q = self.path.split('ym=')[1] if 'ym=' in self.path else None
             if q is None: return self.send(200, dict(months=[dict(ym='2026-10', count=3), dict(ym='2026-09', count=2)]))
@@ -151,6 +199,24 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/backup': return self.send(200, dict(mine=None, friends=[], hosting=[], share=None))
         if p == '/api/v1/faces/pending-shares': return self.send(200, dict(pending=[], auto_share=True))
         if p == '/api/v1/activity': return self.send(200, b': ok\n\n', 'text/event-stream')
+        if p == '/api/v1/ucloud/media': return self.send(200, dict(items=MEDIA, pending=0))
+        if p == '/api/v1/ucloud/media/friends':
+            # Une copie demandée arrive à la relecture suivante : rangée comme chez l'ami, elle entre dans la médiathèque.
+            for it in FRIENDS['items']:
+                if it['asked_at'] and not it['copied']:
+                    it['copied'] = '/Vidéos/Films/Le Château dans le ciel (1986).mp4'
+                    MEDIA.append(_m(it['copied'], 'film', 'Le Château dans le ciel', year=1986, duration_s=7440))
+            return self.send(200, FRIENDS)
+        if p == '/api/v1/ucloud/media/fiche':
+            from urllib.parse import unquote
+            it = next(i for i in MEDIA if i['fiche'] == unquote(self.path.split('path=', 1)[1]))
+            f = dict(type=it['type'], title=it['title'], original_title=None, year=it.get('year'), overview=it.get('overview'), genres=it['genres'], keywords=it['keywords'])
+            if it['type'] == 'music': f['music'] = dict(artist=it['music']['artist'], album=it['music']['album'], album_artist='DJ Test', track=it['music']['track'], composer=None)
+            else: f.update(cast=it['cast'], directors=it['directors'], **({'series': dict(it['series'])} if it['type'] == 'episode' else {}))
+            return self.send(200, f)
+        if p.startswith('/play/'): return self.send(200, WAV, 'audio/wav')
+        if p == '/api/v1/ucloud/media/trace':
+            return self.send(200, dict(shared=True, **{'from': None}, copies=[dict(label='Léa', at=1790000000)], reshared=['Léa']))
         self.send(404, dict(error='simulé : ' + p))
     def do_DELETE(self):
         STATE['deleted'].append(self.path); self.send(200, dict(revoked=True))
@@ -163,6 +229,19 @@ class H(BaseHTTPRequestHandler):
             STATE['ai'] = bool(body.get('ollama_url') or body.get('provider')); return self.send(200, dict(ollama_url=body.get('ollama_url'), provider=body.get('provider'), has_key=False, model=None, declared=STATE['ai']))
         if p == '/api/v1/book/delete-many': return self.send(200, dict(deleted=len(body['paths']), failed=[]))
         if p == '/api/v1/ucloud/rotate': return self.send(200, dict(rotated=len(body['paths']), failed=[]))
+        if p == '/api/v1/ucloud/media/share':
+            for it in MEDIA:
+                if it['fiche'] in body['paths']: it['level'] = 'circle' if body['on'] else 'private'
+            return self.send(200, dict(shared=body['on'], events=len(body['paths']), list=(body.get('list') or {}).get('kind')))
+        if p == '/api/v1/ucloud/media/friends/request':
+            it = next(i for i in FRIENDS['items'] if i['event_id'] == body['event_id'])
+            if it['copied']: return self.send(200, dict(state='copied', path=it['copied']))
+            it['asked_at'] = 1790000000; return self.send(200, dict(state='asked', at=it['asked_at']))
+        if p == '/api/v1/ucloud/media/play': return self.send(200, dict(urls={x: f'/play/{i}' for i, x in enumerate(body['paths']) if not x.endswith('.jpg')}, expires_at=4102444800))
+        if p == '/api/v1/ucloud/media/edit':
+            it = next(i for i in MEDIA if i['fiche'] == body['path'])
+            it.update(title=body['set']['title'], keywords=body['set'].get('keywords', it['keywords']), genres=body['set'].get('genres', it['genres']))
+            return self.send(200, dict(item=it))
         if p.startswith('/api/v1/book'): return self.send(200, dict(path='/Contacts/Lea.vcf', taken=body.get('keys'), imported=2, duplicates=1, rejected=[], merged=True, removed=1, changed=1, fields=body.get('fields') or body))
         if p == '/api/v1/me/links': return self.send(200, dict(linked=[dict(plane='zen1', key='ee' * 32)], skipped=[]))
         if p == '/api/v1/chat/send':
@@ -183,6 +262,22 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/restart': return self.send(200, dict(restarting=True))
         if p == '/api/v1/station/planes/service': STATE['unit'] = 'planes'; return self.send(200, dict(state='switched', unit='/h/u', command='x', backup='/h/u.bak-1', carried=[], carried_to=None, to_carry=[], unreadable=False))
         if p == '/api/v1/station/admin/locks': ADMIN['locks']['mode'] = body['mode']; return self.send(200, ADMIN['locks'])
+        if p == '/api/v1/station/admin/index':
+            ix = ADMIN['index']
+            for k in ('enabled', 'default'):
+                if k in body: ix[k] = body[k]
+            if 'member' in body:
+                m = next(x for x in ix['members'] if x['hex'] == body['member']['hex'])
+                m.update(enabled=ix['default'] if body['member']['enabled'] is None else body['member']['enabled'], own=body['member']['enabled'] is not None)
+            return self.send(200, ix)
+        if p == '/api/v1/me/reading':
+            if 'pause' in body: READING['paused'] = body['pause']; return self.send(200, READING)
+            if body.get('erase'): READING.update(paused=True, pack=None, progress=dict(READING['progress'], read=0), photos=READING['photos'] and dict(READING['photos'], seen=0)); return self.send(200, READING)
+            if body.get('revoke') is True: READING['stations'] = []
+            elif isinstance(body.get('revoke'), str): READING['stations'] = [s for s in READING['stations'] if s['peer'] != body['revoke']]
+            else: READING['stations'] += [dict(peer=p, label=next(s['name'] for s in OFFERS['stations'] if s['peer'] == p), tasks=body['accept']['tasks'], since=1790000000, read=3) for p in body['accept']['peers']]
+            READING.update(state='friend' if READING['stations'] else 'off', progress=dict(read=3 * len(READING['stations']), by_friend=3, failed=0, waiting=34, more=False))
+            return self.send(200, READING)
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/register': return self.send(200, dict(email='lea-x7k2p9@uplanet.local', token='JT', pass_='123456', salt='S', pepper='P', nsec='nsec1x', npub='npub1x', hex='cd' * 32, g1pub='G', nostrns='/ipns/k', constellation='ORIGIN', lang='fr', guest=True, card=CARD, card_svg=QR, **{'pass': '123456'}))
         if p == '/api/v1/restore/ask': return self.send(200, dict(status='none'))  # secours par les gardiens : rien à attendre dans ce scénario

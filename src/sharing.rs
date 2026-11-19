@@ -12,7 +12,7 @@ use std::sync::Arc;
 use astro_crypto::KeySource;
 use astro_crypto::nip59::{Rumor, gift_wrap};
 use astro_dav::ManifestPublisher;
-use astro_dav::adopt::{SharedFile, adopt_shared_file, sender_label};
+use astro_dav::adopt::{SharedFile, sender_label};
 use astro_db::Db;
 use astro_facecloud::Outbox;
 use astro_nostr_proto::kind;
@@ -115,7 +115,7 @@ impl<O: Outbox> Sharing<O> {
     }
 
     /// Message fichier (NIP-17, kind 15) emballé en NIP-59 pour `friend`, avec l'indication de la station qui détient le blob.
-    fn wrap_for(&self, secret: &[u8; 32], owner: &str, friend: &str, file: &SharedFile) -> Result<astro_nostr_proto::Event, String> {
+    fn wrap_for(&self, secret: &[u8; 32], owner: &str, friend: &str, file: &SharedFile, library: Option<&str>) -> Result<astro_nostr_proto::Event, String> {
         let mut tags = vec![
             vec!["p".to_owned(), friend.to_owned()],
             vec!["file-type".into(), file.mime.clone()],
@@ -129,6 +129,10 @@ impl<O: Outbox> Sharing<O> {
         if let Some(peer) = &self.station_peer {
             tags.push(vec!["station".into(), peer.clone()]);
         }
+        // Copie de médiathèque : le dossier d'origine, pour que l'ami la range au même endroit (vérifié chez lui).
+        if let Some(dir) = library {
+            tags.push(vec!["dir".into(), dir.to_owned()]);
+        }
         let rumor = Rumor { pubkey: owner.to_owned(), created_at: u64::try_from(now()).unwrap_or(0), kind: kind::FILE, tags, content: format!("ipfs://{}", file.cid) };
         gift_wrap(secret, friend, &rumor, rumor.created_at).map_err(|_| "emballage NIP-59 impossible".to_owned())
     }
@@ -139,7 +143,7 @@ impl<O: Outbox> Sharing<O> {
         let Some(secret) = self.keys.secret(owner) else { return (0, Some("clé du compte indisponible : envoi impossible".into())) };
         let (mut sent, mut first) = (0usize, None);
         for file in files {
-            let result = match self.wrap_for(&secret, owner, friend, file) {
+            let result = match self.wrap_for(&secret, owner, friend, file, None) {
                 Ok(wrap) => self.outbox.send(friend, wrap).await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
@@ -158,6 +162,16 @@ impl<O: Outbox> Sharing<O> {
 
     /// Envoie `paths` à chacun de `friends`. Rend, par ami, ce qui est parti ou la raison du refus.
     pub async fn send(&self, owner: &str, paths: &[String], friends: &[String]) -> Result<Value, String> {
+        self.send_with(owner, paths, friends, false).await
+    }
+
+    /// Comme [`Self::send`], pour une copie de médiathèque : chaque fichier est rangé chez l'ami dans le **même dossier** que chez
+    /// soi (`/Vidéos/Films`, `/Musique/<artiste>/<album>`…), pas dans `/Partages`.
+    pub async fn send_to_library(&self, owner: &str, paths: &[String], friends: &[String]) -> Result<Value, String> {
+        self.send_with(owner, paths, friends, true).await
+    }
+
+    async fn send_with(&self, owner: &str, paths: &[String], friends: &[String], library: bool) -> Result<Value, String> {
         if paths.is_empty() || friends.is_empty() || friends.len() > MAX_FRIENDS {
             return Err(format!("1 à {MAX_FILES} fichiers et 1 à {MAX_FRIENDS} proches attendus"));
         }
@@ -183,11 +197,12 @@ impl<O: Outbox> Sharing<O> {
                 continue;
             };
             let (mut sent, mut errors) = (0usize, Vec::new());
-            for (_, file) in &files {
+            for (path, file) in &files {
+                let dir = library.then(|| astro_dav::vfs::parent_of(path).to_owned());
                 let result = if f.hosted {
-                    adopt_shared_file(&self.db, &f.hex, owner, &my_label, file, "friend-share").await.map(|_| ()).map_err(|e| e.to_string())
+                    astro_dav::adopt::adopt_shared_file_into(&self.db, &f.hex, owner, &my_label, file, "friend-share", dir.as_deref()).await.map(|_| ()).map_err(|e| e.to_string())
                 } else {
-                    match self.wrap_for(&secret, owner, &f.hex, file) {
+                    match self.wrap_for(&secret, owner, &f.hex, file, dir.as_deref()) {
                         Ok(wrap) => self.outbox.send(&f.hex, wrap).await.map_err(|e| e.to_string()),
                         Err(e) => Err(e),
                     }

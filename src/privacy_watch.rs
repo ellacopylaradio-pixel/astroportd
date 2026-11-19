@@ -6,11 +6,14 @@
 //! - **photo signée** : son EXIF porte le numéro de série de l'appareil, le nom de son propriétaire ou un auteur
 //!   (`data.exif_ident`, lu à l'envoi) — de quoi relier la photo à une personne ;
 //! - **fichier sensible** : coffre de mots de passe, fiche de contact, agenda, clé ou secret — rien de cela n'a sa
-//!   place sur une page publique.
+//!   place sur une page publique ;
+//! - **papiers** : une image ou un PDF dont le **texte lu** (OCR, `search_text`) contient une pièce d'identité (bande MRZ,
+//!   « carte nationale d'identité », passeport, permis, titre de séjour), un IBAN ou un numéro de sécurité sociale — les deux
+//!   derniers validés par leur clé (modulo 97), pas seulement par leur forme.
 //!
 //! Elle tourne chaque nuit à 20h12 (rapport au Capitaine, message à chaque membre concerné) et répond en direct à
 //! l'accueil du membre (`/api/v1/me/footprint`, champ `privacy`) : l'alerte disparaît dès que le fichier est retiré.
-//! Tout se décide en SQL, sur ce que la base sait déjà : aucun fichier n'est relu ni déchiffré.
+//! Tout se décide sur ce que la base sait déjà : aucun fichier n'est relu ni déchiffré.
 
 use astro_db::{Db, DbError};
 use serde::Serialize;
@@ -29,13 +32,15 @@ pub struct Findings {
     pub identity: Vec<String>,
     /// Fichiers publics sensibles (mots de passe, contacts, agenda, clés).
     pub sensitive: Vec<String>,
+    /// Images et PDF publics où se lit une pièce d'identité, un IBAN ou un numéro de sécurité sociale.
+    pub papers: Vec<String>,
 }
 
 impl Findings {
     /// Rien à signaler ?
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.gps.is_empty() && self.identity.is_empty() && self.sensitive.is_empty()
+        self.gps.is_empty() && self.identity.is_empty() && self.sensitive.is_empty() && self.papers.is_empty()
     }
 
     /// Phrase pour le membre.
@@ -51,8 +56,53 @@ impl Findings {
         if !self.sensitive.is_empty() {
             parts.push(format!("{} fichier(s) sensible(s) (mot de passe, contact, agenda ou clé) y sont publiés", self.sensitive.len()));
         }
+        if !self.papers.is_empty() {
+            parts.push(format!("{} document(s) laissent lire une pièce d'identité, un IBAN ou un numéro de sécurité sociale", self.papers.len()));
+        }
         format!("Vie privée — votre dossier Public, lisible par tous : {}. Retirez-les de Public, ou republiez les photos sans leurs métadonnées (position, appareil).", parts.join(" ; "))
     }
+}
+
+/// Longueur de l'IBAN par pays (ceux qu'on croise ici) : la longueur fixe et la clé écartent les suites de chiffres banales.
+const IBAN_LEN: [(&str, usize); 14] = [("FR", 27), ("MC", 27), ("BE", 16), ("LU", 20), ("CH", 21), ("DE", 22), ("ES", 24), ("IT", 27), ("PT", 25), ("NL", 18), ("GB", 22), ("IE", 22), ("AT", 20), ("PL", 28)];
+
+fn mod97(digits: impl Iterator<Item = u32>) -> u32 {
+    digits.fold(0, |r, d| (r * if d > 9 { 100 } else { 10 } + d) % 97)
+}
+
+/// Un IBAN valide (pays connu, longueur, clé modulo 97) dans `compact` (lettres et chiffres seuls, majuscules).
+fn has_iban(compact: &[char]) -> bool {
+    (0..compact.len()).any(|i| {
+        IBAN_LEN.iter().any(|(cc, n)| {
+            let Some(w) = compact.get(i..i + n) else { return false };
+            let ok_head = w[0] == cc.chars().next().unwrap_or(' ') && w[1] == cc.chars().nth(1).unwrap_or(' ') && w[2].is_ascii_digit() && w[3].is_ascii_digit();
+            ok_head && w.iter().all(char::is_ascii_alphanumeric) && mod97(w[4..].iter().chain(&w[..4]).map(|c| c.to_digit(36).unwrap_or(0))) == 1
+        })
+    })
+}
+
+/// Un numéro de sécurité sociale français valide (sexe 1/2, mois 01-12 ou 20+, clé = 97 − numéro mod 97) parmi les chiffres.
+fn has_nir(digits: &str) -> bool {
+    let b = digits.as_bytes();
+    (0..b.len().saturating_sub(14)).any(|i| {
+        let w = &digits[i..i + 15];
+        let month: u32 = w[3..5].parse().unwrap_or(0);
+        let (Ok(num), Ok(key)) = (w[..13].parse::<u64>(), w[13..].parse::<u64>()) else { return false };
+        matches!(b[i], b'1' | b'2') && (1..=12).contains(&month) && key == 97 - num % 97
+    })
+}
+
+/// Le texte lu dans un document trahit-il des papiers personnels ?
+pub fn looks_like_papers(text: &str) -> bool {
+    let up = text.to_uppercase();
+    let words = ["CARTE NATIONALE D'IDENTIT", "CARTE NATIONALE D’IDENTIT", "PASSEPORT", "PASSPORT", "PERMIS DE CONDUIRE", "TITRE DE SÉJOUR", "TITRE DE SEJOUR"];
+    if up.contains("<<<<<") || words.iter().any(|w| up.contains(w)) {
+        return true;
+    }
+    let compact: Vec<char> = up.chars().filter(char::is_ascii_alphanumeric).collect();
+    // Les chiffres d'un même bloc, espaces et points compris (« 1 85 05 78 006 084 36 ») ; une lettre ou un retour à la ligne coupe.
+    let digits: String = up.split(|c: char| !(c.is_ascii_digit() || c == ' ' || c == '.')).map(|s| s.replace([' ', '.'], "")).filter(|s| s.len() >= 15).collect::<Vec<_>>().join("|");
+    has_iban(&compact) || digits.split('|').any(has_nir)
 }
 
 fn is_sensitive(path: &str, mime: &str) -> bool {
@@ -61,31 +111,35 @@ fn is_sensitive(path: &str, mime: &str) -> bool {
     SENSITIVE_EXT.contains(&ext) || SENSITIVE_NAMES.contains(&name.as_str()) || matches!(mime, "application/x-keepass2" | "text/vcard" | "text/calendar")
 }
 
-/// Fichier de `/Public` : propriétaire, chemin, type, géolocalisé, EXIF identifiant.
-type Row = (String, String, String, bool, bool);
+/// Fichier de `/Public` : propriétaire, chemin, type, géolocalisé, EXIF identifiant, texte lu dedans.
+type Row = (String, String, String, bool, bool, Option<String>);
 
 /// Fichiers de `/Public` (plage d'index `['/Public/', '/Public0')`).
 fn public_files(c: &rusqlite::Connection, owner: Option<&str>) -> rusqlite::Result<Vec<Row>> {
     let mut stmt = c.prepare(
-        "SELECT owner_hex, path, COALESCE(mime, ''), lat IS NOT NULL AND lon IS NOT NULL, COALESCE(json_extract(data, '$.exif_ident'), 0) = 1 FROM ucloud_entries \
-         WHERE type = 'file' AND path >= '/Public/' AND path < '/Public0' AND (?1 IS NULL OR owner_hex = ?1) ORDER BY owner_hex, path",
+        "SELECT e.owner_hex, e.path, COALESCE(e.mime, ''), e.lat IS NOT NULL AND e.lon IS NOT NULL, COALESCE(json_extract(e.data, '$.exif_ident'), 0) = 1, \
+         (SELECT group_concat(t.body, ' ') FROM search_text t WHERE t.owner_hex = e.owner_hex AND t.sha = e.sha_plain AND t.src = 'ocr') FROM ucloud_entries e \
+         WHERE e.type = 'file' AND e.path >= '/Public/' AND e.path < '/Public0' AND (?1 IS NULL OR e.owner_hex = ?1) ORDER BY e.owner_hex, e.path",
     )?;
-    stmt.query_map([owner], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect()
+    stmt.query_map([owner], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect()
 }
 
 fn sort(rows: Vec<Row>) -> Vec<(String, Findings)> {
     let mut out: Vec<(String, Findings)> = Vec::new();
-    for (owner, path, mime, geo, ident) in rows {
+    for (owner, path, mime, geo, ident, text) in rows {
         let image = mime.starts_with("image/");
         let (sensitive, gps, identity) = (is_sensitive(&path, &mime), geo && image, ident && image);
-        if !sensitive && !gps && !identity {
+        let papers = text.as_deref().is_some_and(looks_like_papers);
+        if !sensitive && !gps && !identity && !papers {
             continue;
         }
         if out.last().is_none_or(|(o, _)| *o != owner) {
             out.push((owner.clone(), Findings::default()));
         }
         if let Some((_, f)) = out.last_mut() {
-            if sensitive {
+            if papers {
+                f.papers.push(path);
+            } else if sensitive {
                 f.sensitive.push(path);
             } else if gps {
                 f.gps.push(path);
@@ -113,6 +167,17 @@ pub async fn sweep(db: &Db) -> Result<Vec<(String, Findings)>, DbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn papers_are_told_by_a_checked_iban_or_social_security_number_or_an_id_document() {
+        assert!(looks_like_papers("IBAN : FR76 3000 6000 0112 3456 7890 189"), "IBAN valide");
+        assert!(!looks_like_papers("IBAN : FR76 3000 6000 0112 3456 7890 188"), "mauvaise clé");
+        assert!(looks_like_papers("N° de sécurité sociale 1 85 05 78 006 084 91"), "NIR valide");
+        assert!(!looks_like_papers("Commande 1 85 05 78 006 084 90"), "mauvaise clé");
+        assert!(looks_like_papers("IDFRADUPONT<<<<<<<<<<<<<<<<<<<<<"), "bande MRZ");
+        assert!(looks_like_papers("RÉPUBLIQUE FRANÇAISE — Carte nationale d'identité"));
+        assert!(!looks_like_papers("Facture n° 2026-117, total 84,50 €, tél. 06 12 34 56 78"));
+    }
 
     #[test]
     fn sensitive_files_are_told_by_their_name_or_their_type() {
@@ -149,11 +214,17 @@ mod tests {
                 .unwrap();
         }
         let aa = check(&db, "aa").await.unwrap();
-        assert_eq!(aa, Findings { gps: vec!["/Public/plage.jpg".into()], identity: vec!["/Public/signée.jpg".into()], sensitive: vec!["/Public/perso.kdbx".into()] }, "ni /Photos, ni /Publication");
+        assert_eq!(aa, Findings { gps: vec!["/Public/plage.jpg".into()], identity: vec!["/Public/signée.jpg".into()], sensitive: vec!["/Public/perso.kdbx".into()], papers: vec![] }, "ni /Photos, ni /Publication");
         assert!(aa.message().contains("1 photo(s)") && aa.message().contains("1 fichier(s) sensible(s)") && aa.message().contains("numéro de série"));
         assert!(check(&db, "bb").await.unwrap().is_empty(), "une page publique ordinaire ne dit rien");
         let all = sweep(&db).await.unwrap();
         assert_eq!(all.iter().map(|(o, _)| o.as_str()).collect::<Vec<_>>(), ["aa", "cc"]);
+        // Un scan publié par erreur : la vigie le reconnaît au texte lu dedans (OCR), pas à son nom.
+        db.writer().execute("UPDATE ucloud_entries SET sha_plain = 'rib' WHERE path = '/Public/logo.png'", vec![]).await.unwrap();
+        db.writer().execute("INSERT INTO search_text(body, owner_hex, sha, src, t_ms) VALUES ('Relevé d''identité bancaire IBAN FR76 3000 6000 0112 3456 7890 189', 'aa', 'rib', 'ocr', 0)", vec![]).await.unwrap();
+        let aa = check(&db, "aa").await.unwrap();
+        assert_eq!(aa.papers, ["/Public/logo.png"]);
+        assert!(aa.message().contains("IBAN"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -26,7 +26,9 @@ YES=0
 RUN_INIT=1
 NO_FACE=0
 EMBED=auto       # auto : selon la machine ; yes : impose ; no : refuse
-PROFILE=auto     # auto | leger | standard | confort
+PROFILE=auto     # auto | leger | standard | confort | cerveau
+SEARCH=auto      # recherche multimédia locale : auto (selon le profil), yes, no
+AI_INDEX=off     # cerveau partagé (service ai-index) : friends seulement pour le profil « cerveau », après confirmation
 CHECK_ONLY=0
 FORCE=0
 MODE=""
@@ -49,9 +51,10 @@ Usage : install.sh [options]
   --version vX.Y.Z   version à installer (défaut : la dernière release)
   --prefix DIR       dossier d'installation ; le binaire va dans DIR/bin (défaut : ~/.local)
   --static           binaire statique musl (sans dépendance à la glibc) — x86_64 et aarch64 ; choisi tout seul sous Android (Termux)
-  --profile P        auto (défaut), leger, standard ou confort : ce qui tourne sur cette machine (voir ci-dessous)
+  --profile P        auto (défaut), leger, standard, confort ou cerveau : ce qui tourne sur cette machine (voir ci-dessous)
   --no-face          n'installe pas les modèles de visages
   --embed / --no-embed   impose ou refuse les embeddings locaux de BRO (bge-m3, ≈ 560 Mo), quelle que soit la machine
+  --search / --no-search impose ou refuse la recherche multimédia locale (texte des images, recherche d'images, parole)
   --check-hardware   affiche le diagnostic de la machine et le profil recommandé, sans rien installer
   --no-init          n'appelle pas `astroportd init` à la fin
   --force            réinstalle même si la version en place est déjà la dernière
@@ -70,6 +73,12 @@ Profils (recommandés d'après votre machine, que l'assistant détecte et vous m
   leger      rien en local : visages et mémoire passent par une autre machine (Brain GPU, Ollama) — Pi Zero, vieux Pi, NAS
   standard   visages locaux (≈ 190 Mo) et, si la machine a assez de mémoire et de disque, embeddings locaux ; fils limités
   confort    visages et embeddings locaux, tous les cœurs — PC ou serveur avec 8 Go de mémoire et 6 cœurs ou plus
+  cerveau    tout le confort, et la station prête sa puissance de calcul à vos Capitaines amis (« Cerveau de la
+             constellation ») : elle calcule, en mémoire, l'index multimédia de leurs membres qui l'acceptent (confirmé)
+
+Recherche multimédia (≈ 660 Mo de modèles, vérifiés par SHA-256, depuis IPFS puis Hugging Face) : texte des images et PDF
+(PP-OCRv6), recherche d'images par description (SigLIP 2), sens des textes (E5), parole des vidéos (Whisper, confort et
+cerveau). En dessous de 8 Go de mémoire, rien n'est installé : le membre confiera ce calcul à un Capitaine ami.
 
 Architectures : x86_64 (PC, serveur), aarch64 (Raspberry Pi 4/5, Pi Zero 2 W en 64 bits),
 armv7l (Raspberry Pi 2/3, Pi OS 32 bits). Linux uniquement.
@@ -112,7 +121,9 @@ while [ $# -gt 0 ]; do
     --no-face) NO_FACE=1 ;;
     --embed)    EMBED=yes ;;
     --no-embed) EMBED=no ;;
-    --profile)  shift; PROFILE="${1:?--profile attend auto, leger, standard ou confort}" ;;
+    --search)    SEARCH=yes ;;
+    --no-search) SEARCH=no ;;
+    --profile)  shift; PROFILE="${1:?--profile attend auto, leger, standard, confort ou cerveau}" ;;
     --check-hardware) CHECK_ONLY=1 ;;
     --yes|-y)  YES=1 ;;
     --mode)    shift; MODE="${1:?--mode attend origin ou zen}" ;;
@@ -137,7 +148,7 @@ case "$PROFILE" in
   light|léger) PROFILE=leger ;;
   comfort) PROFILE=confort ;;
 esac
-case "$PROFILE" in auto|leger|standard|confort) ;; *) die "--profile doit valoir auto, leger, standard ou confort (reçu : $PROFILE)" ;; esac
+case "$PROFILE" in auto|leger|standard|confort|cerveau) ;; *) die "--profile doit valoir auto, leger, standard, confort ou cerveau (reçu : $PROFILE)" ;; esac
 
 # --- Journal et présentation ------------------------------------------------------------------------------------
 if [ "$CHECK_ONLY" = 0 ] && [ "$DRY" = 0 ]; then
@@ -314,15 +325,28 @@ detect_hardware() {
   return 0
 }
 
-pname() { case "$1" in leger) printf "léger" ;; confort) printf "confort" ;; *) printf "%s" "$1" ;; esac; }
+pname() { case "$1" in leger) printf "léger" ;; confort) printf "confort" ;; cerveau) printf "cerveau de la constellation" ;; *) printf "%s" "$1" ;; esac; }
+
+# Modèles de recherche multimédia d'un profil : Whisper (parole) seulement en confort et cerveau.
+# En mise à jour (« actuel »), seulement ceux déjà installés.
+search_models() {
+  local m out=""
+  case "${PROFILE_CHOSEN:-}" in
+    actuel) for m in ppocrv6-small:ocr-det siglip2-base:siglip2-vision-int8 e5-small:e5-small-int8 whisper-base:whisper-base-encoder-int8; do
+              [ -f "${MODELS}/${m#*:}.onnx" ] && out="${out:+$out }${m%%:*}"
+            done; printf '%s' "$out" ;;
+    confort|cerveau) printf 'ppocrv6-small siglip2-base e5-small whisper-base' ;;
+    *) printf 'ppocrv6-small siglip2-base e5-small' ;;
+  esac
+}
 
 fmt_mb() { awk -v m="$1" 'BEGIN { if (m >= 1024) printf "%.1f Go", m / 1024; else printf "%d Mo", m }' | tr . ,; }
 
 # Remplit REC_FACE, REC_EMBED (1 = la machine tient), REC_PROFILE, REC_THREADS et REC_NOTES (ce qui limite ou mérite attention).
 recommend() {
-  REC_NOTES=(); REC_FACE=1; REC_EMBED=1
+  REC_NOTES=(); REC_FACE=1; REC_EMBED=1; REC_SEARCH=1
   case "$TARGET" in
-    *-musl) REC_FACE=0; REC_EMBED=0; REC_NOTES+=("binaire statique (musl) : pas d'ONNX Runtime, donc ni visages ni embeddings locaux (--face-engine et --ollama vers une autre machine)") ;;
+    *-musl) REC_FACE=0; REC_EMBED=0; REC_SEARCH=0; REC_NOTES+=("binaire statique (musl) : pas d'ONNX Runtime, donc ni visages ni embeddings locaux (--face-engine et --ollama vers une autre machine)") ;;
   esac
   if [ "$HW_RAM_MB" -le 0 ]; then
     REC_FACE=0; REC_EMBED=0; REC_NOTES+=("mémoire non détectée : profil léger par prudence")
@@ -342,6 +366,10 @@ recommend() {
     sd) REC_NOTES+=("carte SD/eMMC : lente et usée par les écritures ; un SSD USB ou NVMe est bien préférable pour la base et les blobs") ;;
     hdd) REC_NOTES+=("disque mécanique : démarrage et recherche plus lents qu'avec un SSD") ;;
   esac
+  # Recherche multimédia : SigLIP 2 et Whisper demandent ≈ 1,5 Go de plus ; sous 8 Go ou sans calcul int8 rapide, on délègue.
+  if [ "$HW_RAM_MB" -lt 7000 ]; then REC_SEARCH=0; REC_NOTES+=("mémoire $(fmt_mb "$HW_RAM_MB") : la recherche multimédia (≈ 1,5 Go en marche) sera confiée à un Capitaine ami (Mon compte › Intelligence artificielle)")
+  elif [ "$HW_INT8_FAST" = 0 ]; then REC_SEARCH=0; REC_NOTES+=("pas d'AVX2 / dotprod : la recherche multimédia locale serait lente, mieux vaut la confier à un Capitaine ami")
+  elif [ "$HW_DISK_FREE_MB" -lt 3000 ]; then REC_SEARCH=0; REC_NOTES+=("disque : $(fmt_mb "$HW_DISK_FREE_MB") libres, la recherche multimédia (≈ 660 Mo) demande ≈ 3 Go de marge"); fi
   [ "$REC_EMBED" = 1 ] && [ "$HW_INT8_FAST" = 0 ] && REC_NOTES+=("pas d'AVX2 / dotprod : les calculs int8 de bge-m3 seront plusieurs fois plus lents (quelques secondes par texte long)")
   if [ "$REC_FACE" = 0 ]; then REC_PROFILE=leger
   elif [ "$REC_EMBED" = 0 ]; then REC_PROFILE=standard
@@ -354,7 +382,7 @@ recommend() {
 # Fils de calcul par modèle : « confort » laisse ONNX Runtime prendre tous les cœurs (0) ; sinon on en garde la moitié pour le relai.
 threads_for() {
   REC_THREADS=0
-  [ "$1" = confort ] && return 0
+  case "$1" in confort|cerveau) return 0 ;; esac
   if [ "$HW_CORES" -le 2 ]; then REC_THREADS=1; elif [ "$HW_CORES" -le 4 ]; then REC_THREADS=2; else REC_THREADS=$((HW_CORES / 2)); fi
 }
 
@@ -372,6 +400,7 @@ show_recommendation() {
   say ""; say "▶ Recommandation : profil « $(pname "$REC_PROFILE") »"
   say "  $([ "$REC_FACE" = 1 ] && printf '✔' || printf '✘') visages locaux (≈ 190 Mo de modèles)"
   say "  $([ "$REC_EMBED" = 1 ] && printf '✔' || printf '✘') embeddings locaux de BRO : bge-m3 int8 (≈ 560 Mo), recherche et mémoire sans Ollama pour les vecteurs"
+  say "  $([ "$REC_SEARCH" = 1 ] && printf '✔' || printf '✘') recherche multimédia locale (≈ 660 Mo) : texte des images, recherche d'images par description, parole"
   [ "$REC_PROFILE" = leger ] || [ "$REC_THREADS" = 0 ] || say "  ↳ ${REC_THREADS} fil(s) de calcul par modèle, pour laisser de la place au relai et à l'interface"
   local i; for i in "${!REC_NOTES[@]}"; do say "  ⚠ ${REC_NOTES[$i]}"; done
 }
@@ -386,27 +415,44 @@ choose_profile() {
         say ""
         say "  1) léger     rien en local : visages et mémoire passent par une autre machine (Brain GPU, Ollama)"
         say "  2) standard  visages locaux, et embeddings locaux si la machine les porte ; fils de calcul limités"
-        say "  3) confort   visages et embeddings locaux, tous les cœurs"
+        say "  3) confort   visages, embeddings et recherche multimédia locaux, tous les cœurs"
+        say "  4) cerveau   tout le confort, et prêter sa puissance de calcul à vos Capitaines amis"
         local def=2; [ "$REC_PROFILE" = leger ] && def=1; [ "$REC_PROFILE" = confort ] && def=3
         printf '  Votre choix [%s, entrée = recommandé] : ' "$def"
       } > /dev/tty
       local a; read -r a < /dev/tty || a=""
-      case "${a:-$def}" in 1) chosen=leger ;; 2) chosen=standard ;; 3) chosen=confort ;; *) warn "réponse inconnue (« $a ») : profil recommandé conservé" ;; esac
+      case "${a:-$def}" in 1) chosen=leger ;; 2) chosen=standard ;; 3) chosen=confort ;; 4) chosen=cerveau ;; *) warn "réponse inconnue (« $a ») : profil recommandé conservé" ;; esac
     fi
   fi
-  WANT_FACE=0; WANT_EMBED=0
+  WANT_FACE=0; WANT_EMBED=0; WANT_SEARCH=0
   case "$chosen" in
-    standard) WANT_FACE=1; WANT_EMBED="$REC_EMBED" ;;
-    confort)  WANT_FACE=1; WANT_EMBED=1 ;;
+    standard) WANT_FACE=1; WANT_EMBED="$REC_EMBED"; WANT_SEARCH="$REC_SEARCH" ;;
+    confort|cerveau) WANT_FACE=1; WANT_EMBED=1; WANT_SEARCH=1 ;;
   esac
   case "$chosen" in
-    standard|confort)
+    standard|confort|cerveau)
       [ "$REC_FACE" = 1 ] || warn "profil « $(pname "$chosen") » demandé alors que la machine est juste pour les visages locaux : à vos risques."
-      [ "$chosen" = confort ] && [ "$REC_EMBED" = 0 ] && warn "profil « confort » demandé alors que la machine est juste pour bge-m3 : à vos risques." ;;
+      [ "$chosen" != standard ] && [ "$REC_EMBED" = 0 ] && warn "profil « $(pname "$chosen") » demandé alors que la machine est juste pour bge-m3 : à vos risques."
+      [ "$chosen" != standard ] && [ "$REC_SEARCH" = 0 ] && warn "profil « $(pname "$chosen") » demandé alors que la machine est juste pour la recherche multimédia : à vos risques." ;;
   esac
+  case "$SEARCH" in yes) WANT_SEARCH=1 ;; no) WANT_SEARCH=0 ;; esac
+  # Cerveau de la constellation : les documents des membres de vos amis passeront (en mémoire) par cette machine. Jamais sans un oui.
+  AI_INDEX=off
+  if [ "$chosen" = cerveau ]; then
+    say ""
+    say "  Cerveau de la constellation : cette station lira le texte des documents (scans, PDF, photos de tickets)"
+    say "  pour les membres de vos Capitaines amis qui l'acceptent. Leurs fichiers passent ici EN MÉMOIRE seulement,"
+    say "  rien n'est écrit sur ce disque ; vous pourrez fermer ce service à tout moment (Réglages › Tunnels › ai-index)."
+    # Non par défaut : seul un « o » tapé (ou --profile cerveau --yes, choix explicite en ligne de commande) l'ouvre.
+    local a="n"
+    if [ "$YES" = 1 ]; then a="o"
+    elif [ -r /dev/tty ]; then printf '  Ouvrir ce service à vos Capitaines amis ? [o/N] ' > /dev/tty; read -r a < /dev/tty || a="n"; fi
+    case "$a" in o|O|oui|Oui) AI_INDEX=friends ;; *) say "  D'accord : service fermé (ouvrable plus tard dans les Réglages)." ;; esac
+  fi
   [ "$NO_FACE" = 1 ] && WANT_FACE=0
   case "$EMBED" in yes) WANT_EMBED=1 ;; no) WANT_EMBED=0 ;; esac
-  case "$TARGET" in *-musl) WANT_FACE=0; WANT_EMBED=0 ;; esac
+  case "$TARGET" in *-musl) WANT_FACE=0; WANT_EMBED=0; WANT_SEARCH=0; AI_INDEX=off ;; esac
+  [ "$WANT_SEARCH" = 1 ] || AI_INDEX=off
   threads_for "$chosen"; WANT_THREADS="$REC_THREADS"
   PROFILE_CHOSEN="$chosen"
 }
@@ -454,15 +500,16 @@ if [ "$CHECK_ONLY" = 1 ]; then
 fi
 if [ "$UPDATE" = 1 ] && [ "$PROFILE" = auto ]; then
   # Mise à jour : on garde les choix de la première installation, lus sur le disque.
-  WANT_FACE=0; WANT_EMBED=0; WANT_THREADS=0; PROFILE_CHOSEN=actuel
+  WANT_FACE=0; WANT_EMBED=0; WANT_SEARCH=0; WANT_THREADS=0; PROFILE_CHOSEN=actuel
   { [ -f "${MODELS}/det_10g.onnx" ] || [ -f "${HOME}/.insightface/models/buffalo_l/det_10g.onnx" ]; } && WANT_FACE=1
   [ -f "${MODELS}/bge-m3-int8.onnx" ] && WANT_EMBED=1
+  [ -f "${MODELS}/ocr-det.onnx" ] && WANT_SEARCH=1
   [ "$NO_FACE" = 1 ] && WANT_FACE=0
   case "$EMBED" in yes) WANT_EMBED=1 ;; no) WANT_EMBED=0 ;; esac
 else
   choose_profile
 fi
-say ""; say "▶ Profil retenu : $(pname "$PROFILE_CHOSEN") (visages locaux : $([ "$WANT_FACE" = 1 ] && printf oui || printf non), embeddings locaux : $([ "$WANT_EMBED" = 1 ] && printf oui || printf non))"
+say ""; say "▶ Profil retenu : $(pname "$PROFILE_CHOSEN") (visages locaux : $([ "$WANT_FACE" = 1 ] && printf oui || printf non), embeddings locaux : $([ "$WANT_EMBED" = 1 ] && printf oui || printf non), recherche multimédia : $([ "$WANT_SEARCH" = 1 ] && printf locale || printf 'confiée à un ami')$([ "$AI_INDEX" = friends ] && printf ', cerveau partagé ouvert aux amis'))"
 
 # --- Simulation : ce qui serait fait, sans rien écrire ----------------------------------------------------------
 if [ "$DRY" = 1 ]; then
@@ -472,7 +519,9 @@ if [ "$DRY" = 1 ]; then
   say "  • installer ${PREFIX}/bin/${BIN}"
   [ "$WANT_FACE" = 1 ] && say "  • modèles de visages (≈ 190 Mo) dans ${MODELS}"
   [ "$WANT_EMBED" = 1 ] && say "  • modèles d'embeddings bge-m3 (≈ 560 Mo) dans ${MODELS}"
-  { [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ]; } || say "  • aucun modèle local (profil sans calcul local)"
+  [ "$WANT_SEARCH" = 1 ] && say "  • modèles de recherche multimédia ($(search_models)) dans ${MODELS} (astroportd models add)"
+  [ "$AI_INDEX" = friends ] && say "  • ouvrir le cerveau partagé (ai-index) aux Capitaines amis (init --ai-index friends)"
+  { [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; } || say "  • aucun modèle local (profil sans calcul local)"
   if [ "$UPDATE" = 1 ]; then say "  • proposer de redémarrer le service (station et données conservées)"
   elif [ "$RUN_INIT" = 1 ]; then say "  • lancer « ${BIN} init » (clés Y-Level, ORIGIN/ẐEN, réseau), puis proposer les plugins"
   else say "  • s'arrêter avant « init » (--no-init)"; fi
@@ -654,13 +703,27 @@ install_embed_models() {
   done
 }
 
+# Recherche multimédia : le binaire installe lui-même ses modèles (catalogue figé, SHA-256, IPFS puis Hugging Face).
+install_search_models() {
+  local id ok=0
+  for id in $(search_models); do
+    say "  ${id} :"
+    "${PREFIX}/bin/${BIN}" models --dir "$MODELS" add "$id" || { warn "${id} non installé : relancez « ${BIN} models add ${id} »"; ok=1; }
+  done
+  return "$ok"
+}
+
 # Seulement ce que le profil retenu demande.
-if [ "$WANT_FACE" = 0 ] && [ "$WANT_EMBED" = 0 ]; then
+if [ "$WANT_FACE" = 0 ] && [ "$WANT_EMBED" = 0 ] && [ "$WANT_SEARCH" = 0 ]; then
   step "Modèles locaux"; say "  aucun demandé par le profil « $(pname "$PROFILE_CHOSEN") » (rien à télécharger)."
 fi
-if [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ]; then
+if [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; then
   step "Modèles locaux"
   if install_ort; then
+    if [ "$WANT_SEARCH" = 1 ]; then
+      install_search_models || warn "recherche multimédia locale incomplète : voir « astroportd models list »"
+      command -v pdftoppm >/dev/null 2>&1 || warn "poppler absent : les PDF ne seront pas lus (sudo apt install poppler-utils)"
+    fi
     if [ "$WANT_FACE" = 1 ]; then install_models || warn "reconnaissance de visages locale incomplète : voir « astroportd face-check » (ou serve --face-engine http://…)"; fi
     if [ "$WANT_EMBED" = 1 ]; then install_embed_models || warn "embeddings locaux incomplets : voir « astroportd embed-check » (ou serve --ollama http://… pour les vecteurs)"; fi
   else
@@ -809,6 +872,7 @@ if [ "$WANT_THREADS" -gt 0 ]; then
   [ "$WANT_FACE" = 1 ] && init_args+=(--face-threads "$WANT_THREADS")
   [ "$WANT_EMBED" = 1 ] && init_args+=(--embed-threads "$WANT_THREADS")
 fi
+[ "$AI_INDEX" = friends ] && init_args+=(--ai-index friends)
 
 if [ "$YES" = 1 ]; then
   init_args+=(--yes)

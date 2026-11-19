@@ -12,11 +12,13 @@ pub struct UcloudBackend<B: BlobStore> {
     pub(super) dav: Arc<DavState<B>>,
     pub(super) friends_fn: Option<FriendsFn>,
     pub(super) backup: Option<BackupFns>,
+    pub(super) media_friends: Option<MediaFriendsFns>,
     pub(super) replicate_fn: Option<ReplicateFn>,
     pub(super) site: Option<Arc<crate::public_site::Site<B>>>,
     pub(super) pull: Option<Arc<crate::webdav_pull::PullService<B>>>,
     pub(super) organize: Option<Arc<crate::organize::OrganizeService<B>>>,
     pub(super) send_fn: Option<SendFn>,
+    pub(super) seer: Option<Arc<astro_index::LocalIndexer>>,
 }
 
 impl_auth!(UcloudBackend);
@@ -77,6 +79,47 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
         // adresse ; `gateway` n'est que celle où il se trouve aujourd'hui.
         Ok(json!({ "cid": a.cid, "size": a.size, "expires_at": a.expires_at, "gateway": origin, "url": format!("{origin}/ipfs/{}", a.cid) }))
     }
+    async fn media_list(&self, who: &Principal) -> Result<Value, ApiError> {
+        crate::media::library(&self.dav, &who.hex).await.map_err(db_err)
+    }
+    async fn media_play(&self, who: &Principal, paths: Vec<String>) -> Result<Value, ApiError> {
+        let paths = paths.iter().map(|p| astro_dav::vfs::normalize_path(p).map_err(|_| ApiError::bad_request("chemin invalide"))).collect::<Result<Vec<_>, _>>()?;
+        crate::media::play_urls(&self.dav, &who.hex, paths, Self::now()).await.map_err(db_err)
+    }
+    async fn media_fiche(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
+        let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        crate::media::fiche(&self.dav, &who.hex, &path).await.map_err(ApiError::not_found)
+    }
+    async fn media_edit(&self, who: &Principal, path: String, set: Value) -> Result<Value, ApiError> {
+        let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        let item = crate::media::edit(&self.dav, &who.hex, &path, &set).await.map_err(ApiError::bad_request)?;
+        Ok(json!({ "item": item }))
+    }
+    async fn media_friends(&self, who: &Principal, force: bool) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("médiathèque des amis non disponible sur cette station"))?;
+        (f.list)(who.hex.clone(), force).await.map_err(ApiError::internal)
+    }
+    async fn media_friend_match(&self, who: &Principal, w: astro_ui::api::MediaWork) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("médiathèque des amis non disponible sur cette station"))?;
+        let list = (f.list)(who.hex.clone(), false).await.map_err(ApiError::internal)?;
+        let work = crate::friends_media::Work { tmdb: w.tmdb, tv: w.tv, series: w.series, season: w.season, episode: w.episode, youtube: w.youtube };
+        let items = list["items"].as_array().map(Vec::as_slice).unwrap_or_default();
+        Ok(json!({ "match": crate::friends_media::best_copy(items, &work) }))
+    }
+    async fn media_friend_request(&self, who: &Principal, event_id: String) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("médiathèque des amis non disponible sur cette station"))?;
+        (f.request)(who.hex.clone(), event_id).await.map_err(ApiError::bad_request)
+    }
+    async fn media_share(&self, who: &Principal, paths: Vec<String>, on: bool, list: Option<(String, String)>) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station"))?;
+        let paths = paths.iter().map(|p| astro_dav::vfs::normalize_path(p).map_err(|_| ApiError::bad_request("chemin invalide"))).collect::<Result<Vec<_>, _>>()?;
+        (f.share)(who.hex.clone(), paths, on, list).await.map_err(ApiError::bad_request)
+    }
+    async fn media_trace(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station"))?;
+        let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        (f.trace)(who.hex.clone(), path).await.map_err(ApiError::not_found)
+    }
     async fn ucloud_list(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
         let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
         let (owner, p) = (who.hex.clone(), path.clone());
@@ -94,7 +137,10 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
             .await
             .map_err(db_err)?;
         let Some(entries) = listing else { return Err(ApiError::not_found("dossier introuvable")) };
-        let mut entries: Vec<Value> = entries.iter().map(entry_json).collect();
+        // Fiches de la médiathèque et leurs compagnons (affiche, pochette, sous-titres) : rangés avec le fichier qu'ils
+        // décrivent, visibles dans la Médiathèque et par WebDAV, pas dans cette liste.
+        let hidden = crate::media::hidden_names(entries.iter().map(|e| astro_dav::vfs::name_of(&e.path)));
+        let mut entries: Vec<Value> = entries.iter().filter(|e| !hidden.contains(astro_dav::vfs::name_of(&e.path))).map(entry_json).collect();
         // Dossiers d'abord, puis par nom.
         entries.sort_by(|a, b| (a["type"] != "dir", a["name"].as_str()).cmp(&(b["type"] != "dir", b["name"].as_str())));
         Ok(json!({ "path": path, "dav": self.dav.config.mount, "entries": entries }))
@@ -108,12 +154,13 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
             .readers()
             .read(move |c| {
                 const COLS: &str = "path, mime, size, mtime, taken_at, COALESCE(taken_at, mtime) AS t, json_extract(data, '$.thumb')";
-                const KIND: &str = "owner_hex = ?1 AND type = 'file' AND cid IS NOT NULL AND (mime LIKE 'image/%' OR mime LIKE 'video/%')";
+                // Les affiches et pochettes de la médiathèque ne sont pas des photos du membre.
+                const KIND: &str = concat!("owner_hex = ?1 AND type = 'file' AND cid IS NOT NULL AND (mime LIKE 'image/%' OR mime LIKE 'video/%') AND ", crate::not_companion_sql!());
                 let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, Value)> {
                     let t: i64 = r.get(5)?;
                     Ok((t, json!({ "path": r.get::<_, String>(0)?, "mime": r.get::<_, Option<String>>(1)?, "size": r.get::<_, Option<i64>>(2)?, "mtime": r.get::<_, Option<i64>>(3)?, "taken_at": r.get::<_, Option<i64>>(4)?, "thumb": thumb_of(r.get::<_, Option<String>>(6)?) })))
                 };
-                let mut stmt = c.prepare_cached(&format!("SELECT {COLS} FROM ucloud_entries WHERE {KIND} AND (?2 IS NULL OR COALESCE(taken_at, mtime) < ?2) ORDER BY t DESC, path LIMIT ?3"))?;
+                let mut stmt = c.prepare_cached(&format!("SELECT {COLS} FROM ucloud_entries e WHERE {KIND} AND (?2 IS NULL OR COALESCE(taken_at, mtime) < ?2) ORDER BY t DESC, path LIMIT ?3"))?;
                 let mut rows = stmt.query_map(params![owner, before, limit_i], map)?.collect::<Result<Vec<_>, _>>()?;
                 let mut next = None;
                 if rows.len() as i64 == limit_i {
@@ -121,7 +168,7 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
                     // sinon la page suivante (`t < dernier`) les sauterait.
                     if let Some((t, last)) = rows.last().cloned() {
                         let last_path = last["path"].as_str().unwrap_or("").to_owned();
-                        let mut tie = c.prepare_cached(&format!("SELECT {COLS} FROM ucloud_entries WHERE {KIND} AND COALESCE(taken_at, mtime) = ?2 AND path > ?3 ORDER BY path"))?;
+                        let mut tie = c.prepare_cached(&format!("SELECT {COLS} FROM ucloud_entries e WHERE {KIND} AND COALESCE(taken_at, mtime) = ?2 AND path > ?3 ORDER BY path"))?;
                         rows.extend(tie.query_map(params![owner, t, last_path], map)?.collect::<Result<Vec<_>, _>>()?);
                         next = Some(t);
                     }
@@ -136,6 +183,26 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
         use astro_ui::api::LibraryQuery as Q;
         let owner = who.hex.clone();
         let now = now_secs();
+        // Recherche par l'image : les mots « à voir » de la requête (ni personne, ni lieu, ni date : `search_query`) deviennent
+        // un vecteur ici (moteur local), avant de lire la base.
+        let sees = self.seer.as_ref().filter(|seer| astro_index::Indexer::tasks(seer.as_ref()).contains(&astro_index::Task::VisionQuery));
+        let to_see = match (&q, sees) {
+            (Q::Search(s), Some(_)) => match s.q.clone().filter(|t| !t.trim().is_empty()) {
+                Some(text) => {
+                    let o = owner.clone();
+                    self.services.db.readers().read(move |c| Ok(crate::search_query::to_see(&crate::search_query::understand(c, &o, &text)?))).await.map_err(db_err)?
+                }
+                None => String::new(),
+            },
+            _ => String::new(),
+        };
+        let query_vec = match sees.filter(|_| !to_see.trim().is_empty()) {
+            Some(seer) => {
+                let input = astro_index::Input { mime: "text/plain".into(), bytes: bytes::Bytes::from(to_see.chars().take(200).collect::<String>()) };
+                astro_index::Indexer::index(seer.as_ref(), astro_index::Task::VisionQuery, input).await.ok().and_then(|o| o.vector)
+            }
+            None => None,
+        };
         self.services
             .db
             .readers()
@@ -163,7 +230,11 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
                             }
                         };
                         let after = s.after_t.zip(s.after_p.clone());
-                        let query = crate::library::Search { q: s.q, person: s.person, from: s.from, to: s.to, bbox, kind: s.kind, after, limit: s.limit.unwrap_or(60) };
+                        let seen = match &query_vec {
+                            Some(v) => crate::library::seen(c, &owner, v)?,
+                            None => crate::library::Seen::default(),
+                        };
+                        let query = crate::library::Search { q: s.q, person: s.person, from: s.from, to: s.to, bbox, kind: s.kind, after, limit: s.limit.unwrap_or(60), seen: seen.strict, near: seen.near };
                         Ok(crate::library::search(c, &owner, &query)?)
                     }
                     Q::Map(m) => {
@@ -175,6 +246,7 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
                         Ok(crate::library::map(c, &owner, &area)?)
                     }
                     Q::Duplicates(all) => Ok(crate::library::duplicates(c, &owner, all)?),
+                    Q::Text(path) => Ok(crate::library::text(c, &owner, &path)?),
                 })
             })
             .await

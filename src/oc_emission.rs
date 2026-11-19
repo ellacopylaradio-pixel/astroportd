@@ -123,13 +123,15 @@ impl<C: Chain> OcEmission<C> {
         Self { db, uplanet_name, credit, endpoint, limits, activity, last: Mutex::new(None), lookup_error: Mutex::new(None) }
     }
 
-    /// Opérations du Capitaine : `status` (lit et liste), `sync` (crédite ce qui est à créditer, avec `confirm`).
+    /// Opérations du Capitaine : `status` (lit et liste ; crédite aussi si `OC_AUTO_CREDIT=1`), `peek` (dernier bilan, **jamais
+    /// de crédit** : pour un écran qui montre seulement l'état), `sync` (crédite ce qui est à créditer, avec `confirm`).
     pub async fn handle(&self, op: &str, body: &Value) -> Result<Value, BilletError> {
         if !body["_who"]["captain"].as_bool().unwrap_or(false) {
             return Err(BilletError::Refused("oc_not_captain", "réservé au Capitaine".into()));
         }
         match op {
             "status" => Ok(self.report(false, None).await),
+            "peek" => Ok(self.peek().await),
             "sync" => {
                 if body.get("confirm").and_then(Value::as_bool) != Some(true) {
                     return Err(BilletError::Invalid("oc_unconfirmed", "crédit non confirmé".into()));
@@ -289,6 +291,21 @@ impl<C: Chain> OcEmission<C> {
         v
     }
 
+    /// État sans aucun crédit : le dernier bilan s'il existe ; sinon une lecture seulement si le crédit automatique est coupé
+    /// (avec `OC_AUTO_CREDIT=1`, lire ferait verser : on attend la boucle périodique, qui le fait de toute façon).
+    pub async fn peek(&self) -> Value {
+        if let Some(v) = self.last() {
+            return v;
+        }
+        if self.setting("OCSLUG").await.is_none() || self.setting("OCAPIKEY").await.is_none() {
+            return json!({ "configured": false, "error": "OpenCollective n'est pas configuré (OCSLUG, OCAPIKEY)", "donations": [] });
+        }
+        if matches!(self.setting("OC_AUTO_CREDIT").await.as_deref(), Some("1")) {
+            return json!({ "configured": true, "auto": true, "waiting": true, "donations": [] });
+        }
+        self.report(false, None).await
+    }
+
     /// Dernier bilan, sans interroger OpenCollective.
     pub fn last(&self) -> Option<Value> {
         self.last.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
@@ -408,6 +425,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn peeking_never_credits_even_with_automatic_credit() {
+        let r = rig("oc-peek", 10_000).await;
+        configure(&r, true).await;
+        let url = mock(vec![tx("membre", Some("membre@exemple.org"), json!(8.5), None, "2026-11-03T10:00:00Z")]).await;
+        let oc = service(&r, url);
+        // Crédit automatique et aucun bilan : l'écran attend la lecture périodique au lieu de déclencher un virement.
+        let v = oc.handle("peek", &captain()).await.unwrap();
+        assert_eq!(v["waiting"], json!(true), "{v}");
+        assert!(r.chain.sent.lock().unwrap().is_empty(), "regarder l'état ne verse rien");
+        // Une fois un bilan fait (ici par la lecture du Capitaine), `peek` le rend tel quel, sans relire ni verser.
+        let first = oc.handle("status", &captain()).await.unwrap();
+        let sent = r.chain.sent.lock().unwrap().len();
+        assert_eq!(oc.handle("peek", &captain()).await.unwrap(), first);
+        assert_eq!(r.chain.sent.lock().unwrap().len(), sent, "peek ne verse jamais");
+    }
+
+    #[tokio::test]
     async fn donations_are_listed_first_then_credited_once_when_the_captain_confirms() {
         let r = rig("oc", 10_000).await;
         configure(&r, false).await;
@@ -438,6 +472,7 @@ mod tests {
         assert_eq!((again["done"].as_u64(), r.chain.sent.lock().unwrap().len()), (Some(3), n));
         // Un membre n'a pas la main.
         assert!(matches!(oc.handle("status", &json!({ "_who": { "captain": false } })).await, Err(BilletError::Refused("oc_not_captain", _))));
+        assert!(matches!(oc.handle("peek", &json!({ "_who": { "captain": false } })).await, Err(BilletError::Refused("oc_not_captain", _))));
         let _ = std::fs::remove_dir_all(r.dir);
     }
 

@@ -50,7 +50,7 @@ pub fn search_terms(search: &str) -> Vec<String> {
 }
 
 /// Lettre de base d'un caractère latin accentué (« é » → « e »), en minuscule ; les autres caractères sont seulement mis en minuscule.
-fn fold(c: char) -> char {
+pub fn fold(c: char) -> char {
     let c = c.to_lowercase().next().unwrap_or(c);
     match c {
         'à'..='å' | 'ā' | 'ă' | 'ą' => 'a',

@@ -45,6 +45,10 @@ pub trait StationApi: Auth {
     fn plane_remove(&self, _who: &Principal, _name: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("configuration des plans non disponible sur cette station")) }
     }
+    /// Bascule en ẐEN (`stop` : ORIGIN n'est plus servi, ses données restent) ou remet ORIGIN (`restore`) (Capitaine).
+    fn plane_origin(&self, _who: &Principal, _action: String, _heir: Option<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("configuration des plans non disponible sur cette station")) }
+    }
     /// Met l'unité systemd d'accord avec `planes.json` : elle lance `planes` au lieu de `serve` (Capitaine).
     fn plane_service(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("configuration des plans non disponible sur cette station")) }
@@ -73,6 +77,7 @@ pub(super) fn routes<B: StationApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/station/planes", get(planes::<B>).post(plane_add::<B>))
         .route("/api/v1/station/planes/remove", post(plane_remove::<B>))
         .route("/api/v1/station/planes/service", post(plane_service::<B>))
+        .route("/api/v1/station/planes/origin", post(plane_origin::<B>))
 }
 
 async fn dashboard<B: StationApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
@@ -123,6 +128,27 @@ async fn plane_add<B: StationApi>(State(st): State<Arc<UiState<B>>>, headers: He
         Ok(p) => match captain_only(&p) {
             Ok(()) if body.name.len() <= 64 && body.swarm_key.as_ref().is_none_or(|k| k.len() <= 1024) => reply(st.backend.plane_add(&p, body.name, body.swarm_key.filter(|k| !k.trim().is_empty())).await),
             Ok(()) => reply(Err(ApiError::bad_request("nom ou clé trop long"))),
+            Err(r) => r,
+        },
+        Err(r) => r,
+    }
+}
+
+#[derive(Deserialize)]
+struct OriginBody {
+    /// `stop` (basculer en ẐEN) ou `restore` (remettre ORIGIN). Facultatif au décodage : le compte est vérifié avant le contenu.
+    #[serde(default)]
+    action: String,
+    /// Constellation ẐEN qui reprend l'adresse HTTP d'ORIGIN (obligatoire s'il y en a plusieurs).
+    #[serde(default)]
+    heir: Option<String>,
+}
+
+async fn plane_origin<B: StationApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap, method: Method, uri: Uri, Json(body): Json<OriginBody>) -> Response {
+    match who(&st, &headers, &method, &uri).await {
+        Ok(p) => match captain_only(&p) {
+            Ok(()) if matches!(body.action.as_str(), "stop" | "restore") => reply(st.backend.plane_origin(&p, body.action, body.heir.filter(|h| h.len() <= 64)).await),
+            Ok(()) => reply(Err(ApiError::bad_request("action attendue : stop ou restore"))),
             Err(r) => r,
         },
         Err(r) => r,

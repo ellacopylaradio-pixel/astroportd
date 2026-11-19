@@ -11,11 +11,11 @@ use std::time::Duration;
 
 use astro_db::Db;
 use astro_nostr_proto::filter::MAX_LIST_LEN;
-use astro_nostr_proto::{Filter, is_hex64};
+use astro_nostr_proto::{Event, Filter, is_hex64};
 use futures_util::StreamExt;
 use tokio::sync::watch;
 
-use crate::client::{RelayClient, RelaySession};
+use crate::client::{ClientError, RelayClient, RelaySession};
 use crate::ingest::{Ingested, ingest_event, purge_claimed};
 use crate::SyncError;
 
@@ -27,6 +27,8 @@ const CLAIM_RETENTION_SECS: u64 = 7 * 24 * 3600;
 /// page d'au moins ce nombre d'événements est traitée comme pleine (on remonte le temps), pour qu'un lot de clés ne
 /// perde pas ce qu'une requête par clé aurait reçu.
 const RELAY_CAP_FLOOR: usize = 100;
+/// Événements locaux au plus dans une réconciliation de lot (le relai astroportd en accepte autant) : au-delà, les pages.
+const NEG_LOCAL_CAP: usize = 100_000;
 
 /// Réglages du crawl.
 #[derive(Debug, Clone)]
@@ -81,11 +83,14 @@ pub struct CrawlStats {
     pub rejected: u64,
     /// Les 20 premières erreurs `(relai, clé, raison)`.
     pub errors: Vec<(String, String, String)>,
+    /// Lots réconciliés par Negentropy (NIP-77) plutôt que lus par pages.
+    pub negentropy: u64,
 }
 
 impl CrawlStats {
     fn merge(&mut self, other: CrawlStats) {
         self.keys += other.keys;
+        self.negentropy += other.negentropy;
         self.fetched += other.fetched;
         self.inserted += other.inserted;
         self.duplicates += other.duplicates;
@@ -309,8 +314,89 @@ impl<C: RelayClient> Crawler<C> {
         self.sync_lot(session.as_mut(), relay, &lot, &cursors).await
     }
 
-    /// Un lot de clés sur une session : pages remontant le temps, puis curseurs avancés clé par clé.
+    /// Un événement reçu pour le lot : vérifié (auteur du lot, kind répliqué), stocké, et compté. `Some(auteur, date)` s'il
+    /// fait avancer le curseur de sa clé.
+    async fn absorb<'k>(&self, event: Event, authors: &HashSet<&'k str>, stats: &mut CrawlStats) -> Result<Option<(&'k str, u64)>, SyncError> {
+        stats.fetched += 1;
+        let Some(author) = authors.get(event.pubkey.as_str()).copied() else {
+            stats.rejected += 1;
+            return Ok(None);
+        };
+        if !self.config.kinds.contains(&event.kind) {
+            stats.rejected += 1;
+            return Ok(None);
+        }
+        let at = event.created_at;
+        // Seul un événement valide de la clé fait avancer son curseur : un faux daté du futur ne peut pas geler la reprise.
+        match ingest_event(self.db.writer(), event, CLAIM_OWNER).await? {
+            Ingested::Inserted => stats.inserted += 1,
+            Ingested::Duplicate => stats.duplicates += 1,
+            Ingested::Superseded => stats.superseded += 1,
+            Ingested::Rejected(_) => {
+                stats.rejected += 1;
+                return Ok(None);
+            }
+        }
+        Ok(Some((author, at)))
+    }
+
+    /// Réconciliation Negentropy (NIP-77) du lot : l'ensemble local est tout ce que la base a déjà pour ces clés et cette
+    /// fenêtre, **quel que soit le relai qui l'a apporté** ; seuls les événements manquants voyagent, et la fenêtre de
+    /// recouvrement ne coûte plus rien. `None` : le relai ne la connaît pas, ou la fenêtre est trop grosse — les pages prennent
+    /// le relais.
+    async fn reconcile_lot(&self, session: &mut (dyn RelaySession + '_), relay: &str, lot: &Lot, cursors: &HashMap<String, u64>) -> Result<Option<CrawlStats>, SyncError> {
+        let (keys, kinds, since) = (lot.keys.clone(), self.config.kinds.clone(), lot.since.unwrap_or(0));
+        let local: Vec<(u64, String, String)> = self
+            .db
+            .readers()
+            .read(move |c| {
+                let (pk, kd) = (vec!["?"; keys.len()].join(","), kinds.iter().map(u32::to_string).collect::<Vec<_>>().join(","));
+                let sql = format!("SELECT created_at, id, pubkey FROM nostr_events WHERE pubkey IN ({pk}) AND kind IN ({kd}) AND created_at >= {since} LIMIT {}", NEG_LOCAL_CAP + 1);
+                let mut stmt = c.prepare(&sql)?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(keys.iter()), |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?, r.get(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await?;
+        if local.len() > NEG_LOCAL_CAP {
+            return Ok(None);
+        }
+        let filter = Filter { authors: Some(lot.keys.clone()), kinds: Some(self.config.kinds.clone()), since: lot.since, ..Filter::default() };
+        let pairs: Vec<(u64, String)> = local.iter().map(|(t, id, _)| (*t, id.clone())).collect();
+        let result = match tokio::time::timeout(self.config.fetch_timeout.saturating_mul(4), session.sync(&filter, &pairs)).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(ClientError::Unsupported(_) | ClientError::Closed(_))) => return Ok(None),
+            Ok(Err(e)) => return Err(relay_error(e.to_string())),
+            Err(_) => return Err(relay_error("délai dépassé".into())),
+        };
+        let authors: HashSet<&str> = lot.keys.iter().map(String::as_str).collect();
+        let mut newest: HashMap<&str, u64> = HashMap::new();
+        for (t, _, pk) in &local {
+            if let Some(a) = authors.get(pk.as_str()).copied() {
+                let slot = newest.entry(a).or_insert(0);
+                *slot = (*slot).max(*t);
+            }
+        }
+        let mut stats = CrawlStats { negentropy: 1, ..CrawlStats::default() };
+        for event in result.missing {
+            if let Some((author, at)) = self.absorb(event, &authors, &mut stats).await? {
+                let slot = newest.entry(author).or_insert(0);
+                *slot = (*slot).max(at);
+            }
+        }
+        for (key, at) in newest {
+            if at > cursors.get(key).copied().unwrap_or(0) {
+                self.set_cursor(&format!("{relay}|{key}"), at).await?;
+            }
+        }
+        Ok(Some(stats))
+    }
+
+    /// Un lot de clés sur une session : réconciliation NIP-77 si le relai la connaît, sinon pages remontant le temps ; puis
+    /// curseurs avancés clé par clé.
     async fn sync_lot(&self, session: &mut (dyn RelaySession + '_), relay: &str, lot: &Lot, cursors: &HashMap<String, u64>) -> Result<CrawlStats, SyncError> {
+        if let Some(stats) = self.reconcile_lot(session, relay, lot, cursors).await? {
+            return Ok(stats);
+        }
         let authors: HashSet<&str> = lot.keys.iter().map(String::as_str).collect();
         let mut newest: HashMap<&str, u64> = HashMap::new();
         let mut stats = CrawlStats::default();
@@ -333,29 +419,10 @@ impl<C: RelayClient> Crawler<C> {
             let full_page = page.len() >= full;
             let oldest = page.iter().map(|e| e.created_at).min();
             for event in page {
-                stats.fetched += 1;
-                let Some(author) = authors.get(event.pubkey.as_str()).copied() else {
-                    stats.rejected += 1;
-                    continue;
-                };
-                if !self.config.kinds.contains(&event.kind) {
-                    stats.rejected += 1;
-                    continue;
+                if let Some((author, at)) = self.absorb(event, &authors, &mut stats).await? {
+                    let slot = newest.entry(author).or_insert(0);
+                    *slot = (*slot).max(at);
                 }
-                let at = event.created_at;
-                // Seul un événement valide de la clé fait avancer son curseur : un faux daté du futur ne peut pas
-                // geler la reprise de cette clé.
-                match ingest_event(self.db.writer(), event, CLAIM_OWNER).await? {
-                    Ingested::Inserted => stats.inserted += 1,
-                    Ingested::Duplicate => stats.duplicates += 1,
-                    Ingested::Superseded => stats.superseded += 1,
-                    Ingested::Rejected(_) => {
-                        stats.rejected += 1;
-                        continue;
-                    }
-                }
-                let slot = newest.entry(author).or_insert(0);
-                *slot = (*slot).max(at);
             }
             // Page pleine : remonter dans le temps ; `until` inclusif, la déduplication absorbe le chevauchement.
             match (full_page, oldest) {
@@ -410,7 +477,7 @@ impl<C: RelayClient> Crawler<C> {
         let json = match &report.result {
             Ok(s) => serde_json::json!({
                 "at": at, "ms": report.millis, "relays": relays, "keys": s.keys, "fetched": s.fetched, "inserted": s.inserted,
-                "duplicates": s.duplicates, "superseded": s.superseded, "rejected": s.rejected,
+                "duplicates": s.duplicates, "superseded": s.superseded, "rejected": s.rejected, "negentropy": s.negentropy,
                 "errors": s.errors.iter().map(|(relay, key, reason)| serde_json::json!({ "relay": relay, "key": key, "reason": reason })).collect::<Vec<_>>(),
             }),
             Err(e) => serde_json::json!({ "at": at, "ms": report.millis, "relays": relays, "error": e }),

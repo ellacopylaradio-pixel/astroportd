@@ -15,6 +15,7 @@ pub struct SocialBackend<B: BlobStore> {
     pub(super) contacts: Option<Arc<crate::identity_links::IdentityLinks<B>>>,
     pub(super) agents: Option<Arc<crate::agents::Agents>>,
     pub(super) ai: Option<Arc<crate::member_ai::MemberAi>>,
+    pub(super) reading: Option<Arc<crate::delegation::Delegation>>,
     pub(super) book: Option<Arc<crate::address_book::AddressBook<B>>>,
     pub(super) chat: Option<Arc<crate::chat::Chat>>,
     /// Visio : port STUN de la station (UDP), secret du relais d'appel s'il est actif, serveurs supplémentaires.
@@ -149,6 +150,29 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
     async fn set_ai_params(&self, who: &Principal, patch: Value) -> Result<Value, ApiError> {
         let ai = self.ai.as_ref().ok_or_else(|| ApiError::unavailable("paramètres IA non disponibles sur cette station"))?;
         ai.set(&who.hex, &patch).await.map(|p| p.view()).map_err(ai_error)
+    }
+    async fn reading(&self, who: &Principal, op: ReadingOp) -> Result<Value, ApiError> {
+        let r = self.reading.as_ref().ok_or_else(|| ApiError::unavailable("lecture des documents non disponible sur cette station"))?;
+        match op {
+            ReadingOp::View => r.view(&who.hex).await.map_err(db_err),
+            ReadingOp::Offers => r.offers().await.map_err(ApiError::unavailable),
+            ReadingOp::Accept { peers, tasks } => r.accept(&who.hex, &peers, &tasks).await.map_err(ApiError::bad_request),
+            ReadingOp::Revoke(peer) => r.revoke(&who.hex, peer.as_deref()).await.map_err(ApiError::bad_request),
+            ReadingOp::Pause(on) => r.pause(&who.hex, on).await.map_err(ApiError::internal),
+            ReadingOp::Erase => {
+                // 1. les calculs (et la pause) ; 2. le paquet du uCloud ; 3. la station l'oublie. Une panne entre deux étapes
+                // laisse au pire un paquet que la station ne relit pas : rien de ce qui a été effacé ne revient.
+                r.erase(&who.hex).await.map_err(ApiError::internal)?;
+                let (o, p) = (who.hex.clone(), format!("{}/{}", crate::search_pack::PACK_DIR, crate::search_pack::PACK_NAME));
+                match astro_dav::vfs::vfs_tx(&self.dav.db, move |tx| astro_dav::vfs::delete_tree_tx(tx, &o, &p)).await {
+                    Ok(cids) => astro_dav::server::release_blobs(&self.dav, cids).await,
+                    Err(astro_dav::vfs::VfsError::NotFound) => {}
+                    Err(e) => return Err(ApiError::internal(format!("paquet d'index : {e}"))),
+                }
+                r.forget_pack(&who.hex).await.map_err(ApiError::internal)?;
+                r.view(&who.hex).await.map_err(db_err)
+            }
+        }
     }
     async fn contacts(&self, who: &Principal) -> Result<Value, ApiError> {
         let links = self.contacts_service()?;

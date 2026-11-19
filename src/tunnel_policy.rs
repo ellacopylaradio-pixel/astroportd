@@ -6,8 +6,8 @@
 //! - `friends` : les Capitaines **amis réciproques** de ce Capitaine, plus la liste ;
 //! - `swarm` : tout membre du réseau (privé en ẐEN, ouvert en ORIGIN).
 //!
-//! Par défaut : `ssh` fermé en ẐEN et ouvert aux Capitaines amis en ORIGIN ; `comfyui`, `ollama` et les autres services
-//! aux Capitaines amis. Le relai Nostr n'est pas un tunnel réglable : il a son propre pare-feu social (NIP-42). La décision est reprise par le watchdog de session : retirer un accès coupe les sessions
+//! Par défaut : `ssh` fermé en ẐEN et ouvert aux Capitaines amis en ORIGIN ; `ai-index` (cerveau partagé) fermé partout ;
+//! `comfyui`, `ollama` et les autres services aux Capitaines amis. Le relai Nostr n'est pas un tunnel réglable : il a son propre pare-feu social (NIP-42). La décision est reprise par le watchdog de session : retirer un accès coupe les sessions
 //! ouvertes. L'accès SSH n'est jamais ouvert sans consentement visible : le Capitaine le règle ici, chaque ouverture de
 //! session SSH est journalisée, et `~/.ssh/authorized_keys` n'est touché que dans un bloc balisé `astroportd`.
 //!
@@ -32,6 +32,9 @@ use astro_p2p::{P2pHandle, PeerId};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
+/// Service « cerveau partagé » : la station calcule l'index multimédia (OCR, vecteurs) pour des Capitaines amis
+/// (`astro_index::server`, écoute en boucle locale seulement). Fermé par défaut, dans les deux constellations.
+pub const AI_INDEX: &str = "ai-index";
 const SCOPE: &str = "options";
 const KEY: &str = "tunnels";
 /// Clé des services partagés par le Capitaine (`{ nom: "hôte:port" }`), état local de la machine.
@@ -39,7 +42,7 @@ const KEY_SHARED: &str = "tunnel_services";
 /// Services partagés à chaud au plus.
 const MAX_SHARED: usize = 16;
 /// Noms pris par la station elle-même (le relai est offert au maillage sous son nom DRAGON).
-const RESERVED: [&str; 1] = [astro_sync::peers::RELAY_SERVICE];
+const RESERVED: [&str; 2] = [astro_sync::peers::RELAY_SERVICE, AI_INDEX];
 /// Repères du bloc géré dans `authorized_keys`.
 const BEGIN: &str = "# BEGIN astroportd (accès des Capitaines autorisés : ne pas modifier à la main)";
 const END: &str = "# END astroportd";
@@ -138,6 +141,8 @@ pub struct TunnelPolicy {
     live: Mutex<BTreeMap<String, Exposed>>,
     /// Services offerts au démarrage (`--p2p-ssh`, `--p2p-expose`…), retenus par [`TunnelPolicy::attach`].
     fixed: Mutex<Vec<String>>,
+    /// Mode par défaut de `ai-index` (`serve --ai-index`) : `off`, ou `friends` pour un « Cerveau de la constellation ».
+    ai_default: Mutex<Mode>,
     /// Réponses à « quels services puis-je ouvrir chez toi ? » ([`SERVICES_PROTOCOL`]).
     answers: Mutex<Option<astro_p2p::ask::Answers>>,
 }
@@ -188,7 +193,7 @@ impl TunnelPolicy {
             .filter(|(n, t)| valid_service(n) && check_target(t).is_ok())
             .take(MAX_SHARED)
             .collect();
-        Arc::new(Self { db, origin, ssh_dir, activity, rules: Mutex::new(rules), shared: Mutex::new(shared), retired: Mutex::default(), mesh: Mutex::new(None), live: Mutex::default(), fixed: Mutex::default(), answers: Mutex::new(None) })
+        Arc::new(Self { db, origin, ssh_dir, activity, rules: Mutex::new(rules), shared: Mutex::new(shared), retired: Mutex::default(), mesh: Mutex::new(None), live: Mutex::default(), fixed: Mutex::default(), ai_default: Mutex::new(Mode::Off), answers: Mutex::new(None) })
     }
 
     /// Services partagés à chaud, avec leur cible.
@@ -318,11 +323,20 @@ impl TunnelPolicy {
         Ok(format!("{name} : partage retiré"))
     }
 
+    /// Ouvre par défaut le cerveau partagé aux Capitaines amis (`friends`) ou le laisse fermé (`off`) : choix fait à
+    /// l'installation (profil « Cerveau de la constellation », confirmé par le Capitaine). Tout autre mode est ignoré, et un
+    /// réglage du Capitaine dans l'interface l'emporte toujours.
+    pub fn set_ai_index_default(&self, friends: bool) {
+        *self.ai_default.lock().unwrap_or_else(PoisonError::into_inner) = if friends { Mode::Friends } else { Mode::Off };
+    }
+
     /// Mode par défaut d'un service.
     pub fn default_mode(&self, service: &str) -> Mode {
         match service {
             "ssh" if self.origin => Mode::Friends,
             "ssh" => Mode::Off,
+            // Prêter sa puissance de calcul fait recevoir les photos des autres (en mémoire) : le Capitaine l'ouvre lui-même.
+            AI_INDEX => *self.ai_default.lock().unwrap_or_else(PoisonError::into_inner),
             // Un service ajouté par le Capitaine n'est ouvert à personne tant qu'il ne choisit pas qui.
             _ if self.shared.lock().unwrap_or_else(PoisonError::into_inner).contains_key(service) => Mode::Listed,
             _ => Mode::Friends,
@@ -651,6 +665,9 @@ mod tests {
         assert_eq!((zen.rule("ssh").mode, origin.rule("ssh").mode), (Mode::Off, Mode::Friends));
         assert!(!zen.permits(PEER, "ssh", 0).await, "fermé : même un pair connu est refusé");
         assert!(!zen.permits(PEER, "ollama", 0).await, "ni ami ni liste : refusé");
+        assert_eq!((zen.rule(AI_INDEX).mode, origin.rule(AI_INDEX).mode), (Mode::Off, Mode::Off), "le cerveau partagé s'ouvre à la main");
+        zen.set_ai_index_default(true);
+        assert_eq!(zen.rule(AI_INDEX).mode, Mode::Friends, "« Cerveau de la constellation » confirmé à l'installation");
         for d in [d1, d2] {
             let _ = std::fs::remove_dir_all(d);
         }
@@ -704,7 +721,7 @@ mod tests {
     #[tokio::test]
     async fn sharing_rejects_hostile_names_reserved_names_and_too_many_services() {
         let (dir, _, p) = policy("share", false).await;
-        for bad in [json!({ "share": { "name": "../etc", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "Bureau", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "ssh", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "strfry", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "x", "target": "8.8.8.8:53" } }), json!({ "share": { "name": "x", "target": "127.0.0.1:1", "mode": "tous" } }), json!({ "unshare": "jamais-vu" })] {
+        for bad in [json!({ "share": { "name": "../etc", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "Bureau", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "ssh", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "strfry", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "ai-index", "target": "127.0.0.1:1" } }), json!({ "share": { "name": "x", "target": "8.8.8.8:53" } }), json!({ "share": { "name": "x", "target": "127.0.0.1:1", "mode": "tous" } }), json!({ "unshare": "jamais-vu" })] {
             assert!(p.set(&bad, &exposed(), 0).await.is_err(), "{bad}");
         }
         assert!(p.shared_targets().is_empty(), "rien de gardé après un refus");

@@ -8,7 +8,7 @@ use astro_bro::{AnyEmbedder, MemoryStore, Meta, OllamaClient, Slot};
 use astro_core::Amount;
 use astro_dav::{BlobStore, DavState};
 use astro_p2p::routing::haversine_km;
-use astro_ui::api::{Applicant, AssignTarget, BookOp, ChatOp};
+use astro_ui::api::{Applicant, AssignTarget, BookOp, ChatOp, ReadingOp};
 use astro_ui::api::{AccountApi, Auth, CoopApi, FacesApi, OnboardApi, SocialApi, StationApi, UcloudApi};
 use astro_ui::{ApiError, Principal, Status, Subsystem};
 use axum::http::{HeaderMap, Uri};
@@ -82,6 +82,7 @@ pub struct StationUi<B: BlobStore> {
     pending_fn: Option<PendingShareFn>,
     friends_fn: Option<FriendsFn>,
     backup: Option<BackupFns>,
+    media_friends: Option<MediaFriendsFns>,
     replicate_fn: Option<ReplicateFn>,
     coop: Option<(CoopGetFn, CoopSetFn)>,
     constellation: Option<ConstellationFn>,
@@ -112,6 +113,8 @@ pub struct StationUi<B: BlobStore> {
     planes_home: Option<std::path::PathBuf>,
     unit_exe: Option<std::path::PathBuf>,
     ai: Option<Arc<crate::member_ai::MemberAi>>,
+    reading: Option<Arc<crate::delegation::Delegation>>,
+    seer: Option<Arc<astro_index::LocalIndexer>>,
     book: Option<Arc<crate::address_book::AddressBook<B>>>,
     chat: Option<Arc<crate::chat::Chat>>,
     /// Visio : port STUN de la station (UDP), secret du relais d'appel s'il est actif, serveurs supplémentaires.
@@ -161,6 +164,28 @@ pub type RescueAnswerFn = Arc<dyn Fn(String, String, bool) -> std::pin::Pin<Box<
 /// Secours, nouvelle station : part P3 rendue pour un compte (`Some(part)`), ou fin de la demande (`None` : compte rétabli).
 pub type RescueShareFn = Arc<dyn Fn(String, bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>> + Send + Sync>;
 
+/// Liste partagée : `(type, titre)`, type `series` ou `album`.
+pub type ListSpec = (String, String);
+
+/// Partage depuis la médiathèque : `(compte, fiches, partager, liste)`.
+pub type MediaShareFn = Arc<dyn Fn(String, Vec<String>, bool, Option<ListSpec>) -> ValueFuture + Send + Sync>;
+
+/// Réponse différée d'un service : un document JSON ou la raison de l'échec.
+pub type ValueFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>>;
+
+/// Médiathèque des amis : liste `(compte, tout relire)` et demande de copie `(compte, identifiant du média)`.
+#[derive(Clone)]
+pub struct MediaFriendsFns {
+    /// Liste des médias des amis.
+    pub list: Arc<dyn Fn(String, bool) -> ValueFuture + Send + Sync>,
+    /// Demande de copie.
+    pub request: Arc<dyn Fn(String, String) -> ValueFuture + Send + Sync>,
+    /// Partage ou retrait `(compte, fiches, partager, liste (type, titre))`.
+    pub share: MediaShareFn,
+    /// Trace du partage `(compte, fiche)`.
+    pub trace: Arc<dyn Fn(String, String) -> ValueFuture + Send + Sync>,
+}
+
 /// Sauvegarde privée : état, réglage `(compte, actif, ami)` et réponse de l'hébergeur `(hébergeur, propriétaire, accepte, volume, plafond)`.
 #[derive(Clone)]
 pub struct BackupFns {
@@ -184,7 +209,7 @@ pub type SendFn = Arc<dyn Fn(String, Vec<String>, Vec<String>) -> std::pin::Pin<
 impl<B: BlobStore> StationUi<B> {
     /// Assemble l'interface.
     pub fn new(services: Arc<StationServices>, dav: Arc<DavState<B>>, memory: Option<Arc<BroMemory>>, ollama: Option<Arc<OllamaClient>>, faces_enabled: bool) -> Self {
-        Self { services, dav, memory, ollama, faces_enabled, thumbs_fn: None, pending_fn: None, friends_fn: None, backup: None, replicate_fn: None, send_fn: None, coop: None, constellation: None, charter: None, billet: None, zen_credit: None, site: None, admin: None, account: None, contacts: None, invites: None, welcome: None, agents: None, pull: None, organize: None, board: astro_facecloud::board::BoardCache::new(), registrar: None, stations: None, feedback: None, oc: None, setup: None, conf_path: None, planes_home: None, unit_exe: None, ai: None, book: None, chat: None, people: None, ice: (None, None, Vec::new()), presence: None }
+        Self { services, dav, memory, ollama, faces_enabled, thumbs_fn: None, pending_fn: None, friends_fn: None, backup: None, media_friends: None, replicate_fn: None, send_fn: None, coop: None, constellation: None, charter: None, billet: None, zen_credit: None, site: None, admin: None, account: None, contacts: None, invites: None, welcome: None, agents: None, pull: None, organize: None, board: astro_facecloud::board::BoardCache::new(), registrar: None, stations: None, feedback: None, oc: None, setup: None, conf_path: None, planes_home: None, unit_exe: None, ai: None, reading: None, seer: None, book: None, chat: None, people: None, ice: (None, None, Vec::new()), presence: None }
     }
 
     /// Annuaire des clés d'une même personne dans plusieurs UPlanet.
@@ -221,6 +246,19 @@ impl<B: BlobStore> StationUi<B> {
     /// Paramètres IA des MULTIPASS (Ollama ou clé d'API) : sans eux, BRO n'apparaît pas.
     pub fn with_ai(mut self, ai: Arc<crate::member_ai::MemberAi>) -> Self {
         self.ai = Some(ai);
+        self
+    }
+
+    /// « Lecture de vos documents » : le membre confie (ou non) la lecture à une station amie.
+    pub fn with_reading(mut self, reading: Arc<crate::delegation::Delegation>) -> Self {
+        self.reading = Some(reading);
+        self
+    }
+
+    /// Recherche des photos par ce qu'elles montrent : le moteur local qui transforme la requête en vecteur (sans lui, ou sans
+    /// le modèle SigLIP, la recherche se fait par le nom et le texte lu seulement).
+    pub fn with_seer(mut self, seer: Arc<astro_index::LocalIndexer>) -> Self {
+        self.seer = Some(seer);
         self
     }
 
@@ -330,6 +368,12 @@ impl<B: BlobStore> StationUi<B> {
         self
     }
 
+    /// Active la médiathèque des amis (liste et copie à la demande).
+    pub fn with_media_friends(mut self, fns: MediaFriendsFns) -> Self {
+        self.media_friends = Some(fns);
+        self
+    }
+
     /// Active la sauvegarde privée chez un ami.
     pub fn with_backup(mut self, fns: BackupFns) -> Self {
         self.backup = Some(fns);
@@ -390,10 +434,10 @@ impl<B: BlobStore> StationUi<B> {
     /// `StationUi` n'est plus qu'un plan de câblage consommé au démarrage.
     pub fn into_router(self, activity: astro_core::ActivityBus, public_origin: Option<String>) -> axum::Router {
         astro_ui::api::Routes::new(activity, public_origin)
-            .ucloud(Arc::new(UcloudBackend { services: self.services.clone(), dav: self.dav.clone(), friends_fn: self.friends_fn.clone(), backup: self.backup.clone(), replicate_fn: self.replicate_fn.clone(), site: self.site.clone(), pull: self.pull.clone(), organize: self.organize.clone(), send_fn: self.send_fn.clone() }))
+            .ucloud(Arc::new(UcloudBackend { services: self.services.clone(), dav: self.dav.clone(), friends_fn: self.friends_fn.clone(), backup: self.backup.clone(), media_friends: self.media_friends.clone(), replicate_fn: self.replicate_fn.clone(), site: self.site.clone(), pull: self.pull.clone(), organize: self.organize.clone(), send_fn: self.send_fn.clone(), seer: self.seer.clone() }))
             .faces(Arc::new(FacesBackend { services: self.services.clone(), dav: self.dav.clone(), faces_enabled: self.faces_enabled, thumbs_fn: self.thumbs_fn.clone(), pending_fn: self.pending_fn.clone(), contacts: self.contacts.clone(), board: self.board, book: self.book.clone() }))
             .coop(Arc::new(CoopBackend { services: self.services.clone(), dav: self.dav.clone(), coop: self.coop.clone(), constellation: self.constellation.clone(), charter: self.charter.clone(), billet: self.billet.clone(), zen_credit: self.zen_credit.clone(), stations: self.stations.clone(), oc: self.oc.clone() }))
-            .social(Arc::new(SocialBackend { services: self.services.clone(), dav: self.dav.clone(), memory: self.memory.clone(), contacts: self.contacts.clone(), agents: self.agents.clone(), ai: self.ai.clone(), book: self.book.clone(), chat: self.chat.clone(), ice: self.ice.clone(), presence: self.presence.clone(), people: self.people.clone() }))
+            .social(Arc::new(SocialBackend { services: self.services.clone(), dav: self.dav.clone(), memory: self.memory.clone(), contacts: self.contacts.clone(), agents: self.agents.clone(), ai: self.ai.clone(), reading: self.reading.clone(), book: self.book.clone(), chat: self.chat.clone(), ice: self.ice.clone(), presence: self.presence.clone(), people: self.people.clone() }))
             .account(Arc::new(AccountBackend { services: self.services.clone(), dav: self.dav.clone(), billet: self.billet.clone(), site: self.site.clone(), account: self.account.clone(), registrar: self.registrar.clone(), feedback: self.feedback.clone(), ai: self.ai.clone() }))
             .onboarding(Arc::new(OnboardBackend { services: self.services.clone(), dav: self.dav.clone(), backup: self.backup.clone(), invites: self.invites.clone(), welcome: self.welcome.clone(), registrar: self.registrar.clone(), stations: self.stations.clone(), setup: self.setup.clone() }))
             .station(Arc::new(StationBackend { services: self.services.clone(), dav: self.dav.clone(), ollama: self.ollama.clone(), faces_enabled: self.faces_enabled, admin: self.admin.clone(), conf_path: self.conf_path.clone(), probe: Mutex::new(None), planes_home: self.planes_home.clone(), unit_exe: self.unit_exe.clone(), ice: self.ice.clone() }))

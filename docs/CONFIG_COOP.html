@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Configuration coopérative : où trouver chaque valeur — astroportd</title>
+<style>
+:root{--bg:#ffffff;--ink:#1b1f2a;--mut:#454c61;--pan:#f1f4fb;--line:#c3c9dc;--acc:#2a46c8;--accink:#ffffff;--code:#10131c;--codeink:#e8ebf4;--note:#e7efff;--warn:#fff0e0;--warnb:#8f3b06;--ok:#14663a}
+@media (prefers-color-scheme:dark){:root{--bg:#12151f;--ink:#eef0f8;--mut:#bcc3da;--pan:#1b2030;--line:#3a4260;--acc:#9bb0ff;--accink:#10131c;--code:#0a0c13;--codeink:#e8ebf4;--note:#1d2744;--warn:#3a2414;--warnb:#ffb98a;--ok:#7fdca6}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:1.0625rem/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc);text-underline-offset:3px}a:focus-visible,summary:focus-visible,button:focus-visible{outline:3px solid var(--acc);outline-offset:3px;border-radius:4px}
+.skip{position:absolute;left:16px;top:-60px;background:var(--acc);color:var(--accink);padding:10px 14px;border-radius:8px;z-index:9;text-decoration:none}.skip:focus{top:12px}
+header.top,main,footer{max-width:68rem;margin:0 auto;padding:0 16px}
+header.top{padding-top:28px;padding-bottom:8px}
+h1{font-size:clamp(1.7rem,5vw,2.6rem);line-height:1.15;margin:.2em 0}
+.lead{font-size:1.2rem;color:var(--mut);max-width:46rem}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 12px;font-size:.9rem;color:var(--mut)}
+nav.toc{background:var(--pan);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:22px 0}
+nav.toc h2{font-size:1rem;margin:0 0 6px}nav.toc ol{margin:0;padding-left:1.3em;columns:2 16rem}nav.toc li{margin:2px 0}
+section{margin:44px 0;padding-top:8px;border-top:1px solid var(--line)}
+h2{font-size:clamp(1.35rem,3.6vw,1.8rem);line-height:1.25;margin:.6em 0 .4em}
+.num{display:inline-grid;place-items:center;min-width:2.1rem;height:2.1rem;padding:0 .5rem;border-radius:999px;background:var(--acc);color:var(--accink);font-weight:700;font-size:1.05rem;margin-right:.35em;vertical-align:.08em}
+h3{font-size:1.05rem;margin:0 0 .5em;color:var(--acc)}
+figure{margin:18px auto;max-width:34rem}figure svg{display:block;max-width:100%;height:auto}figcaption{font-size:.92rem;color:var(--mut);text-align:center;margin-top:6px}
+.cols{display:grid;gap:16px;grid-template-columns:1fr;margin-top:14px}
+@media (min-width:56rem){.cols{grid-template-columns:1fr 1fr}}
+.col{background:var(--pan);border:1px solid var(--line);border-radius:14px;padding:14px 16px;min-width:0}
+.col>*:last-child{margin-bottom:0}
+.col ul,.col ol{padding-left:1.25em}
+.div,.code{position:relative}
+pre{margin:.6em 0;background:var(--code);color:var(--codeink);border-radius:10px;padding:12px 5.2rem 12px 14px;overflow-x:auto;font-size:.92rem;line-height:1.5;-webkit-overflow-scrolling:touch}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
+p code,li code{background:rgba(127,127,160,.18);padding:1px 6px;border-radius:5px;overflow-wrap:anywhere}
+.copy{position:absolute;top:10px;right:8px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:3px 10px;font:inherit;font-size:.82rem;cursor:pointer}
+.box{border-radius:10px;padding:10px 14px;margin:.8em 0;border:1px solid var(--line)}
+.box .lbl{font-weight:700;margin-right:.4em}
+.note{background:var(--note)}.warn{background:var(--warn);border-color:var(--warnb)}.warn .lbl{color:var(--warnb)}
+
+.ill{--ink:#1b1f2a;--mut:#454c61;--pan:#eef1f9;--pan2:#e2e8f8;--line:#6b7390;--acc:#2a46c8;--ok:#14663a;--warn:#8f3b06;--bg:#ffffff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){.ill{--ink:#eef0f8;--mut:#bcc3da;--pan:#1c2133;--pan2:#262d47;--line:#8790ad;--acc:#9bb0ff;--ok:#7fdca6;--warn:#ffb98a;--bg:#12151f}}
+.ill .bg{fill:var(--bg)}.ill .pan{fill:var(--pan);stroke:var(--line);stroke-width:1.5}.ill .pan2{fill:var(--pan2);stroke:var(--acc);stroke-width:2}
+.ill .okp{fill:var(--pan);stroke:var(--ok);stroke-width:2.5}.ill .wnp{fill:var(--pan);stroke:var(--warn);stroke-width:2.5}
+.ill .t{fill:var(--ink);font-size:17px;font-weight:700}.ill .s{fill:var(--mut);font-size:14.5px}.ill .a{fill:var(--acc);font-size:15px;font-weight:700}
+.ill .g{fill:var(--ok);font-size:15px;font-weight:700}.ill .w{fill:var(--warn);font-size:15px;font-weight:700}
+.ill .ln{stroke:var(--line);stroke-width:2;fill:none}.ill .ar{stroke:var(--acc);stroke-width:2.5;fill:none}.ill .ds{stroke:var(--acc);stroke-width:2.5;fill:none;stroke-dasharray:7 6}
+.ill .hd{fill:var(--acc)}.ill .m{text-anchor:middle}
+
+footer{padding:28px 16px 48px;color:var(--mut);border-top:1px solid var(--line);margin-top:44px;font-size:.95rem}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{.copy,.skip{display:none}.col{break-inside:avoid}}
+.tw{overflow-x:auto}table{border-collapse:collapse;margin:.8em 0;font-size:.95rem}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--pan)}
+a{overflow-wrap:anywhere}
+@media (min-width:56rem){.cols.one{grid-template-columns:1fr}}
+figure img{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+.crumbs{margin:0 0 10px;font-size:.95rem}
+.lead2{color:var(--mut);max-width:46rem;margin-top:0}
+nav.toc h3{font-size:1rem;margin:12px 0 4px}nav.toc h3 a{color:var(--ink);text-decoration:none}nav.toc h3 a:hover{text-decoration:underline}
+nav.toc ol{list-style:none;padding-left:0;margin:0 0 4px}
+section.part{border-top:3px solid var(--acc);margin-top:64px;padding-top:18px}
+section.part h2{font-size:clamp(1.6rem,4.4vw,2.2rem);margin-bottom:.2em}
+section.part .pn{display:block;font-size:1rem;font-weight:700;color:var(--acc);letter-spacing:0}
+section.part p{color:var(--mut);font-size:1.1rem;max-width:46rem}
+details.tech{border:1px dashed var(--line);border-radius:10px;padding:2px 14px;margin:12px 0;background:transparent}
+details.tech summary{cursor:pointer;padding:8px 0;font-weight:600;color:var(--mut);min-height:44px;display:flex;align-items:center}
+details.tech[open]{padding-bottom:10px}
+details.tech[open] summary{color:var(--acc)}
+</style>
+<style>.pg{max-width:60rem;margin:0 auto;padding:1rem 16px 3rem}</style>
+</head>
+<body>
+<main class="pg">
+<p class="back"><a href="index.html">Accueil</a> · <a href="guide.html">Guide du Capitaine</a></p>
+<h1>Configuration coopérative : où trouver chaque valeur</h1>
+<p>L'écran <strong>Configuration coopérative</strong> (<code>#/coop</code>, espace Capitaine) publie un seul réglage pour <strong>toute la constellation</strong> : chaque station le reçoit et l'applique. Il est rangé par tâche : <em>Mettre en service</em>, <em>Recevoir les dons</em>, <em>Règles communes</em>, <em>Retours des utilisateurs</em>, et un dernier bloc pour les stations Astroport.ONE. Cette page dit, section par section, à quoi sert chaque champ et <strong>où aller chercher sa valeur</strong>. Le « ? » à côté du titre de chaque section de l'écran mène ici.</p>
+<div class="box note"><p><span class="lbl">À savoir</span> Les champs dont le nom contient <code>KEY</code>, <code>TOKEN</code>, <code>SECRET</code>, <code>API</code> ou <code>PRIVATE</code> sont <strong>chiffrés</strong> avant publication et ne sont plus jamais affichés : l'écran dit seulement « renseigné ». En <strong>ORIGIN</strong>, n'importe qui peut les déchiffrer : n'y mettez une vraie clé que dans une constellation <strong>ẐEN</strong> (avec <code>swarm.key</code>).</p></div>
+<h2 id="uplanet">Nom et charte de la constellation</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Ce qu'il faut y mettre</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>UPLANET_NAME</code></td>
+<td>Le nom affiché de votre UPlanet (48 caractères au plus), choisi en coopérative.</td>
+</tr>
+<tr>
+<td><code>CHARTER_VERSION</code></td>
+<td>Un numéro (<code>1.0</code>, <code>1.1</code>…), à augmenter à chaque changement du texte.</td>
+</tr>
+<tr>
+<td><code>CHARTER_TEXT</code></td>
+<td>Le texte que chaque Capitaine signe. <strong>Vide</strong> : la <a href="CHARTE_UPLANET.html">charte type</a> est proposée.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Changer le texte demande une <strong>nouvelle signature</strong> à chaque Capitaine (la signature porte l'empreinte exacte du texte). Détails : guide, <a href="guide.html#etape-8c">Ma UPlanet</a>.</p>
+<h2 id="ovh">Domaine de la coopérative (OVH)</h2>
+<p>Sert à donner une adresse en <code>.&lt;votre domaine&gt;</code> à chaque station et à chaque MULTIPASS, et fixe le relai commun <code>wss://relay.&lt;domaine&gt;</code>. Il faut un <strong>nom de domaine dont la zone DNS est chez OVH</strong>.</p>
+<ol>
+<li><code>OVH_ZONE</code> : votre domaine, tel qu'il apparaît dans <em>Noms de domaine</em> du Manager OVH (ex. <code>copylaradio.com</code>).</li>
+<li>Ouvrez <strong>https://eu.api.ovh.com/createToken/</strong> et connectez-vous avec le compte OVH qui gère ce domaine.</li>
+<li>Remplissez : nom de l'application <code>uplanet-dnslink</code>, validité <strong>Unlimited</strong>, et ces droits :</li>
+</ol>
+<div class="code"><pre><code>GET  /domain/zone/*
+POST /domain/zone/*
+PUT  /domain/zone/*
+</code></pre></div>
+<ol start="4">
+<li>OVH affiche <strong>une seule fois</strong> trois valeurs : copiez-les tout de suite dans <code>OVH_APP_KEY</code> (<em>Application Key</em>), <code>OVH_APP_SECRET</code> (<em>Application Secret</em>) et <code>OVH_CONSUMER_KEY</code> (<em>Consumer Key</em>).</li>
+</ol>
+<p>Puis cliquez <strong>Tester la connexion OVH</strong> sous la section : l'essai est en lecture seule. Clé perdue : OVH ne la redonne pas ; créez-en une nouvelle et supprimez l'ancienne (Manager OVH › votre compte › <em>Gestion des API</em>). Détails : guide, <a href="guide.html#etape-9b">DNSLink</a>.</p>
+<h2 id="mesh">Stations relais du maillage</h2>
+<p><strong>Le problème.</strong> Deux stations derrière deux box différentes ne peuvent pas s'appeler directement : aucune n'accepte de connexion entrante. Sans chemin, pas de partage de photos, pas de synchronisation, pas de tunnel.</p>
+<p><strong>La solution.</strong> Une <strong>station relais</strong> : une station de la constellation dont le <strong>port TCP 4101 est ouvert</strong> sur sa box. Les autres y réservent une place et deviennent joignables à travers elle (tout reste chiffré). Il en faut au moins une ; deux ou trois, c'est mieux.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Ce qu'il faut y mettre</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>P2P_RELAYS</code></td>
+<td>Une adresse de station relais par ligne (8 au plus).</td>
+</tr>
+<tr>
+<td><code>ORIGIN_RELAY</code></td>
+<td>Les relais Nostr où une station ẐEN ouverte (Village, Place publique) annonce aussi sa balise, pour apparaître sur la carte des UPlanet : un par ligne, 4 au plus. Chaque Capitaine peut y <strong>ajouter le relai de sa station</strong> à côté de celui de la coopérative. <strong>Vide</strong> : <code>wss://relay.copylaradio.com</code>. <code>none</code> seul : ne rien annoncer hors de la constellation.</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Le plus simple</strong> : sur la station dont le port est ouvert, <em>Réseau</em> (<code>#/mesh</code>) › <em>Ma station</em> › <strong>Devenir station relais</strong> construit l'adresse et l'ajoute à la liste. Le port proposé est le <strong>vrai port d'écoute de l'UPlanet affichée</strong> : 4101 par défaut, mais 4102, 4103… quand plusieurs UPlanet partagent la machine (<code>astroportd planes</code>). Si la box redirige un <strong>autre port public</strong> vers lui, corrigez le champ <em>port</em>.</p>
+<p><strong>À la main</strong>, l'adresse a la forme :</p>
+<div class="code"><pre><code>/dns4/&lt;nom ou DynDNS&gt;/tcp/4101/p2p/&lt;PeerID&gt;
+/ip4/&lt;IP publique&gt;/tcp/4101/p2p/&lt;PeerID&gt;
+</code></pre></div>
+<ol>
+<li><strong>Le PeerID</strong> (<code>12D3Koo…</code>) : sur la station relais, <em>Réseau</em> (<code>#/mesh</code>) › <em>Ma station</em> ; c'est la fin de l'adresse, après <code>/p2p/</code>.</li>
+<li><strong>Le nom public</strong> : le nom par lequel vous ouvrez l'interface de cette station depuis internet, un <strong>nom DynDNS</strong>, ou à défaut l'IP publique de la box. Les adresses <code>192.168.…</code>, <code>10.…</code> ou <code>127.…</code> ne marchent que sur le réseau local : ne les mettez pas ici.</li>
+<li><strong>Le port</strong> : celui de l'UPlanet (4101 par défaut ; <em>Ma station</em> l'affiche dans l'adresse, après <code>/tcp/</code>), ouvert en <strong>TCP</strong> sur la box et redirigé vers la machine de la station. Vérifiez depuis un autre réseau (un téléphone en 4G) : <code>nc -zv &lt;nom&gt; &lt;port&gt;</code>.</li>
+</ol>
+<p>La station inscrite devient relais à son prochain démarrage ; les autres y réservent leur place dans la minute. L'écran montre sous le titre de la section combien de relais ont une place réservée.</p>
+<div class="box warn"><p><span class="lbl">Attention</span> <strong>Le premier contact.</strong> Une station neuve reçoit cette liste… par une station à laquelle elle est déjà reliée. Il lui faut donc <strong>un</strong> premier lien : voir <em>Réseau</em> › <strong>Rejoindre ma constellation</strong>, qui accepte un jeton de parrainage ou une adresse de station. Détails : guide, <a href="guide.html#etape-9">stations derrière une box</a>.</p></div>
+<h2 id="oc">OpenCollective</h2>
+<p>L'entrée en euros : un don devient des Ẑen sur le MULTIPASS qui a la même adresse e-mail. L'écran dit sous le titre si le collectif est lu et combien de dons sont à créditer.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Où le trouver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OCSLUG</code></td>
+<td>La fin de l'adresse de votre collectif : <code>opencollective.com/&lt;OCSLUG&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>OCAPIKEY</code></td>
+<td>OpenCollective › votre compte › <em>For developers</em> › <em>Personal tokens</em> › nouveau jeton, portée <strong><code>email</code></strong>. Il faut être administrateur du collectif.</td>
+</tr>
+<tr>
+<td><code>OC_AUTO_CREDIT</code></td>
+<td><em>Je confirme chaque crédit</em> (par défaut) ou <em>La station crédite seule</em>.</td>
+</tr>
+<tr>
+<td><code>OC_URL_MEMBRE</code></td>
+<td>Page du collectif › <em>Contribute</em> › le palier d'adhésion › l'adresse du bouton (<code>…/contribute/&lt;palier&gt;-&lt;numéro&gt;</code>). Proposée aux nouveaux membres.</td>
+</tr>
+<tr>
+<td><code>OC_URL_CLOUD</code>, <code>OC_URL_SATELLITE</code>, <code>OC_URL_CONSTELLATION</code></td>
+<td>Même méthode, pour chaque palier. Ce sont les boutons de la page publique <strong>Contribuer</strong> d'UPlanet (<code>contribute.html</code>), qui les lit dans cette configuration.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Détails : guide, <a href="guide.html#relier-une-uplanet-opencollective">OpenCollective</a>.</p>
+<h2 id="tiers">Routage des paliers</h2>
+<p>Dit à quel usage va un don, selon le <strong>nom court du palier</strong> OpenCollective (la partie avant le numéro dans <code>…/contribute/&lt;palier&gt;-&lt;numéro&gt;</code>). Plusieurs motifs séparés par des virgules ; <code>*</code> remplace n'importe quoi ; un mot sans <code>*</code> doit former un segment entier entre tirets.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Le don devient</th>
+<th>Valeur par défaut</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TIER_SLUG_SATELLITE</code></td>
+<td>une part sociale</td>
+<td><code>*parrainage*128*,extension-128,satellite,*love-box*claude*</code></td>
+</tr>
+<tr>
+<td><code>TIER_SLUG_CONSTELLATION</code></td>
+<td>une part sociale (GPU)</td>
+<td><code>*parrainage*gpu*,module-gpu,constellation,*love-box*deluxe*,*love-box*gpu*</code></td>
+</tr>
+<tr>
+<td><code>TIER_SLUG_LABO</code></td>
+<td>un don à la R&amp;D</td>
+<td><code>infrastructure,labo,genereux-donateur,r-d,recherche</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Un don qui ne correspond à aucun motif devient un crédit d'usage (1 € = 1 Ẑ). Laissez vide pour garder les valeurs par défaut.</p>
+<h2 id="3x13">Règle 3×1/3 + 1 %</h2>
+<p><code>TREASURY_PERCENT</code>, <code>RND_PERCENT</code>, <code>ASSETS_PERCENT</code>, <code>CAPTAIN_BONUS_PERCENT</code> : chaque semaine, après l'impôt, la prime du Capitaine est prise sur le surplus, puis le reste est partagé entre trésorerie, R&amp;D et actifs <strong>dans ces proportions</strong>. Défaut 33 / 33 / 33 / 1. <strong>Le total doit faire 100 %</strong>, sinon l'écran refuse de publier ces champs. Décision de l'assemblée de la coopérative ; elle vaut dès la clôture suivante, <strong>en ẐEN seulement</strong> : en ORIGIN, la configuration peut être signée par n'importe qui, la station garde donc ses valeurs par défaut.</p>
+<h2 id="fiscal">Impôt sur les sociétés</h2>
+<p><code>IS_RATE_REDUCED</code>, <code>IS_RATE_NORMAL</code>, <code>IS_THRESHOLD</code> : la provision d'impôt prise sur le surplus de chaque semaine, au taux réduit jusqu'au seuil annuel, au taux normal au-delà. Valeurs françaises par défaut : 15 %, 25 %, 42 500 Ẑ. À faire confirmer par votre comptable ; elles valent dès la clôture suivante, en ẐEN seulement (comme la règle 3×1/3).</p>
+<h2 id="shares">PAF suggérée</h2>
+<p><code>PAF</code> : la participation aux frais de la machine <strong>proposée</strong> aux stations, en Ẑ par semaine. Ce n'est pas un ordre : chaque Capitaine fixe la PAF de sa station dans <em>Économie</em>, en partant de cette valeur. Détails : guide, <a href="guide.html#la-paf-de-la-machine-et-les-nouvelles-machines">la PAF de la machine</a>.</p>
+<h2 id="api">Retours des utilisateurs (Git)</h2>
+<p>Les bogues et idées envoyés depuis les applications (coracle, zelkova…) deviennent des tickets dans <code>&lt;GIT_OWNER&gt;/&lt;application&gt;</code>. Sans forge, ils restent dans le journal de la station.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Où le trouver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GIT_HOST</code></td>
+<td>Vide ou <code>https://github.com</code> : GitHub. Sinon l'adresse de votre GitLab (<code>https://gitlab.exemple.org</code>).</td>
+</tr>
+<tr>
+<td><code>GIT_OWNER</code></td>
+<td>L'organisation ou le compte qui possède les dépôts des applications (<code>papiche</code> par exemple).</td>
+</tr>
+<tr>
+<td><code>GIT_TOKEN</code></td>
+<td><strong>GitHub</strong> : <em>Settings › Developer settings › Fine-grained tokens</em>, propriétaire = <code>GIT_OWNER</code>, droit <strong>Issues : Read and write</strong>. <strong>GitLab</strong> : <em>Préférences › Jetons d'accès</em>, portée <code>api</code>.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="legacy">Stations Astroport.ONE</h2>
+<p>astroportd publie et garde ces clés <strong>sans s'en servir</strong> : seules les stations Astroport.ONE (les scripts bash) de la constellation les lisent. Une constellation 100 % astroportd peut les laisser vides.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Rôle</th>
+<th>Où le trouver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TVA_RATE</code></td>
+<td>Taux de TVA (20 % par défaut).</td>
+<td>Votre comptable.</td>
+</tr>
+<tr>
+<td><code>ZENCARD_SATELLITE</code>, <code>ZENCARD_CONSTELLATION</code></td>
+<td>Prix des parts sociales (50 € et 540 € par défaut).</td>
+<td>Décision de la coopérative.</td>
+</tr>
+<tr>
+<td><code>NCARD</code>, <code>ZCARD</code></td>
+<td>Loyers hebdomadaires d'un MULTIPASS et d'une ZEN Card.</td>
+<td>Décision de la coopérative.</td>
+</tr>
+<tr>
+<td><code>TIER_SLUG_CLOUD</code></td>
+<td>Paliers OpenCollective « cloud » de <code>oc2uplanet.sh</code>.</td>
+<td>Voir <a href="#tiers">Routage des paliers</a>.</td>
+</tr>
+<tr>
+<td><code>PLANTNET_API_KEY</code></td>
+<td>Reconnaissance des plantes.</td>
+<td>Compte sur <strong>my.plantnet.org</strong> › <em>Your API key</em>.</td>
+</tr>
+<tr>
+<td><code>MJ_APIKEY_PUBLIC</code>, <code>MJ_APIKEY_PRIVATE</code></td>
+<td>Envoi des courriels.</td>
+<td><strong>app.mailjet.com</strong> › <em>Paramètres du compte</em> › <em>Gestion des clés API</em> : <em>API Key</em> et <em>Secret Key</em>.</td>
+</tr>
+<tr>
+<td><code>MJ_SENDER_EMAIL</code></td>
+<td>Expéditeur des courriels.</td>
+<td>Une adresse <strong>validée</strong> dans Mailjet (<em>Adresses et domaines d'expéditeur</em>).</td>
+</tr>
+</tbody>
+</table></div>
+
+<p class="back"><a href="index.html">Accueil</a> · <a href="guide.html">Guide du Capitaine</a></p>
+</main>
+</body>
+</html>

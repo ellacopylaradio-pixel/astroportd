@@ -1,0 +1,47 @@
+/* Médiathèque (m-media.js) : grilles d'affiches, fiche, pistes, lecteur audio en bas d'écran, vidéo en fenêtre. */
+.mm-body section { margin-block: 1rem; }
+.mm-kinds button.ghost[aria-pressed=true], .mm-kinds button.ghost[aria-pressed=true]:hover:not(:disabled) { background: var(--grad); color: var(--on-accent); border-color: transparent; filter: none; }
+body.mm-on #toasts { bottom: 5.5rem; }
+.mm-body h2 small { font-weight: 400; }
+.mm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: .8rem; }
+.mm-card { display: flex; flex-direction: column; gap: .25rem; padding: 0; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--rc); overflow: hidden; text-align: left; min-height: 48px; }
+.mm-card b, .mm-card small { padding-inline: .6rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-card small { padding-bottom: .5rem; }
+.mm-card img, .mm-ph { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; background: var(--panel2); }
+.mm-ph { display: grid; place-items: center; font-size: 2.5rem; }
+.mm-detail { display: grid; grid-template-columns: minmax(8rem, 14rem) 1fr; gap: 1.2rem; align-items: start; }
+.mm-detail > img, .mm-detail > .mm-ph, .mm-head > img, .mm-head > .mm-ph { width: 100%; border-radius: var(--r); aspect-ratio: 2 / 3; object-fit: cover; }
+.mm-head { display: grid; grid-template-columns: 8rem 1fr; gap: 1rem; align-items: center; margin-bottom: .8rem; }
+.mm-head > img, .mm-head > .mm-ph { aspect-ratio: 1; }
+.mm-tracks { list-style: none; padding: 0; margin: 0; }
+.mm-tracks li { display: grid; grid-template-columns: 3rem 1fr auto 3rem; gap: .5rem; align-items: center; border-top: 1px solid var(--line); min-height: 48px; }
+.mm-tracks li > button { min-height: 44px; padding: .2rem; }
+.mm-form label { display: block; font-weight: 600; }
+.mm-share { margin-block: .6rem; }
+.mm-share label { display: inline-flex; align-items: center; gap: .4rem; min-height: 44px; font-weight: 600; }
+.mm-share input { width: 1.3rem; height: 1.3rem; }
+.mm-share p { margin: .2rem 0; }
+.mm-form input, .mm-form textarea { width: 100%; box-sizing: border-box; }
+.mm-player { position: fixed; inset: auto 0 0 0; z-index: 8; display: flex; align-items: center; gap: .5rem; padding: .4rem .8rem calc(.4rem + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px var(--sh); }
+.mm-player img { width: 3rem; height: 3rem; object-fit: cover; border-radius: var(--r); }
+.mm-player audio { flex: 1; min-width: 8rem; height: 2.5rem; }
+.mm-player button { min-width: 44px; min-height: 44px; padding: .2rem; }
+.mm-now { display: flex; flex-direction: column; min-width: 0; max-width: 14rem; }
+.mm-now b, .mm-now small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.mm-on main { padding-bottom: 5rem; }
+.mm-video { width: min(96vw, 80rem); max-height: 96vh; padding: .6rem; background: #000; border: 0; border-radius: var(--rc); color: #fff; }
+.mm-video video { width: 100%; max-height: 82vh; display: block; }
+.mm-video .bar { margin-bottom: .4rem; }
+.mm-video button.ghost { color: #fff; }
+@media (max-width: 700px) {
+  .mm-grid { grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: .5rem; }
+  .mm-detail { grid-template-columns: 1fr; }
+  .mm-detail > img, .mm-detail > .mm-ph { max-width: 12rem; }
+  .mm-head { grid-template-columns: 5rem 1fr; }
+  .mm-tracks li { grid-template-columns: 2.8rem 1fr auto 2.8rem; }
+  .mm-player { bottom: calc(4.4rem + env(safe-area-inset-bottom)); padding-bottom: .4rem; flex-wrap: wrap; }
+  .mm-player audio { order: 9; flex-basis: 100%; }
+  .mm-now { flex: 1; max-width: none; }
+  body.mm-on main { padding-bottom: 12rem; }
+  body.mm-on #toasts { bottom: 15rem; }
+}

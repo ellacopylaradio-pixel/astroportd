@@ -17,7 +17,7 @@ pub mod projector;
 pub mod replication;
 pub mod replay;
 
-pub use client::{BoxFuture, ClientError, RelayClient, RelaySession, Signer, WsClient, WsSession};
+pub use client::{BoxFuture, ClientError, RelayClient, RelaySession, Signer, SyncResult, WsClient, WsSession};
 pub use crawl::{CrawlConfig, CrawlStats, Crawler, PassHook, PassReport, RelaySource, WANTED_SCOPE};
 pub use ingest::{Ingested, ingest_event};
 pub use outbox::RelayOutbox;

@@ -19,7 +19,7 @@ pub(super) struct P2pRole {
 /// Le maillage est actif par défaut (`--no-p2p` le coupe) : sans `--p2p-listen`, écoute sur 4101 ou le premier port libre
 /// après — chaque plan d'un `astroportd planes` reçoit le sien. Sans graine (NODE absent), le défaut s'efface avec un message ;
 /// une option P2P explicite, elle, reste une erreur.
-pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays: &[(Multiaddr, PeerId)], local: &Arc<AutoBlobStore>, tunnel_policy: &Arc<TunnelPolicy>, exposed_names: &mut Vec<String>) -> Result<(Guards, Option<astro_p2p::P2pHandle>, P2pRole), Failure> {
+pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays: &[(Multiaddr, PeerId)], local: &Arc<AutoBlobStore>, tunnel_policy: &Arc<TunnelPolicy>, exposed_names: &mut Vec<String>, ai_book: &astro_p2p::tunnel::PeerBook) -> Result<(Guards, Option<astro_p2p::P2pHandle>, P2pRole), Failure> {
     let mut p2p_guards: Vec<Box<dyn std::any::Any + Send>> = Vec::new();
     let mut p2p_handle = None;
     let mut role = P2pRole::default();
@@ -83,7 +83,8 @@ pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays
         for spec in &specs {
             let (name, target) = spec.split_once('=').ok_or("--p2p-expose attend nom=hôte:port")?;
             // Chaque flux passe par la politique du Capitaine (voir l'écran Options › Tunnels) : rien n'est ouvert sans elle.
-            let opts = ExposeOpts { gate: Some(Arc::new(PolicyGate::new(tunnel_policy.clone()))), ..ExposeOpts::default() };
+            let peers = (name == astroportd::tunnel_policy::AI_INDEX).then(|| ai_book.clone());
+            let opts = ExposeOpts { gate: Some(Arc::new(PolicyGate::new(tunnel_policy.clone()))), peers, ..ExposeOpts::default() };
             let mode = tunnel_policy.rule(name).mode;
             println!("P2P : {name} exposé, accès « {mode:?} » (réglable dans l'interface du Capitaine)");
             p2p_guards.push(Box::new(expose(&handle, name, target.to_owned(), opts)?));

@@ -178,8 +178,9 @@ pub struct Policy {
     pub public_kinds: HashSet<u32>,
     /// Kinds privés limités à leur auteur et à leurs destinataires `p`.
     pub addressed_kinds: HashSet<u32>,
-    /// Kinds réservés au cercle de confiance **N¹** de leur auteur (vidéos NIP-71 : 21 et 22) : l'auteur et ceux
-    /// qu'il suit, jamais le reste du cercle N².
+    /// Kinds réservés au cercle de confiance **N¹** de leur auteur (vidéos NIP-71 : 21 et 22, et leurs listes NIP-51 :
+    /// 30005) : l'auteur et ceux qu'il suit, jamais le reste du cercle N². Une playlist dit ce qu'on écoute : elle ne
+    /// doit pas être plus lisible que les morceaux qu'elle désigne.
     pub friend_kinds: HashSet<u32>,
     /// Matrice du Capitaine : une règle par kind, qui l'emporte sur les ensembles ci-dessus.
     pub rules: BTreeMap<u32, KindRule>,
@@ -202,7 +203,7 @@ impl Default for Policy {
             .into_iter()
             .collect(),
             addressed_kinds: [kind::DM_LEGACY, kind::GIFT_WRAP].into_iter().collect(),
-            friend_kinds: [kind::VIDEO, kind::VIDEO_SHORT].into_iter().collect(),
+            friend_kinds: [kind::VIDEO, kind::VIDEO_SHORT, kind::VIDEO_SET].into_iter().collect(),
             rules: BTreeMap::new(),
         }
     }
@@ -438,7 +439,7 @@ mod tests {
     fn videos_are_private_to_the_authors_n1() {
         let p = Policy::default();
         let c = StaticCircle::new([key(1)], [key(2), key(3)]).with_friend(key(1), key(2)); // 2 est dans le N1 de 1 ; 3 seulement N2
-        for k in [21, 22] {
+        for k in [21, 22, 30_005] {
             let v = ev(1, k, vec![]);
             assert!(p.can_read(&v, &auth(&[1]), &c), "l'auteur relit sa vidéo (kind {k})");
             assert!(p.can_read(&v, &auth(&[2]), &c), "un ami N1 la voit (kind {k})");

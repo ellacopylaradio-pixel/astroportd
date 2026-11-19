@@ -48,6 +48,7 @@ async fn nightly(dir: &std::path::Path, db: Arc<Db>, sink: Arc<Sink>, dream: Hoo
         public_url: Some("https://station.exemple/".into()),
         weekly_costs: Amount(2_000),
         split: SplitConfig::default(),
+        coop_plane: None,
         purge_shares: Some(shares),
         dream: Some(dream),
         backup: None,

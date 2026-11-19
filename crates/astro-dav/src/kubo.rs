@@ -478,6 +478,20 @@ impl BlobStore for AutoBlobStore {
         Ok(AutoWriter::Fs(Box::new(self.fs.begin().await?)))
     }
 
+    /// Un rapatriement reprenable s'écrit toujours sur le disque local : la partie reçue y survit à un redémarrage.
+    async fn begin_resumable(&self, cid: &str, max: u64, align: u64) -> Result<crate::blob::Resumed<AutoWriter>, BlobError> {
+        let r = self.fs.begin_resumable(cid, max, align).await?;
+        Ok(crate::blob::Resumed { writer: AutoWriter::Fs(Box::new(r.writer)), done: r.done, hasher: r.hasher, partial: r.partial })
+    }
+
+    async fn open_partial(&self, cid: &str) -> Result<Option<AutoReader>, BlobError> {
+        Ok(self.fs.open_partial(cid).await?.map(AutoReader::Fs))
+    }
+
+    async fn discard_partial(&self, cid: &str) {
+        self.fs.discard_partial(cid).await;
+    }
+
     async fn open(&self, cid: &str) -> Result<(AutoReader, u64), BlobError> {
         match self.fs.open(cid).await {
             Ok((r, len)) => return Ok((AutoReader::Fs(r), len)),

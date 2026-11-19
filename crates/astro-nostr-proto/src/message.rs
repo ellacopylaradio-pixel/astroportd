@@ -47,6 +47,24 @@ pub enum ClientMessage {
         /// Filtres (OU logique).
         filters: Vec<Filter>,
     },
+    /// Ouverture d'une réconciliation Negentropy (NIP-77) : filtre et premier message (hexadécimal).
+    NegOpen {
+        /// Identifiant de la réconciliation.
+        sub_id: String,
+        /// Ensemble comparé.
+        filter: Filter,
+        /// Message Negentropy, en hexadécimal.
+        message: String,
+    },
+    /// Message suivant d'une réconciliation (NIP-77).
+    NegMsg {
+        /// Identifiant de la réconciliation.
+        sub_id: String,
+        /// Message Negentropy, en hexadécimal.
+        message: String,
+    },
+    /// Fin d'une réconciliation (NIP-77).
+    NegClose(String),
 }
 
 impl ClientMessage {
@@ -69,6 +87,13 @@ impl ClientMessage {
                 let filters = arr[2..].iter().map(Filter::from_value).collect::<Result<Vec<_>, _>>()?;
                 Ok(Self::Count { sub_id, filters })
             }
+            "NEG-OPEN" => {
+                let sub_id = sub_id_at(arr, 1)?;
+                let filter = Filter::from_value(arr.get(2).ok_or(MessageError::Malformed("filtre manquant"))?)?;
+                Ok(Self::NegOpen { sub_id, filter, message: hex_at(arr, 3)? })
+            }
+            "NEG-MSG" => Ok(Self::NegMsg { sub_id: sub_id_at(arr, 1)?, message: hex_at(arr, 2)? }),
+            "NEG-CLOSE" => Ok(Self::NegClose(sub_id_at(arr, 1)?)),
             other => Err(MessageError::Unknown(other.chars().take(32).collect())),
         }
     }
@@ -89,6 +114,9 @@ impl ClientMessage {
                 a.extend(filters.iter().map(Filter::to_value));
                 Value::Array(a)
             }
+            Self::NegOpen { sub_id, filter, message } => json!(["NEG-OPEN", sub_id, filter.to_value(), message]),
+            Self::NegMsg { sub_id, message } => json!(["NEG-MSG", sub_id, message]),
+            Self::NegClose(id) => json!(["NEG-CLOSE", id]),
         }
         .to_string()
     }
@@ -135,6 +163,20 @@ pub enum RelayMessage {
         /// Le décompte s'est arrêté à la limite du relai : le vrai nombre est au moins celui-ci.
         approximate: bool,
     },
+    /// Réponse d'une réconciliation Negentropy (NIP-77).
+    NegMsg {
+        /// Identifiant de la réconciliation.
+        sub_id: String,
+        /// Message Negentropy, en hexadécimal.
+        message: String,
+    },
+    /// Réconciliation refusée ou close par le relai (NIP-77) : raison préfixée (`blocked:`, `closed:`).
+    NegErr {
+        /// Identifiant de la réconciliation.
+        sub_id: String,
+        /// Raison.
+        reason: String,
+    },
 }
 
 impl RelayMessage {
@@ -148,6 +190,8 @@ impl RelayMessage {
             Self::Notice(m) => json!(["NOTICE", m]),
             Self::Auth(c) => json!(["AUTH", c]),
             Self::Count { sub_id, count, approximate } => json!(["COUNT", sub_id, if *approximate { json!({ "count": count, "approximate": true }) } else { json!({ "count": count }) }]),
+            Self::NegMsg { sub_id, message } => json!(["NEG-MSG", sub_id, message]),
+            Self::NegErr { sub_id, reason } => json!(["NEG-ERR", sub_id, reason]),
         }
         .to_string()
     }
@@ -171,6 +215,8 @@ impl RelayMessage {
             "CLOSED" => Ok(Self::Closed { sub_id: s(1)?, message: s(2).unwrap_or_default() }),
             "NOTICE" => Ok(Self::Notice(s(1)?)),
             "AUTH" => Ok(Self::Auth(s(1)?)),
+            "NEG-MSG" => Ok(Self::NegMsg { sub_id: s(1)?, message: hex_at(arr, 2)? }),
+            "NEG-ERR" => Ok(Self::NegErr { sub_id: s(1)?, reason: s(2).unwrap_or_default() }),
             "COUNT" => Ok(Self::Count { sub_id: s(1)?, count: arr.get(2).and_then(|c| c["count"].as_u64()).ok_or(MessageError::Malformed("décompte attendu"))?, approximate: arr.get(2).and_then(|c| c["approximate"].as_bool()).unwrap_or(false) }),
             other => Err(MessageError::Unknown(other.chars().take(32).collect())),
         }
@@ -180,6 +226,15 @@ impl RelayMessage {
 fn event_at(arr: &[Value], i: usize) -> Result<Event, MessageError> {
     let v = arr.get(i).ok_or(MessageError::Malformed("événement manquant"))?;
     serde_json::from_value(v.clone()).map_err(|_| MessageError::Malformed("événement invalide"))
+}
+
+/// Message Negentropy hexadécimal : longueur paire, chiffres hexadécimaux, 4 Mio décodés au plus.
+fn hex_at(arr: &[Value], i: usize) -> Result<String, MessageError> {
+    let h = arr.get(i).and_then(Value::as_str).ok_or(MessageError::Malformed("message Negentropy manquant"))?;
+    if h.len() % 2 != 0 || h.len() > 8 * 1024 * 1024 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(MessageError::Malformed("message Negentropy invalide"));
+    }
+    Ok(h.to_ascii_lowercase())
 }
 
 fn sub_id_at(arr: &[Value], i: usize) -> Result<String, MessageError> {
@@ -207,6 +262,9 @@ mod tests {
             ClientMessage::Auth(e.clone()),
             ClientMessage::Close("s1".into()),
             ClientMessage::Req { sub_id: "s".into(), filters: vec![Filter::default(), Filter { kinds: Some(vec![1]), ..Filter::default() }] },
+            ClientMessage::NegOpen { sub_id: "n".into(), filter: Filter { kinds: Some(vec![21]), ..Filter::default() }, message: "61".into() },
+            ClientMessage::NegMsg { sub_id: "n".into(), message: "6100".into() },
+            ClientMessage::NegClose("n".into()),
         ] {
             assert_eq!(ClientMessage::parse(&m.to_json()).unwrap(), m);
         }
@@ -222,6 +280,8 @@ mod tests {
             RelayMessage::Closed { sub_id: "s".into(), message: "auth-required: x".into() },
             RelayMessage::Notice("n".into()),
             RelayMessage::Auth("c".into()),
+            RelayMessage::NegMsg { sub_id: "n".into(), message: "61".into() },
+            RelayMessage::NegErr { sub_id: "n".into(), reason: "blocked: trop gros".into() },
         ] {
             assert_eq!(RelayMessage::parse(&m.to_json()).unwrap(), m);
         }

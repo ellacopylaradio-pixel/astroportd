@@ -119,6 +119,19 @@ pub struct ServeArgs {
     /// inférence **locale** (binaire compilé avec `--features onnx`, bibliothèque `libonnxruntime` via `ORT_DYLIB_PATH`).
     #[arg(long)]
     face_models: Option<PathBuf>,
+    /// Cerveau partagé (service P2P `ai-index`) : `friends` l'ouvre par défaut aux Capitaines amis (profil « Cerveau de la
+    /// constellation », confirmé à l'installation) ; `off` (défaut) le laisse fermé. Le réglage de l'interface l'emporte.
+    #[arg(long, default_value = "off", value_parser = ["off", "friends"])]
+    ai_index: String,
+    /// Dossier des modèles de la recherche multimédia (`astroportd models add`) ; défaut : `models/` à côté de la base.
+    #[arg(long)]
+    index_models: Option<PathBuf>,
+    /// Fils de calcul de la recherche multimédia (0 = au choix d'ONNX Runtime).
+    #[arg(long, default_value_t = 0)]
+    index_threads: usize,
+    /// Coupe la recherche multimédia : ni lecture des documents (OCR), ni service `ai-index` pour les amis.
+    #[arg(long)]
+    no_index: bool,
     /// Fils de calcul par modèle pour l'inférence locale (0 = au choix d'ONNX Runtime).
     #[arg(long, default_value_t = 0)]
     face_threads: usize,
@@ -298,6 +311,43 @@ fn local_embedder(a: &ServeArgs, ollama: &Arc<OllamaClient>) -> Result<AnyEmbedd
     Ok(AnyEmbedder::Ollama(ollama.clone()))
 }
 
+/// Moteurs de la recherche multimédia dont les modèles sont installés (OCR…). Sans la fonction `onnx` : aucun (les documents
+/// des membres qui l'acceptent sont lus par un Capitaine ami).
+fn search_engine(a: &ServeArgs) -> astro_index::LocalIndexer {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dir = a.index_models.clone().or_else(|| astro_index::catalog::models_dir(a.db.parent(), home.as_deref())).unwrap_or_default();
+    #[cfg(feature = "onnx")]
+    {
+        let lib = astro_facecloud::onnx::check_library(std::env::var("ORT_DYLIB_PATH").ok().as_deref(), home.as_deref());
+        let (ix, problems) = astro_index::LocalIndexer::load(&dir, lib.path.as_deref().filter(|_| lib.problem.is_none()), a.index_threads);
+        for p in problems {
+            eprintln!("recherche multimédia : {p} — `astroportd models list` et `doctor` disent quoi corriger");
+        }
+        ix
+    }
+    #[cfg(not(feature = "onnx"))]
+    astro_index::LocalIndexer::new(&dir)
+}
+
+/// Accès aux services `ai-index` des stations amies : un `forward` local par ami, ouvert à la première demande et gardé.
+fn ai_index_opener(handle: astro_p2p::P2pHandle) -> astroportd::search_index::Opener {
+    let open: Arc<tokio::sync::Mutex<std::collections::HashMap<String, astro_p2p::tunnel::Forward>>> = Arc::default();
+    Arc::new(move |peer: String| {
+        let (handle, open) = (handle.clone(), open.clone());
+        Box::pin(async move {
+            let mut known = open.lock().await;
+            if let Some(f) = known.get(&peer) {
+                return Ok(f.local_addr);
+            }
+            let id: PeerId = peer.parse().map_err(|e| format!("PeerID {peer} : {e}"))?;
+            let f = forward(&handle, std::net::SocketAddr::from(([127, 0, 0, 1], 0)), id, astroportd::tunnel_policy::AI_INDEX).await.map_err(|e| e.to_string())?;
+            let addr = f.local_addr;
+            known.insert(peer, f);
+            Ok(addr)
+        })
+    })
+}
+
 /// Nom du plan servi par cette base et plans voisins de la station (`planes.json`, ORIGIN seul à défaut).
 fn station_planes(own_db: &std::path::Path) -> (String, Vec<astroportd::person_keys::Sibling>) {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return ("origin".into(), Vec::new()) };
@@ -356,10 +406,10 @@ fn publish_fn(publisher: &Arc<EventPublisher>) -> astroportd::register::PublishF
 
 /// Rapatriement d'un blob depuis la station d'un ami (maillage P2P), pour le partage de fichiers et la sauvegarde privée.
 fn blob_prefetch(handle: &astro_p2p::P2pHandle, local: &Arc<AutoBlobStore>) -> astroportd::share_inbox::Prefetch {
-    blob_prefetch_max(handle, local, 1 << 30, Duration::from_secs(120))
+    blob_prefetch_max(handle, local, astro_p2p::blob::MAX_BLOB_BYTES, Duration::from_secs(60))
 }
 
-/// Comme [`blob_prefetch`], avec un plafond et un délai : le pair qui annonce plus gros est refusé avant le moindre octet reçu.
+/// Comme [`blob_prefetch`], avec un plafond et un silence toléré (`idle`) : le pair qui annonce plus gros est refusé avant le moindre octet reçu.
 fn blob_prefetch_max(handle: &astro_p2p::P2pHandle, local: &Arc<AutoBlobStore>, max_bytes: u64, timeout: Duration) -> astroportd::share_inbox::Prefetch {
     let (handle, local) = (handle.clone(), local.clone());
     Arc::new(move |cid: String, peer: String| {
@@ -523,6 +573,23 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let ssh_managed = a.p2p_ssh != "none";
     let ssh_dir = ssh_managed.then(|| a.ssh_dir.clone().or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".ssh")))).flatten();
     let tunnel_policy = TunnelPolicy::load(db.clone(), a.swarm_key.is_none(), ssh_dir, activity.clone()).await;
+    tunnel_policy.set_ai_index_default(a.ai_index == "friends");
+    // Recherche multimédia : moteurs installés ici. S'il y en a, la station peut les prêter à ses amis par le service `ai-index`,
+    // qui n'écoute que sur 127.0.0.1 : on n'y entre que par le tunnel, derrière la politique du Capitaine (fermé par défaut).
+    let index_local = Arc::new(search_engine(&a));
+    // Carnet des pairs du service ai-index : le tunnel y note quelle station se cache derrière chaque connexion, et la file
+    // équitable du service s'en sert pour servir les stations amies à tour de rôle.
+    let ai_book: astro_p2p::tunnel::PeerBook = Arc::default();
+    if !a.no_index && !astro_index::Indexer::tasks(index_local.as_ref()).is_empty() {
+        let book = ai_book.clone();
+        let peer_of: astro_index::server::PeerOf = Arc::new(move |addr| book.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&addr).map(ToString::to_string));
+        let (addr, _) = astro_index::server::spawn_loopback(index_local.clone(), 1, Duration::from_secs(600), Some(peer_of)).await?;
+        let names: Vec<&str> = astro_index::Indexer::tasks(index_local.as_ref()).iter().map(|t| t.name()).collect();
+        println!("recherche multimédia : {} en local ; service ai-index sur {addr} (accès « {:?} »)", names.join(", "), tunnel_policy.rule(astroportd::tunnel_policy::AI_INDEX).mode);
+        if !a.p2p_expose.iter().any(|s| s.starts_with("ai-index=")) {
+            a.p2p_expose.push(format!("{}={addr}", astroportd::tunnel_policy::AI_INDEX));
+        }
+    }
     let mut exposed_names: Vec<String> = a.p2p_expose.iter().filter_map(|s| s.split_once('=').map(|(n, _)| n.to_owned())).collect();
     let local = Arc::new(AutoBlobStore::new(a.kubo.as_deref().map(KuboBlobStore::new), FsBlobStore::open(&a.blobs)?).with_pool_peers(a.pool_peers.clone()));
     if !a.pool_peers.is_empty() {
@@ -544,7 +611,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     astroportd::bridge::record_plane(&db, &uplanet_name).await?;
     // Stations relais publiées par la coopérative : la station s'y trouve-t-elle ? Alors elle sert de relais.
     let coop_relays = astroportd::coop_config::p2p_relays(&db, &uplanet_name).await;
-    let (mut p2p_guards, p2p_handle, p2p_role) = p2p::start(&a, station.p2p_seed, &coop_relays, &local, &tunnel_policy, &mut exposed_names).await?;
+    let (mut p2p_guards, p2p_handle, p2p_role) = p2p::start(&a, station.p2p_seed, &coop_relays, &local, &tunnel_policy, &mut exposed_names, &ai_book).await?;
     let blobs = Arc::new(match &p2p_handle {
         Some(h) => P2pBlobStore::new(local.clone(), h.clone(), vec![]),
         None => P2pBlobStore::local_only(local.clone()),
@@ -627,6 +694,8 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     };
     let mesh_outbox = Arc::new(astroportd::mesh_outbox::MeshOutbox::new(db.clone(), relay_client.clone(), a.relays.clone(), a.swarm_dir.clone().or_else(default_swarm_dir)));
     let sharing_keys = keys.clone();
+    let media_keys = keys.clone();
+    let media_share_keys = keys.clone();
     let chat_keys = keys.clone();
     let people_keys = keys.clone();
     let account_keys = keys.clone();
@@ -687,6 +756,11 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let backup_blobs = blobs.clone();
     let images_blobs = blobs.clone();
     let dav = Arc::new(DavState { db: db.clone(), blobs, replay, publisher: Some(publisher.clone()), config: dav_config, on_upload });
+    // Lecture des documents (OCR) en tâche de fond : ici si la station a le moteur, sinon chez l'ami que chaque membre a accepté.
+    if !a.no_index {
+        let opener = p2p_handle.clone().map(ai_index_opener);
+        astroportd::search_index::Worker::new(dav.clone(), index_local.clone(), opener, activity.clone(), Duration::from_secs(1)).spawn();
+    }
     // Images publiques (avatar, bandeau) : leurs octets entament le quota du compte, comme ses fichiers.
     let public_images = {
         let quota_dav = dav.clone();
@@ -794,6 +868,16 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         background.push(tokio::spawn(Arc::new(inbox).run(Duration::from_secs(20), stop_watch.clone())));
         println!("partage : fichiers des proches reçus par le maillage (un passage toutes les 20 s)");
     }
+    // Médiathèque des amis : leurs films et morceaux, lus chez eux au nom du membre (NIP-42), copiés à la demande au clic « Lire ».
+    let friends_media = {
+        let outbox = mesh_outbox.clone();
+        let fetch: astroportd::friends_media::FetchAs = Arc::new(move |author: String, filter, signer, local: Vec<(u64, String)>| {
+            let o = outbox.clone();
+            Box::pin(async move { o.sync_as(&author, &filter, &local, signer).await })
+        });
+        Arc::new(astroportd::friends_media::FriendsMedia::new(db.clone(), media_keys, mesh_outbox.clone(), sharing.clone(), Some(fetch)))
+    };
+    background.push(tokio::spawn(friends_media.clone().run(Duration::from_secs(30), stop_watch.clone())));
     // Réveil du crawl : un module qui demande une clé (secours d'un compte) n'attend pas le passage suivant.
     let crawl_nudge = Arc::new(tokio::sync::Notify::new());
     let beacon_nudge = Arc::new(tokio::sync::Notify::new());
@@ -1070,9 +1154,14 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     // Écluses : ce que `serve` sait du plan et des portes réglées en ligne de commande, plus le mode choisi à chaud.
     let facts = astroportd::locks::Facts { origin: a.swarm_key.is_none(), kubo: a.kubo.is_some(), pool_peers: a.pool_peers.len(), p2p: p2p_handle.is_some(), crawl: !a.no_crawl, register: !a.no_register };
     let locks = Arc::new(astroportd::locks::Locks::new(db.clone(), kinds_control.clone(), circle.clone(), facts, activity.clone()));
-    let admin_fn = Arc::new(astroportd::station_admin::Admin { face: face_control, kinds: kinds_control, tunnels: Some((tunnel_policy.clone(), exposed_names.clone())), targets: service_targets(&a), dnslink: Some(dnslink.clone()), assist: Some(assist_admin), tasks: Some(db.clone()), mesh: Some(mesh_admin), captains: Some(captains_admin), locks: Some(locks) }).handler();
+    // « Lecture de vos documents » : décisions du Capitaine (station, MULTIPASS, prêt aux amis) et accord de chaque membre.
+    let reading = Arc::new(astroportd::delegation::Delegation::new(db.clone(), if a.no_index { Vec::new() } else { astro_index::Indexer::tasks(index_local.as_ref()) }, p2p_handle.is_some().then(|| (tunnel_policy.clone(), exposed_names.clone()))));
+    let admin_fn = Arc::new(astroportd::station_admin::Admin { face: face_control, kinds: kinds_control, tunnels: Some((tunnel_policy.clone(), exposed_names.clone())), targets: service_targets(&a), dnslink: Some(dnslink.clone()), assist: Some(assist_admin), tasks: Some(db.clone()), mesh: Some(mesh_admin), captains: Some(captains_admin), locks: Some(locks), index: Some(reading.clone()) }).handler();
     // Prise de contrôle locale (`astroportd tunnel …`) : la politique des tunnels et le routage vers les services des autres stations.
     let swarm_route = Arc::new(astroportd::swarm_route::SwarmRoute::new(stations.clone(), p2p_handle.clone(), forwards.clone(), a.lat.zip(a.lon)));
+    if p2p_handle.is_some() {
+        reading.set_route(swarm_route.clone());
+    }
     let mut control_sections: std::collections::BTreeMap<&'static str, astroportd::ui_backend::AdminFn> = std::collections::BTreeMap::new();
     control_sections.insert("tunnels", admin_fn.clone());
     // Maillage (`astroportd swarm …`, `astroportd bootstrap …`) : joindre, garder ou oublier une station, jamais plus.
@@ -1104,7 +1193,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         }
         Err(e) => eprintln!("contrôle local indisponible : {e}"),
     }
-    let mut ui = StationUi::new(services.clone(), dav.clone(), memory, ollama, true).with_setup(setup_code).with_conf_path(conf_path.clone()).with_ice(stun_port, turn.map(|t| t.0), a.ice_servers.clone()).with_presence(presence).with_chat(chat).with_people(people.clone()).with_agents(agents).with_ai(member_ai).with_pull(pull).with_organize(organize).with_registrar(registrar.clone()).with_stations(stations.clone()).with_invites(invites).with_welcome(welcome).with_contacts(links.clone()).with_account(account_svc).with_book(address_book)
+    let mut ui = StationUi::new(services.clone(), dav.clone(), memory, ollama, true).with_setup(setup_code).with_conf_path(conf_path.clone()).with_ice(stun_port, turn.map(|t| t.0), a.ice_servers.clone()).with_presence(presence).with_chat(chat).with_people(people.clone()).with_agents(agents).with_ai(member_ai).with_reading(reading.clone()).with_seer(index_local.clone()).with_pull(pull).with_organize(organize).with_registrar(registrar.clone()).with_stations(stations.clone()).with_invites(invites).with_welcome(welcome).with_contacts(links.clone()).with_account(account_svc).with_book(address_book)
         .with_admin(admin_fn.clone());
     ui = ui.with_feedback(Arc::new(astroportd::feedback::Feedback::new(db.clone(), uplanet_name.to_string(), activity.clone()))).with_oc(Arc::new(astroportd::oc_member::OcMember::new(db.clone(), uplanet_name.to_string())));
     if let Some(f) = thumbs_fn {
@@ -1138,6 +1227,27 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     }
     let site = Arc::new(astroportd::public_site::Site::new(dav.clone(), uplanet_name.to_string()));
     ui = ui.with_site(site.clone());
+    let (fm_list, fm_request) = (friends_media.clone(), friends_media.clone());
+    let media_share = Arc::new(astroportd::media_share::MediaShare::new(dav.clone(), media_share_keys, publish_fn(&event_publisher)));
+    let (ms_set, ms_trace) = (media_share.clone(), media_share);
+    ui = ui.with_media_friends(astroportd::ui_backend::MediaFriendsFns {
+        list: Arc::new(move |owner: String, force: bool| {
+            let f = fm_list.clone();
+            Box::pin(async move { f.list(&owner, force).await })
+        }),
+        request: Arc::new(move |owner: String, event_id: String| {
+            let f = fm_request.clone();
+            Box::pin(async move { f.request(&owner, &event_id).await })
+        }),
+        share: Arc::new(move |owner: String, paths: Vec<String>, on: bool, list: Option<(String, String)>| {
+            let m = ms_set.clone();
+            Box::pin(async move { m.set(&owner, &paths, on, list.map(|(kind, title)| astroportd::media_share::SharedList { kind, title })).await })
+        }),
+        trace: Arc::new(move |owner: String, path: String| {
+            let m = ms_trace.clone();
+            Box::pin(async move { m.trace(&owner, &path).await })
+        }),
+    });
     let ui = ui::wire(ui, &db, &event_publisher, &uplanet_name, &sharing, &backup, &constellation);
 
     // Reverse proxy : les routes gardées exigent un compte de la station (Basic ou NIP-98).
@@ -1160,6 +1270,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         .merge(relay.clone().router())
         .merge(astro_ui::web::static_router())
         .merge(site.clone().router())
+        .merge(astroportd::media::router(dav.clone()))
         .merge(ui.into_router(activity.clone(), public_origin));
     if !routes.is_empty() {
         app = app.merge(proxy_router(routes, Duration::from_secs(120)));

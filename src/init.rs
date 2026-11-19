@@ -82,6 +82,10 @@ pub struct InitArgs {
     /// Fils de calcul des embeddings locaux de BRO (bge-m3), inscrits dans la commande de démarrage (0 = au choix d'ONNX Runtime).
     #[arg(long, default_value_t = 0)]
     embed_threads: usize,
+    /// Cerveau partagé : `friends` ouvre le service `ai-index` aux Capitaines amis (la station calcule, en mémoire, l'index
+    /// multimédia de leurs membres qui l'acceptent), `off` le ferme. Inscrit dans station.conf et la commande de démarrage.
+    #[arg(long, value_parser = ["off", "friends"])]
+    ai_index: Option<String>,
     /// Visio entre membres : `relais` (STUN + relais d'appel TURN, recommandé), `stun` (STUN seul) ou `aucune`.
     /// Demandé si absent (terminal) ; défaut : relais.
     #[arg(long, value_parser = ["relais", "stun", "aucune"])]
@@ -391,6 +395,7 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
     // Fils de calcul de l'inférence locale : l'option l'emporte, sinon ce que le précédent `init` avait retenu (0 = au choix d'ONNX Runtime).
     let threads = |arg: usize, key: &str| if arg > 0 { arg } else { prev(key).parse().unwrap_or(0) };
     let (face_threads, embed_threads) = (threads(a.face_threads, "face_threads"), threads(a.embed_threads, "embed_threads"));
+    let ai_index = a.ai_index.clone().unwrap_or_else(|| if prev("ai_index") == "friends" { "friends".into() } else { "off".into() });
     let email = a.email.clone().unwrap_or_else(|| ask.ask("Email du Capitaine (son compte est créé à la fin ; vide = plus tard)", &prev("captain_email")));
 
     // Web : domaine + certificat. Ports 80/443 libres → astroportd gère lui-même HTTPS (ACME) ; un reverse proxy (NPM…)
@@ -471,7 +476,7 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&dir)?;
     }
     let conf = format!(
-        "# astroportd — station.conf (écrit par `astroportd init`, relisible et modifiable)\nmode = {}\nuplanetname = {uplanetname}\nipfsnodeid = {}\ncaptain_email = {email}\ndomain = {domain}\nlat = {}\nlon = {}\nface_threads = {face_threads}\nembed_threads = {embed_threads}\nvisio = {visio}\nice_servers = {}\n{} = {}\n",
+        "# astroportd — station.conf (écrit par `astroportd init`, relisible et modifiable)\nmode = {}\nuplanetname = {uplanetname}\nipfsnodeid = {}\ncaptain_email = {email}\ndomain = {domain}\nlat = {}\nlon = {}\nface_threads = {face_threads}\nembed_threads = {embed_threads}\nai_index = {ai_index}\nvisio = {visio}\nice_servers = {}\n{} = {}\n",
         if mode == Mode::Zen { "zen" } else { "origin" },
         report.peer_id,
         coords.map_or(String::new(), |c| c.0.to_string()),
@@ -549,6 +554,9 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
     }
     if embed_threads > 0 {
         serve.push(format!("--embed-threads {embed_threads}"));
+    }
+    if ai_index == "friends" {
+        serve.push("--ai-index friends".into());
     }
     let serve = serve.join(" ");
     // Une station à plusieurs plans se lance par `planes` : `serve` ne servirait que ORIGIN.

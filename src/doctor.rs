@@ -293,6 +293,30 @@ fn system_checks(out: &mut Vec<Check>) {
 }
 
 
+/// Recherche multimédia : modèles installés (présence ; l'empreinte est vérifiée à l'installation), file d'indexation, ffmpeg.
+/// Aucun modèle n'est un choix valable (profil léger) : le calcul peut être confié à un Capitaine ami.
+fn search_checks(db: Option<&Path>, conn: Option<&Connection>, out: &mut Vec<Check>) {
+    use astro_index::catalog::{CATALOG, State, models_dir};
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(dir) = models_dir(db.and_then(Path::parent), home.as_deref()) {
+        let of = |s: State| CATALOG.iter().filter(|m| m.state(&dir) == s).map(|m| m.id).collect::<Vec<_>>().join(", ");
+        match (of(State::Present), of(State::Partial)) {
+            (_, part) if !part.is_empty() => out.push(check("recherche/modèles", Level::Warn, format!("incomplet(s) : {part} → `astroportd models add <id>`"))),
+            (ok, _) if ok.is_empty() => out.push(check("recherche/modèles", Level::Ok, format!("aucun dans {} (calcul confiable à un Capitaine ami, ou `astroportd models list`)", dir.display()))),
+            (ok, _) => out.push(check("recherche/modèles", Level::Ok, ok)),
+        }
+    }
+    let counts: Option<(i64, i64, i64)> = conn.and_then(|c| c.query_row("SELECT count(*) FILTER (WHERE state = 'done'), count(*) FILTER (WHERE state = 'failed'), count(*) FILTER (WHERE via IS NOT NULL) FROM search_index WHERE task = 'ocr'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).ok());
+    if let Some((done, failed, friend)) = counts {
+        let level = if failed > 0 && failed * 10 > done { Level::Warn } else { Level::Ok };
+        out.push(check("recherche/ocr", level, format!("{done} document(s) lus (dont {friend} par un Capitaine ami), {failed} en échec")));
+    }
+    let pdf = astro_index::pdf::available();
+    out.push(check("recherche/pdf", Level::Ok, if pdf { "poppler présent (PDF scannés lus page par page)" } else { "poppler absent (facultatif : `sudo apt install poppler-utils` pour lire les PDF)" }));
+    let ffmpeg = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("ffmpeg").is_file()));
+    out.push(check("recherche/ffmpeg", Level::Ok, if ffmpeg { "présent (images clés des vidéos)" } else { "absent (facultatif : sans lui, les vidéos ne sont pas indexées image par image)" }));
+}
+
 /// Exécute le diagnostic.
 pub fn run(a: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
@@ -347,6 +371,7 @@ pub fn run(a: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
     clock_checks(conn.as_ref(), a.lat, a.lon, &mut checks);
     system_checks(&mut checks);
+    search_checks(a.db.as_deref(), conn.as_ref(), &mut checks);
 
     let fails = checks.iter().filter(|c| c.level == Level::Fail).count();
     if a.json {

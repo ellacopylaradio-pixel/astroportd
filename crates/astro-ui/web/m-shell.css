@@ -15,6 +15,9 @@ nav a .ic { font-size: 1.05rem; line-height: 1; }
 .segs a[aria-current] { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
 .segs.back { gap: .8rem; }
 .segs.back a { border: 0; background: none; padding-left: 0; color: var(--accent); }
+.find { display: flex; gap: .4rem; max-width: 74rem; margin: .6rem auto 0; padding: 0 1.2rem; }
+.find input { flex: 1; min-height: 2.8rem; }
+.find button { min-width: 3rem; }
 .fab { position: fixed; right: 1rem; bottom: calc(1rem + env(safe-area-inset-bottom)); width: 3.2rem; height: 3.2rem; display: grid; place-items: center; border-radius: 50%; background: var(--grad); color: var(--on-accent); font-size: 1.4rem; text-decoration: none; box-shadow: 0 4px 16px var(--sh); z-index: 6; }
 @media (max-width: 700px) {
   header { padding-inline: .8rem; backdrop-filter: none; background: var(--panel); }
@@ -26,6 +29,7 @@ nav a .ic { font-size: 1.05rem; line-height: 1; }
   nav a .ch-badge { position: absolute; top: .1rem; right: calc(50% - 1.6rem); margin: 0; }
   .segs { padding-inline: .8rem; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .segs a { white-space: nowrap; }
+  .find { padding-inline: .8rem; }
   main { padding-bottom: 6rem; }
   .fab { bottom: calc(4.6rem + env(safe-area-inset-bottom)); }
 }

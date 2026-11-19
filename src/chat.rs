@@ -553,7 +553,8 @@ impl Chat {
         if rumor.kind == kind::CALL_SIGNAL {
             return self.handle_call(owner, &sender, &rumor).await;
         }
-        if rumor.kind != kind::CHAT {
+        // Les messages de service (sauvegarde chez un ami, assistance) voyagent aussi en kind 14 : pas dans la conversation.
+        if rumor.kind != kind::CHAT || rumor.is_station_protocol() {
             return 0;
         }
         let text = clean(&rumor.content);

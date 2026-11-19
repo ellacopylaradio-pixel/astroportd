@@ -116,6 +116,10 @@ export default async function account(root, K) {
         p.has_key ? [' ', K.sure(t('Retirer la clé'), () => send({ api_key: null }), t('Retirer la clé d\'API enregistrée ?'))] : null));
   }, e => ai.append(h('p', { class: 'err', role: 'alert' }, e.message)));
 
+  // ── Lecture de vos documents : sa station lit, ou une station amie que le membre choisit (m-reading.js, chargé à la demande) ──
+  const reading = h('section', { class: 'card', id: 'reading' });
+  K.mod('m-reading.js').then(m => m.default(reading, K), e => reading.append(h('p', { class: 'err', role: 'alert' }, e.message)));
+
   // ── Visio : être joignable (mes amis réciproques voient si je suis là ou en appel) et notifications d'appel sur cet appareil ──
   const visio = h('section', { class: 'card' }, h('h2', {}, t('Visio')));
   K.api('/api/v1/presence').then(p => {
@@ -283,7 +287,7 @@ export default async function account(root, K) {
       h('li', {}, t('Dès qu\'il confirme, votre compte renaît tout seul. Notez le nouveau code PASS affiché.')),
       h('li', {}, t('Vos amis, vos contacts et vos fichiers reviennent d\'eux-mêmes au fil des heures.')))));
   // Trois onglets plutôt qu'une colonne de dix cartes : l'onglet ouvert se garde dans l'adresse (#/account?tab=securite).
-  const TABS = [['moi', t('Moi'), [profile, pics, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), rescue, backup, idCard, keys]]];
+  const TABS = [['moi', t('Moi'), [profile, pics, reading, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), rescue, backup, idCard, keys]]];
   const want = new URLSearchParams(location.hash.split('?')[1] || '').get('tab'), cur = TABS.some(x => x[0] === want) ? want : 'moi';
   const panels = TABS.map(([k, , cards]) => h('div', { class: 'grid', role: 'tabpanel', id: 'ac-p-' + k, 'aria-labelledby': 'ac-t-' + k, hidden: k !== cur }, cards));
   const tabs = TABS.map(([k, label], i) => h('button', { type: 'button', class: 'link', role: 'tab', id: 'ac-t-' + k, 'aria-controls': 'ac-p-' + k, 'aria-selected': String(k === cur), tabIndex: k === cur ? 0 : -1, onclick: () => pick(i),
@@ -291,7 +295,18 @@ export default async function account(root, K) {
   const pick = (i, focus) => {
     tabs.forEach((b, j) => { b.setAttribute('aria-selected', String(i === j)); b.tabIndex = i === j ? 0 : -1; panels[j].hidden = i !== j; });
     if (focus) tabs[i].focus();
-    history.replaceState(null, '', '#/account?tab=' + TABS[i][0]);
+    history.replaceState(null, '', '#/account?tab=' + TABS[i][0]); // sans `card` : un changement d'onglet n'a plus de cible
   };
   root.replaceChildren(...[hero, guest, h('div', { class: 'ac-tabs', role: 'tablist', 'aria-label': t('Mon compte') }, tabs), ...panels].filter(Boolean));
+  // Arrivée depuis un lien qui vise une carte (« Lecture de vos documents » depuis la recherche) : on l'amène sous les yeux.
+  const aim = new URLSearchParams(location.hash.split('?')[1] || '').get('card');
+  if (aim === 'reading') {
+    // Les cartes du dessus finissent de se charger après coup et la repousseraient : on la garde en vue 2 s au plus, sauf si le
+    // membre fait défiler lui-même.
+    const keep = () => reading.scrollIntoView({ block: 'start' });
+    const ro = new ResizeObserver(keep), stop = () => { ro.disconnect(); ['wheel', 'touchstart', 'keydown'].forEach(e => removeEventListener(e, stop)); };
+    ['wheel', 'touchstart', 'keydown'].forEach(e => addEventListener(e, stop, { passive: true }));
+    ro.observe(root); setTimeout(stop, 2000); K.cleanup(stop);
+    requestAnimationFrame(() => { keep(); reading.tabIndex = -1; reading.focus({ preventScroll: true }); });
+  }
 }

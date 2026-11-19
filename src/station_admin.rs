@@ -398,6 +398,8 @@ pub struct Admin {
     pub captains: Option<AdminFn>,
     /// Écluses : vue d'ensemble et mode d'ouverture de la station.
     pub locks: Option<Arc<crate::locks::Locks>>,
+    /// Lecture des documents (IA) : station, défaut des MULTIPASS, chacun, prêt aux amis.
+    pub index: Option<Arc<crate::delegation::Delegation>>,
 }
 
 /// Un service local répond-il ? Une connexion TCP qui s'établit en 600 ms. Ne dit rien de ce qu'il y a derrière (un port
@@ -491,6 +493,13 @@ impl Admin {
                     ("face", Some(b)) => me.face.set(&b).await,
                     ("kinds", None) => Ok(me.kinds.view().await),
                     ("kinds", Some(b)) => me.kinds.set(&b).await,
+                    ("index", body) => {
+                        let d = me.index.as_ref().ok_or("lecture des documents non câblée sur cette station")?;
+                        match body {
+                            None => d.admin_view().await,
+                            Some(b) => d.admin_set(&b).await,
+                        }
+                    }
                     ("locks", body) => {
                         let l = me.locks.as_ref().ok_or("écluses non câblées sur cette station")?;
                         match body {

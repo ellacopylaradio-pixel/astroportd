@@ -27,6 +27,23 @@ export default async function planes(root, K) {
     ? h('p', {}, K.sure(t('Redémarrer la station'), async () => {
       try { await K.api('/api/v1/station/restart', { method: 'POST' }); K.toast(t('Redémarrage demandé : la page se rechargera au retour de la station.'), 1); back(); } catch (e) { K.toast(e.message); }
     }, t('La station sera indisponible quelques secondes.'))) : null;
+  // ORIGIN et ẐEN : garder les deux, ou ẐEN seul (refusé si ORIGIN héberge des MULTIPASS).
+  const origin = r => {
+    if (!r.planes.some(p => !p.origin) && !r.origin_paused) return null;
+    const zen = r.planes.filter(p => !p.origin), heir = zen.length > 1 ? h('select', { 'aria-label': t('Reprend l\'adresse') }, zen.map(p => h('option', {}, p.name))) : null;
+    const go = (action, ok) => async () => {
+      try { const x = await K.api('/api/v1/station/planes/origin', { method: 'POST', body: { action, heir: heir?.value } }); K.toast(ok, 1); if (x.service?.state === 'error') K.toast(x.service.error); draw(); } catch (e) { K.toast(e.message); }
+    };
+    if (r.origin_paused) return h('div', { class: 'card' }, h('h3', {}, t('ORIGIN en pause')),
+      h('p', {}, t('La station ne sert que ẐEN ; ORIGIN est gardé.')),
+      h('p', {}, K.sure(t('Remettre ORIGIN'), go('restore', t('ORIGIN reviendra au prochain démarrage')), t('ORIGIN sera de nouveau servi au prochain démarrage.'))));
+    const n = r.origin_members || 0;
+    return h('div', { class: 'card' }, h('h3', {}, t('ORIGIN et ẐEN')),
+      h('p', {}, h('strong', {}, t('Garder les deux')), ' — ', t('ORIGIN accueille les nouveaux, qui passent en ẐEN quand ils sont prêts (réglage actuel).')),
+      h('p', {}, h('strong', {}, t('Basculer en ẐEN')), ' — ', t('ORIGIN n\'est plus servi (données gardées) ; ẐEN reprend son adresse.')),
+      n ? h('p', { class: 'muted', role: 'status' }, t('Impossible pour l\'instant : ORIGIN héberge {0} MULTIPASS.', n))
+        : h('p', {}, heir, ' ', K.sure(t('Basculer en ẐEN'), go('stop', t('Bascule enregistrée : redémarrez la station')), t('ORIGIN ne sera plus servi au prochain démarrage.'))));
+  };
   const draw = async () => {
     const r = await K.api('/api/v1/station/planes');
     state.replaceChildren(
@@ -37,10 +54,12 @@ export default async function planes(root, K) {
       K.table(t('Constellations de cette station'), ['Constellation', 'Type', 'Adresse', 'Base', 'État', ''],
         r.planes.map(p => [h('strong', {}, p.name), p.origin ? 'ORIGIN' : t('Constellation privée'), `http://${p.http}`, p.db_exists ? t('créée') : t('pas encore créée'),
           p.running ? K.pill('ok') : h('span', { class: 'pill disabled' }, t('au prochain démarrage')),
-          p.origin ? h('small', { class: 'muted' }, t('ORIGIN reste toujours en service')) : K.sure(t('Retirer'), async () => {
+          p.origin ? h('small', { class: 'muted' }, t('plan de base')) : K.sure(t('Retirer'), async () => {
             try { await K.api('/api/v1/station/planes/remove', { method: 'POST', body: { name: p.name } }); K.toast(t('Constellation retirée'), 1); draw(); } catch (e) { K.toast(e.message); }
           }, t('Retirer la constellation « {0} » de la configuration ? Sa base, ses comptes et sa clé restent sur le disque.', p.name))])),
-      ...(r.restart_needed ? [h('p', { class: 'degraded', role: 'status' }, t('Redémarrez « astroportd planes » pour servir : {0}.', r.pending.join(', ')))] : []), ...[restart(r)].filter(Boolean));
+      ...[origin(r)].filter(Boolean),
+      ...(r.pending.length ? [h('p', { class: 'degraded', role: 'status' }, t('Redémarrez « astroportd planes » pour servir : {0}.', r.pending.join(', ')))] : []),
+      ...(r.stopping?.length ? [h('p', { class: 'degraded', role: 'status' }, t('Redémarrez la station pour arrêter : {0}.', r.stopping.join(', ')))] : []), ...[restart(r)].filter(Boolean));
   };
 
   // ── Ajouter une constellation ──

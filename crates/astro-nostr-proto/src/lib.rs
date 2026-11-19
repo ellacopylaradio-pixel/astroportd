@@ -8,6 +8,7 @@
 
 pub mod filter;
 pub mod message;
+pub mod negentropy;
 pub mod relay_list;
 
 pub use filter::{Filter, FilterError};
@@ -47,6 +48,8 @@ pub mod kind {
     pub const VIDEO: u32 = 21;
     /// Vidéo courte NIP-71 (≤ 60 s).
     pub const VIDEO_SHORT: u32 = 22;
+    /// Liste de vidéos NIP-51 (« curation set ») : une playlist de kinds 21/22, un mix.
+    pub const VIDEO_SET: u32 = 30_005;
     /// Présence visio (éphémère).
     pub const VISIO_PRESENCE: u32 = 24315;
     /// Sonnerie visio (éphémère).

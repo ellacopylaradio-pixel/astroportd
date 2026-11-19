@@ -1,8 +1,7 @@
 'use strict';
-// Bibliothèque : « ce jour-là », recherche à filtres, chronologie par mois et doublons. Tout est calculé par la station sur
-// les métadonnées de vos fichiers ; rien n'est supprimé sans votre confirmation.
+// Bibliothèque : « ce jour-là », chronologie par mois, carte et doublons (la recherche est commune à tout Fichiers :
+// m-find.js). Tout est calculé par la station sur les métadonnées de vos fichiers ; rien n'est supprimé sans votre confirmation.
 const day = 86400;
-const utc = v => (v ? Date.parse(v + 'T00:00:00Z') / 1000 : null);
 
 export default async function library(root, K) {
   const { h, t } = K, A = '/api/v1/ucloud/';
@@ -17,33 +16,6 @@ export default async function library(root, K) {
     mem.replaceChildren(h('section', { class: 'card wide' }, h('h2', {}, t('Ce jour-là')),
       r.memories.flatMap(m => [h('h3', {}, (m.ago === 1 ? t('Il y a 1 an') : t('Il y a {0} ans', m.ago)) + ' · ' + m.year), grid(m.items, memList)])));
   }, () => {});
-
-  // ── Recherche ──
-  const q = h('input', { type: 'search', placeholder: t('Nom, description…'), 'aria-label': t('Rechercher'), maxlength: 256, autocomplete: 'off' });
-  const kind = h('select', { 'aria-label': t('Type') }, [['', 'Tout'], ['image', 'Photos'], ['video', 'Vidéos'], ['other', 'Autres fichiers']].map(([v, l]) => h('option', { value: v }, t(l))));
-  const person = h('input', { placeholder: t('Personne (nom exact)'), 'aria-label': t('Personne'), maxlength: 128, autocomplete: 'off' });
-  const from = h('input', { type: 'date', 'aria-label': t('Du') }), to = h('input', { type: 'date', 'aria-label': t('Au') });
-  const out = h('div', {}), more = h('button', { class: 'ghost', hidden: true }, t('Plus de résultats'));
-  let list = [], cursor = null;
-  const run = async reset => {
-    if (reset) { list = []; cursor = null; out.replaceChildren(); }
-    const p = new URLSearchParams({ limit: 60 });
-    if (q.value.trim()) p.set('q', q.value.trim());
-    if (kind.value) p.set('kind', kind.value);
-    if (person.value.trim()) p.set('person', person.value.trim());
-    if (utc(from.value) != null) p.set('from', utc(from.value));
-    if (utc(to.value) != null) p.set('to', utc(to.value) + day);
-    if (cursor) { p.set('after_t', cursor.t); p.set('after_p', cursor.path); }
-    try {
-      const r = await K.api(A + 'search?' + p);
-      if (reset && !r.items.length) out.append(h('p', { class: 'muted' }, t('Aucun résultat.')));
-      const g = h('div', { class: 'photos' }); K.tiles(g, list, r.items); out.append(g);
-      cursor = r.next; more.hidden = !r.next;
-    } catch (e) { K.toast(e.message); }
-  };
-  more.onclick = () => run(false);
-  const search = h('section', { class: 'card wide' }, h('h2', {}, t('Recherche')),
-    h('form', { class: 'bar', onsubmit: ev => { ev.preventDefault(); run(true); } }, q, kind, person, from, to, h('button', {}, t('Chercher'))), out, h('p', {}, more));
 
   // ── Temps : un fil continu, jour par jour, du plus récent au plus ancien ──
   const streamList = []; // une seule liste pour tout le fil : la visionneuse passe d'un jour au suivant
@@ -113,7 +85,7 @@ export default async function library(root, K) {
   const dups = h('section', { class: 'card wide' }, h('h2', {}, t('Doublons')), h('p', { class: 'muted' }, t('Images identiques ou presque (recadrage, recompression). Cochez ce que vous voulez supprimer, en une seule action : rien n\'est supprimé sans votre confirmation.')), h('p', {}, dupBtn), dupBox);
 
   // ── Onglets : une vue à la fois (le fil du temps est long, la carte a besoin de place) ──
-  const views = [['time', 'Temps', tl], ['map', 'Carte', mapSection], ['search', 'Recherche', search], ['dups', 'Doublons', dups]];
+  const views = [['time', 'Temps', tl], ['map', 'Carte', mapSection], ['dups', 'Doublons', dups]];
   const tabs = h('div', { class: 'bar', role: 'tablist' }, views.map(([id, label]) => h('button', { role: 'tab', id: 'lib-tab-' + id, 'aria-selected': 'false', onclick: () => pick(id) }, t(label))));
   const pick = id => {
     views.forEach(([k, , el]) => { el.hidden = k !== id; mem.hidden = id !== 'time'; tabs.querySelector('#lib-tab-' + k).setAttribute('aria-selected', String(k === id)); tabs.querySelector('#lib-tab-' + k).className = k === id ? '' : 'ghost'; });

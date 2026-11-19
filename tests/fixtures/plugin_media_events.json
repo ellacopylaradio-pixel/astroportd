@@ -120,5 +120,151 @@
     "content": "Un résumé é",
     "id": "3870793358fb58a2686d4aa9f5adf3044aaffbcaa8d7c0fc2bac5f4c07c32112",
     "sig": "6e9a07adb028b7494f00cd07d39e4fb1b1a9b700b91b86cf824f3f593a2b66e05d249495faac5cafdc29dfa0602c4f2accc5d0c62220bb0145cc6dbbdaad813c"
+  },
+  "music": {
+    "pubkey": "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e",
+    "created_at": 1794000000,
+    "kind": 21,
+    "tags": [
+      [
+        "title",
+        "Artiste B — Titre Deux"
+      ],
+      [
+        "url",
+        "/ipfs/bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"
+      ],
+      [
+        "m",
+        "audio/mpeg"
+      ],
+      [
+        "imeta",
+        "url /ipfs/bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+        "m audio/mpeg",
+        "x bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "size 4000000",
+        "duration 245.000",
+        "bitrate 130612",
+        "image /ipfs/bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy",
+        "encrypted uenc-v2"
+      ],
+      [
+        "size",
+        "4000000"
+      ],
+      [
+        "duration",
+        "245"
+      ],
+      [
+        "published_at",
+        "1794000000"
+      ],
+      [
+        "x",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "encrypted",
+        "uenc-v2"
+      ],
+      [
+        "t",
+        "music"
+      ],
+      [
+        "t",
+        "regular"
+      ],
+      [
+        "-"
+      ],
+      [
+        "L",
+        "genre"
+      ],
+      [
+        "L",
+        "license"
+      ],
+      [
+        "artist",
+        "Artiste B"
+      ],
+      [
+        "image",
+        "/ipfs/bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy"
+      ],
+      [
+        "album",
+        "Mon Mix"
+      ],
+      [
+        "album_artist",
+        "DJ Test"
+      ],
+      [
+        "track_number",
+        "2"
+      ],
+      [
+        "t",
+        "private-copy"
+      ],
+      [
+        "l",
+        "private-copy-cpi-l122-5",
+        "license"
+      ],
+      [
+        "i",
+        "youtube:bbbbbbbbbbb"
+      ]
+    ],
+    "content": "",
+    "id": "bbb8ddd7b2e16ae1fc00edf9e061f8ab48b8f5cbdd4cafa78c74ea4d3af3761a",
+    "sig": "5f0094e3c15e3b3d688fed6ab01d9abea9b463686fa1c0a62afb3438311d0446c681786bf20d185433f787272037cd9ae72bd3b75901ffda30575a271b7dab7c"
+  },
+  "playlist": {
+    "pubkey": "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e",
+    "created_at": 1794000001,
+    "kind": 30005,
+    "tags": [
+      [
+        "d",
+        "mix:mixmixmix01"
+      ],
+      [
+        "title",
+        "Mon Mix"
+      ],
+      [
+        "t",
+        "music"
+      ],
+      [
+        "t",
+        "mix"
+      ],
+      [
+        "-"
+      ],
+      [
+        "description",
+        "Mix de DJ Test"
+      ],
+      [
+        "i",
+        "youtube:mixmixmix01"
+      ],
+      [
+        "e",
+        "bbb8ddd7b2e16ae1fc00edf9e061f8ab48b8f5cbdd4cafa78c74ea4d3af3761a"
+      ]
+    ],
+    "content": "",
+    "id": "5d4752128dcff4ad83c098b8f5b0f477e5358f92f0a02efbdffa27c4b1e75a2d",
+    "sig": "0b89a5f980b5682beb5ee1c5b1a6d8cf53b56c514d43274dbe38de11002d56f41793f2de75dc11aeeef347eae89e9d03e073c60662f3c7a6bb49a2a63f4ff2e4"
   }
 }

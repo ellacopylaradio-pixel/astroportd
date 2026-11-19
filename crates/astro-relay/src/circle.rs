@@ -143,11 +143,11 @@ impl DbCircle {
                     let (owner, friend) = row?;
                     n1.entry(owner).or_default().insert(friend);
                 }
-                // N¹ universel : le dernier kind 3 de chaque auteur de vidéo (kinds 21/22) stocké ici, qu'il soit hébergé
+                // N¹ universel : le dernier kind 3 de chaque auteur de vidéo ou de liste de vidéos (kinds 21/22/30005) stocké ici, qu'il soit hébergé
                 // ou d'une station distante de la constellation. L'auteur est « ami » de ceux qu'il suit (tags `p`).
                 let mut stmt = c.prepare(
                     "SELECT c.pubkey, c.tags FROM nostr_events c WHERE c.kind = 3 \
-                       AND c.pubkey IN (SELECT DISTINCT pubkey FROM nostr_events WHERE kind IN (21, 22)) \
+                       AND c.pubkey IN (SELECT DISTINCT pubkey FROM nostr_events WHERE kind IN (21, 22, 30005)) \
                        AND c.created_at = (SELECT MAX(created_at) FROM nostr_events WHERE pubkey = c.pubkey AND kind = 3)",
                 )?;
                 for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {

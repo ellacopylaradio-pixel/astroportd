@@ -1,7 +1,7 @@
 //! **Blobs publics** : des images en clair (avatar, bandeau…) que n'importe quelle station peut servir à `GET /ipfs/<cid>`.
 //!
 //! Le CID est l'empreinte des octets (CIDv1 `raw` + sha2-256) : un lecteur peut vérifier ce qu'une passerelle lui rend, et une station
-//! qui n'a pas l'image la rapatrie auprès de ses pairs (`/astro/blob/1.0.0`, empreinte vérifiée) avant de la servir. Si la station
+//! qui n'a pas l'image la rapatrie auprès de ses pairs (`/astro/blob/1.1.0`, empreinte vérifiée) avant de la servir. Si la station
 //! d'origine s'éteint, l'image reste servie par toutes celles qui l'ont vue passer.
 //!
 //! **Liste explicite** : seuls les CID inscrits dans `public_blobs` sont servis en clair. Les blobs chiffrés de l'uCloud, les parts

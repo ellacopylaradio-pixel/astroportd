@@ -59,6 +59,15 @@ enum Command {
         #[arg(long)]
         models: Option<PathBuf>,
     },
+    /// Modèles de la recherche multimédia (texte des images, recherche d'images, sens des textes, parole) : liste, installation
+    /// vérifiée par SHA-256, retrait. Une petite station peut aussi confier ce calcul à un Capitaine ami (service `ai-index`).
+    Models {
+        /// Dossier des modèles (défaut : `~/.zen/astroportd/models`).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
     /// Génère une clé de réseau privé `swarm.key` pour une constellation (à copier sur chaque station).
     SwarmKey,
     /// Remplit le uCloud d'un compte depuis un dossier d'un autre serveur WebDAV (Nextcloud, ownCloud, une autre station) :
@@ -549,6 +558,34 @@ enum TunnelAction {
 }
 
 #[derive(Subcommand)]
+enum ModelsAction {
+    /// Liste le catalogue et ce qui est installé.
+    List,
+    /// Télécharge un modèle (`astroportd models add siglip2-base`) ; rien n'est gardé sans le bon SHA-256.
+    Add {
+        /// Identifiant du catalogue.
+        id: String,
+    },
+    /// Supprime les fichiers d'un modèle.
+    Remove {
+        /// Identifiant du catalogue.
+        id: String,
+    },
+    /// Mesure la vitesse de cette machine avec les modèles installés : une photo, une recherche, un document. Sans fichier,
+    /// une photo d'essai est fabriquée.
+    Bench {
+        /// Photos (JPEG ou PNG) à utiliser.
+        files: Vec<PathBuf>,
+        /// Essais par tâche.
+        #[arg(long, default_value_t = 5)]
+        runs: usize,
+        /// Fils de calcul (0 = au choix d'ONNX Runtime), comme `serve --index-threads`.
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+    },
+}
+
+#[derive(Subcommand)]
 enum PluginAction {
     /// Liste les plugins chargés (et ceux qui sont refusés, avec la raison).
     List,
@@ -949,6 +986,7 @@ async fn run(cli: Cli) -> Result<(), Failure> {
             print!("{}", astro_p2p::generate_swarm_key()?);
             Ok(())
         }
+        Command::Models { dir, action } => models_cmd(dir, action).await,
         Command::FaceCheck { models } => face_check(models),
         Command::EmbedCheck { models } => embed_check(models),
         Command::Replay { db, page_size, from, hosted, rounds, blobs, secrets, game_dir } => {
@@ -1791,6 +1829,57 @@ fn face_check(_: Option<PathBuf>) -> Result<(), Failure> {
     println!("  ✘ ce binaire est compilé sans la fonction `onnx` → cargo build --release --features onnx");
     println!("    (ou utilisez un service d'inférence : serve --face-engine http://…)");
     Err("l'inférence locale n'est pas disponible dans ce binaire".into())
+}
+
+/// `astroportd models …`.
+async fn models_cmd(dir: Option<PathBuf>, action: ModelsAction) -> Result<(), Failure> {
+    use astro_index::catalog::{Model, models_dir};
+    use astroportd::models;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dir = dir.or_else(|| models_dir(None, home.as_deref())).ok_or("dossier des modèles inconnu : --dir")?;
+    let find = |id: &str| Model::find(id).ok_or_else(|| format!("modèle « {id} » inconnu (astroportd models list)"));
+    match action {
+        ModelsAction::List => print!("{}", models::list(&dir)),
+        ModelsAction::Add { id } => {
+            let gateway = std::env::var("ASTRO_IPFS_GATEWAY").unwrap_or_else(|_| models::DEFAULT_GATEWAY.to_owned());
+            for note in models::add(find(&id)?, &dir, Some(&gateway), &astroportd::fetch::FetchLimits::new(0)).await? {
+                println!("  ✔ {note}");
+            }
+        }
+        ModelsAction::Remove { id } => println!("{} : {} fichier(s) supprimé(s)", id, models::remove(find(&id)?, &dir)?),
+        ModelsAction::Bench { files, runs, threads } => models_bench(&dir, &files, runs, threads).await?,
+    }
+    Ok(())
+}
+
+/// `astroportd models bench` : charge les moteurs installés et mesure.
+#[cfg(feature = "onnx")]
+async fn models_bench(dir: &std::path::Path, files: &[PathBuf], runs: usize, threads: usize) -> Result<(), Failure> {
+    use astroportd::models;
+    let mut photos = Vec::new();
+    for f in files {
+        let mime = if f.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")) { "image/png" } else { "image/jpeg" };
+        photos.push((mime.to_owned(), bytes::Bytes::from(std::fs::read(f).map_err(|e| format!("{} : {e}", f.display()))?)));
+    }
+    if photos.is_empty() {
+        photos.push(("image/jpeg".to_owned(), bytes::Bytes::from(models::sample_photo())));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let lib = astro_facecloud::onnx::check_library(std::env::var("ORT_DYLIB_PATH").ok().as_deref(), home.as_deref());
+    let start = std::time::Instant::now();
+    let (ix, problems) = astro_index::LocalIndexer::load(dir, lib.path.as_deref().filter(|_| lib.problem.is_none()), threads);
+    let load_ms = start.elapsed().as_secs_f64() * 1000.0;
+    for p in problems {
+        eprintln!("  ✘ {p}");
+    }
+    let measures = models::bench(&ix, &photos, runs).await?;
+    print!("{}", models::report(load_ms, &measures, models::peak_mb()));
+    Ok(())
+}
+
+#[cfg(not(feature = "onnx"))]
+async fn models_bench(_: &std::path::Path, _: &[PathBuf], _: usize, _: usize) -> Result<(), Failure> {
+    Err("ce binaire est compilé sans l'inférence locale (cargo build --release --features onnx)".into())
 }
 
 /// `astroportd embed-check` : dit ce qui manque pour calculer les embeddings de BRO dans le processus, puis en fait un essai.

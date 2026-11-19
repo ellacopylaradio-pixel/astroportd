@@ -544,6 +544,48 @@ CREATE TABLE IF NOT EXISTS key_links (
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS key_links_b ON key_links(b);
 
+-- Médiathèque (CACHE LOCAL, rejouable) : résumé de chaque fiche `<nom>.media.json` du uCloud (plugin `media`), relu quand le CID
+-- de la fiche change (`cid`) ; `item` NULL = fiche illisible. Une base rejouée le reconstruit à la première ouverture de l'écran.
+CREATE TABLE IF NOT EXISTS media_index (
+  owner_hex TEXT NOT NULL,
+  path      TEXT NOT NULL,
+  cid       TEXT NOT NULL,
+  item      TEXT,
+  PRIMARY KEY (owner_hex, path)
+) STRICT, WITHOUT ROWID;
+
+-- Médiathèque des amis (CACHE LOCAL) : vidéos et morceaux qu'un proche réciproque partage avec son cercle N¹ (kinds 21/22),
+-- lus chez sa station au nom du membre (`src/friends_media.rs`) ; `x` : empreinte du fichier en clair. Relu au plus toutes les
+-- 10 minutes ; `friend_media_sync` garde la date et l'erreur de la dernière lecture (un ami hors ligne garde sa dernière liste).
+CREATE TABLE IF NOT EXISTS friend_media (
+  owner_hex  TEXT NOT NULL,
+  author     TEXT NOT NULL,
+  event_id   TEXT NOT NULL,
+  x          TEXT NOT NULL,
+  cid        TEXT,                    -- blob chiffré désigné (`url /ipfs/<cid>`) : les copies d'un même blob se servent entre elles
+  item       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (owner_hex, event_id)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS friend_media_sync (
+  owner_hex TEXT NOT NULL,
+  author    TEXT NOT NULL,
+  at        INTEGER NOT NULL,
+  error     TEXT,
+  PRIMARY KEY (owner_hex, author)
+) STRICT, WITHOUT ROWID;
+-- Copies de médias entre amis (ÉTAT LOCAL) : `asked` = ce qu'un membre d'ici a demandé (et le refus éventuel) ; `served` = ce
+-- qu'un membre d'ici a envoyé, pour ne pas renvoyer un film à chaque clic (6 h).
+CREATE TABLE IF NOT EXISTS media_requests (
+  side      TEXT NOT NULL CHECK (side IN ('asked', 'served')),
+  owner_hex TEXT NOT NULL,
+  peer      TEXT NOT NULL,
+  x         TEXT NOT NULL,
+  at        INTEGER NOT NULL,
+  error     TEXT,
+  PRIMARY KEY (side, owner_hex, peer, x)
+) STRICT, WITHOUT ROWID;
+
 -- Caches et états mutables divers (jamais purgés par la maintenance nocturne).
 CREATE TABLE IF NOT EXISTS kv (
   scope      TEXT NOT NULL,
@@ -688,4 +730,64 @@ CREATE TABLE IF NOT EXISTS site_visits (
   path TEXT NOT NULL,
   hits INTEGER NOT NULL,
   PRIMARY KEY (hex, day, path)
+) STRICT, WITHOUT ROWID;
+
+-- ─── Recherche multimédia (astro-index) : ÉTAT LOCAL recalculable ───
+-- Tiré de contenus DÉCHIFFRÉS : jamais publié en clair (les paquets d'index sauvegardés chez les amis sont chiffrés). Clé : l'empreinte
+-- du clair (`sha_plain` d'ucloud_entries), qui survit aux renommages. Un modèle différent (`model_sha`) rend ses vecteurs incomparables :
+-- la ligne est alors recalculée. Les vecteurs de texte (384 ou 1024 dimensions selon E5 ou bge-m3) arriveront avec leur lot.
+CREATE TABLE IF NOT EXISTS search_index (
+  owner_hex  TEXT NOT NULL,
+  sha        TEXT NOT NULL,
+  task       TEXT NOT NULL CHECK (task IN ('ocr','vision','text','speech')),
+  state      TEXT NOT NULL CHECK (state IN ('pending','done','failed','skipped')),
+  model_id   TEXT,
+  model_sha  TEXT,
+  via        TEXT,                      -- NULL = calculé ici ; PeerID = station amie (délégation acceptée par le membre)
+  tries      INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (owner_hex, sha, task)
+) STRICT, WITHOUT ROWID;
+
+-- Images vues par SigLIP : une photo (t_ms = 0) ou les images clés d'une vidéo (t_ms = instant). `vis_id` = clé de search_vision_vectors.
+CREATE TABLE IF NOT EXISTS search_frames (
+  vis_id    INTEGER PRIMARY KEY,
+  owner_hex TEXT NOT NULL,
+  sha       TEXT NOT NULL,
+  t_ms      INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (owner_hex, sha, t_ms)
+) STRICT;
+CREATE VIRTUAL TABLE IF NOT EXISTS search_vision_vectors USING vec0(
+  vis_id    INTEGER PRIMARY KEY,
+  owner_hex TEXT PARTITION KEY,
+  embedding FLOAT[768] DISTANCE_METRIC=cosine
+);
+
+-- Texte cherchable mot à mot. Toute requête filtre sur owner_hex. `src` : 'ocr' (images, PDF), 'speech' (transcription, t_ms = instant)
+-- ou 'fiche' (fiche de la Médiathèque, `media_index` : `ref` = chemin de la fiche, `sha` = empreinte du fichier décrit, tenue dans la
+-- même transaction que media_index). Le `sha` relie les trois au même fichier : un film a sa fiche, ses images clés, sa parole.
+-- Les compagnons d'une fiche (affiche, pochette, .vtt, la fiche elle-même : `media::NOT_COMPANION_SQL`) ne sont pas indexés à part.
+CREATE VIRTUAL TABLE IF NOT EXISTS search_text USING fts5(
+  body, owner_hex UNINDEXED, sha UNINDEXED, src UNINDEXED, t_ms UNINDEXED, ref UNINDEXED,
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Lecture des documents décidée par le Capitaine (état LOCAL) : une ligne par MULTIPASS dont il a changé le réglage ; sans ligne,
+-- le réglage par défaut de la station (`kv` options/search_index : { enabled, default }) s'applique. 0 = rien de ce compte n'est lu.
+CREATE TABLE IF NOT EXISTS index_members (
+  owner_hex  TEXT PRIMARY KEY,
+  enabled    INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+-- Cerveau partagé : le membre accepte (Mon compte › Lecture de vos documents) que la station confie ses fichiers, en mémoire, à
+-- des stations de Capitaines amis pour les tâches listées ; plusieurs stations se partagent la charge (la moins chargée d'abord).
+-- Sans ligne ici, rien ne quitte la station.
+CREATE TABLE IF NOT EXISTS index_delegation (
+  owner_hex   TEXT NOT NULL,
+  peer        TEXT NOT NULL,            -- PeerID de la station amie
+  label       TEXT NOT NULL,            -- nom montré au membre
+  tasks       TEXT NOT NULL,            -- 'ocr,vision' : ce qu'il accepte d'envoyer
+  accepted_at INTEGER NOT NULL,
+  PRIMARY KEY (owner_hex, peer)
 ) STRICT, WITHOUT ROWID;

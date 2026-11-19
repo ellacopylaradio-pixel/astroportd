@@ -31,6 +31,14 @@ export default c => {
   // Boutons de la visionneuse pour la photo `it`.
   const actions = (it, isImg) => [
     ...(isImg ? [[-1, '↺', 'Tourner vers la gauche'], [1, '↻', 'Tourner vers la droite']].map(([q, g, l]) => h('button', { class: 'ghost', 'aria-label': t(l), title: t(l), onclick: () => turn([it.path], q) }, g)) : []),
+    copyText(it),
     h('button', { class: 'ghost danger', onclick: () => remove([it.path]) }, t('Supprimer'))];
+  // « Copier le texte » : seulement si la station a lu un texte dans ce fichier (OCR).
+  function copyText(it) {
+    const b = h('button', { class: 'ghost', hidden: true }, t('Copier le texte'));
+    b.onclick = () => navigator.clipboard.writeText(b.dataset.text).then(() => toast(t('Texte copié')), () => toast(t('Copie impossible')));
+    api('/api/v1/ucloud/text?path=' + encodeURIComponent(it.path)).then(r => { if (r.text) { b.dataset.text = r.text; b.hidden = false; } }, () => {});
+    return b;
+  }
   return { turn, remove, actions };
 };

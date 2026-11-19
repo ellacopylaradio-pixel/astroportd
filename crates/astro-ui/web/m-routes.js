@@ -15,6 +15,8 @@ const R = [
   ['/bro', 'm-bro.js', 'me', 'home', null, '/', 'Assistant'],
   ['/cloud', null, 'me', 'files', 'Dossiers', null, 'Fichiers'],
   ['/library', 'm-library.js', 'me', 'files', 'Photos', null, 'Photos'],
+  ['/media', 'm-media.js', 'me', 'files', 'Médiathèque', null, 'Médiathèque'],
+  ['/find', 'm-find.js', 'me', 'files', null, null, 'Recherche'],
   ['/people', 'm-contacts.js', 'me', 'people', 'Carnet', null, 'Proches'],
   ['/chat', 'm-chat.js', 'me', 'people', 'Conversations', null, 'Conversations'],
   ['/people/tri', 'm-people.js', 'me', 'people', null, '/people', 'Trier les visages'],

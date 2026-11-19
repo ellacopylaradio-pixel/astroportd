@@ -28,6 +28,9 @@ pub const SAMPLE_KINDS: [u32; 6] = [0, 1, 3, 10_002, 30_023, 30_800];
 
 /// Qui fournit un fichier : PeerID des stations qui en ont une copie.
 pub type ProviderFn = Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<Vec<String>, String>> + Send>> + Send + Sync>;
+/// Qui détient **plusieurs** fichiers à la fois (sonde groupée du maillage) : `CID → PeerID des stations qui l'ont`. Un
+/// CID absent de la réponse n'a pas pu être cherché ainsi (il passe alors par [`ProviderFn`]).
+pub type HoldersFn = Arc<dyn Fn(Vec<String>) -> Pin<Box<dyn Future<Output = HashMap<String, Vec<String>>> + Send>> + Send + Sync>;
 /// Les stations de la constellation, relues à chaque passage.
 pub type PeersFn = Arc<dyn Fn() -> Vec<Peer> + Send + Sync>;
 
@@ -56,13 +59,20 @@ pub struct Replicator<C: RelayClient> {
     client: C,
     peers: PeersFn,
     providers: Option<ProviderFn>,
+    holders: Option<HoldersFn>,
     config: ReplicationConfig,
 }
 
 impl<C: RelayClient> Replicator<C> {
     /// `providers` : recherche des stations qui détiennent un CID (absent : les médias ne sont pas mesurés).
     pub fn new(db: Arc<Db>, client: C, peers: PeersFn, providers: Option<ProviderFn>, config: ReplicationConfig) -> Self {
-        Self { db, client, peers, providers, config }
+        Self { db, client, peers, providers, holders: None, config }
+    }
+
+    /// Recherche groupée des fichiers (une sonde par station pour tout l'échantillon) avant la recherche fichier par fichier.
+    pub fn with_holders(mut self, holders: HoldersFn) -> Self {
+        self.holders = Some(holders);
+        self
     }
 
     async fn owners(&self) -> Result<Vec<String>, SyncError> {
@@ -76,15 +86,15 @@ impl<C: RelayClient> Replicator<C> {
             .await?)
     }
 
-    async fn sample_events(&self, owner: &str) -> Result<Vec<String>, SyncError> {
+    async fn sample_events(&self, owner: &str) -> Result<Vec<(String, u64)>, SyncError> {
         let (owner, n) = (owner.to_owned(), i64::try_from(self.config.events_per_owner).unwrap_or(30));
         let kinds = SAMPLE_KINDS.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         Ok(self
             .db
             .readers()
             .read(move |c| {
-                let mut stmt = c.prepare(&format!("SELECT id FROM nostr_events WHERE pubkey = ?1 AND kind IN ({kinds}) ORDER BY created_at DESC LIMIT ?2"))?;
-                Ok(stmt.query_map(rusqlite::params![owner, n], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?)
+                let mut stmt = c.prepare(&format!("SELECT id, created_at FROM nostr_events WHERE pubkey = ?1 AND kind IN ({kinds}) ORDER BY created_at DESC LIMIT ?2"))?;
+                Ok(stmt.query_map(rusqlite::params![owner, n], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?.collect::<Result<Vec<_>, _>>()?)
             })
             .await?)
     }
@@ -113,8 +123,11 @@ impl<C: RelayClient> Replicator<C> {
         let owners = self.owners().await?;
         // Échantillon de tous les membres, puis un seul aller-retour par relai.
         let mut samples: HashMap<String, Vec<String>> = HashMap::new();
+        let mut dated: HashMap<String, u64> = HashMap::new();
         for o in &owners {
-            samples.insert(o.clone(), self.sample_events(o).await?);
+            let sample = self.sample_events(o).await?;
+            dated.extend(sample.iter().cloned());
+            samples.insert(o.clone(), sample.into_iter().map(|(id, _)| id).collect());
         }
         let all_ids: Vec<String> = samples.values().flatten().cloned().collect::<HashSet<_>>().into_iter().collect();
         // Par relai : `Ok(ids présents)` ou la raison de l'échec.
@@ -124,6 +137,24 @@ impl<C: RelayClient> Replicator<C> {
             let mut failure = None;
             for chunk in all_ids.chunks(astro_nostr_proto::filter::MAX_LIST_LEN) {
                 let filter = Filter { ids: Some(chunk.to_vec()), ..Filter::default() };
+                // NIP-77 d'abord : des empreintes de plages au lieu des événements entiers, pour savoir seulement s'ils y sont.
+                let local: Vec<(u64, String)> = chunk.iter().map(|id| (dated.get(id).copied().unwrap_or(0), id.clone())).collect();
+                match tokio::time::timeout(self.config.timeout, self.client.sync(&peer.target(), &filter, &local)).await {
+                    Ok(Ok(r)) => {
+                        let gone: HashSet<&str> = r.gone.iter().map(String::as_str).collect();
+                        present.extend(chunk.iter().filter(|i| !gone.contains(i.as_str())).cloned());
+                        continue;
+                    }
+                    Ok(Err(crate::client::ClientError::Unsupported(_))) => {}
+                    Ok(Err(e)) => {
+                        failure = Some(e.to_string());
+                        break;
+                    }
+                    Err(_) => {
+                        failure = Some("délai dépassé".to_owned());
+                        break;
+                    }
+                }
                 match tokio::time::timeout(self.config.timeout, self.client.fetch(&peer.target(), &filter)).await {
                     Ok(Ok(events)) => present.extend(events.into_iter().map(|e| e.id)),
                     Ok(Err(e)) => {
@@ -175,13 +206,25 @@ impl<C: RelayClient> Replicator<C> {
 
     /// Fichiers du membre fournis par d'autres stations (`null` quand les médias ne sont pas mesurables).
     async fn media_of(&self, owner: &str, peers: &[Peer]) -> Value {
-        let Some(lookup) = &self.providers else { return Value::Null };
+        if self.providers.is_none() && self.holders.is_none() {
+            return Value::Null;
+        }
         let Ok(cids) = self.sample_files(owner).await else { return Value::Null };
         let ids: HashSet<&str> = peers.iter().map(|p| p.node_id.as_str()).collect();
         let mut per_peer: HashMap<String, usize> = HashMap::new();
         let (mut replicated, mut failed) = (0usize, 0usize);
+        // D'abord une sonde groupée par station pour tout l'échantillon ; le reste, fichier par fichier.
+        let grouped = match &self.holders {
+            Some(h) => tokio::time::timeout(self.config.timeout, h(cids.clone())).await.unwrap_or_default(),
+            None => HashMap::new(),
+        };
         for cid in &cids {
-            match tokio::time::timeout(self.config.timeout, lookup(cid.clone())).await {
+            let found = match (grouped.get(cid), &self.providers) {
+                (Some(found), _) => Ok(Ok(found.clone())),
+                (None, Some(lookup)) => tokio::time::timeout(self.config.timeout, lookup(cid.clone())).await,
+                (None, None) => Ok(Err("non cherché".to_owned())),
+            };
+            match found {
                 Ok(Ok(found)) => {
                     let here: HashSet<&str> = found.iter().map(String::as_str).filter(|p| ids.contains(p)).collect();
                     replicated += usize::from(!here.is_empty());

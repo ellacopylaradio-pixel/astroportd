@@ -182,7 +182,35 @@ pub(super) fn crawl(p: &Parts<'_>, relay_client: &Arc<astroportd::p2p_relay::P2p
             });
             let measured = providers.is_some();
             let config = astro_sync::ReplicationConfig { own_node_id: services_peer.clone(), ..astro_sync::ReplicationConfig::default() };
-            let replicator = Arc::new(astro_sync::Replicator::new(db.clone(), client.clone(), peers_fn, providers, config));
+            let mut replicator = astro_sync::Replicator::new(db.clone(), client.clone(), peers_fn, providers, config);
+            // Les fichiers échangeables par le maillage : une sonde groupée (`HASN`) par station pour tout l'échantillon, au lieu
+            // d'un `HAS` par fichier et par station.
+            if let Some(handle) = p2p_handle.clone() {
+                let swarm = a.swarm_dir.clone().or_else(default_swarm_dir);
+                replicator = replicator.with_holders(Arc::new(move |cids: Vec<String>| {
+                    let (handle, swarm) = (handle.clone(), swarm.clone());
+                    Box::pin(async move {
+                        let raw: Vec<String> = cids.into_iter().filter(|c| c.starts_with("bafkrei")).collect();
+                        let mut found: std::collections::HashMap<String, Vec<String>> = raw.iter().map(|c| (c.clone(), Vec::new())).collect();
+                        let peers = swarm.as_deref().map(astro_sync::read_peers).unwrap_or_default();
+                        let probes = peers.into_iter().filter_map(|p| p.node_id.parse::<astro_p2p::PeerId>().ok().map(|id| (p.node_id, id))).map(|(name, id)| {
+                            let (handle, raw) = (handle.clone(), raw.clone());
+                            async move { (name, astro_p2p::blob::has_many(&handle, id, &raw, Duration::from_secs(8)).await) }
+                        });
+                        for (name, answer) in futures_util::future::join_all(probes).await {
+                            if let Ok(bits) = answer {
+                                for (cid, held) in raw.iter().zip(bits) {
+                                    if held {
+                                        found.entry(cid.clone()).or_default().push(name.clone());
+                                    }
+                                }
+                            }
+                        }
+                        found
+                    })
+                }));
+            }
+            let replicator = Arc::new(replicator);
             let alert_bus = activity.clone();
             let on_pass: Arc<dyn Fn(Result<usize, String>) + Send + Sync> = Arc::new(move |r| {
                 if let Err(e) = r {
@@ -297,7 +325,7 @@ pub(super) fn bro_sweep(p: &Parts<'_>, memory: &Option<Arc<Memory>>, background:
 
 /// Orchestrateur de nuit : 20h12 solaire vrai de la station.
 pub(super) async fn nightly(p: &Parts<'_>, memory: &Option<Arc<Memory>>, backup: &Arc<Backup>, billets: &Option<Arc<astroportd::billet::Billets<RpcPool<SubxtConnector>, astroportd::funds::SquidPrimal>>>, background: &mut Background) -> Result<(), Failure> {
-    let Parts { a, db, activity, stop_watch, dav, local, services_peer, node_hex, node_secret, node_publisher, .. } = p;
+    let Parts { a, db, activity, stop_watch, dav, local, services_peer, node_hex, node_secret, node_publisher, uplanet_name, .. } = p;
     if !a.no_nightly {
         let origin = match a.lat.zip(a.lon) {
             Some(c) => Some(c),
@@ -357,6 +385,8 @@ pub(super) async fn nightly(p: &Parts<'_>, memory: &Option<Arc<Memory>>, backup:
                     public_url: super::public_domain(a).map(|d| format!("https://{d}")),
                     weekly_costs: astro_core::Amount(a.weekly_costs),
                     split: astro_economy::split::SplitConfig::default(),
+                    // ẐEN seulement : la configuration d'ORIGIN est signée par une clé que tout le monde peut calculer.
+                    coop_plane: (uplanet_name != astroportd::init::ORIGIN_UPLANETNAME).then(|| uplanet_name.to_string()),
                     purge_shares: Some(purge_shares),
                     dream,
                     backup: Some(backup_night),

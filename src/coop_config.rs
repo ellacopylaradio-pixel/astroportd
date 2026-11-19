@@ -35,43 +35,100 @@ pub struct Section {
     pub title: &'static str,
     /// Clés, dans l'ordre d'affichage (celui de `cooperative_config.sh`).
     pub keys: &'static [&'static str],
-    /// Niveau de l'écran : `essential` (ce qui met la station en service), `services` (envois, paiements, API),
-    /// `experts` (fiscalité, parts, répartition : replié par défaut, rarement touché).
+    /// Niveau de l'écran, par tâche : `essential` (mettre la station en service), `money` (recevoir les dons),
+    /// `rules` (règles communes : répartition, impôt, PAF suggérée), `services` (retours des utilisateurs), `legacy` (clés que
+    /// seules les stations Astroport.ONE lisent : astroportd les publie et les garde sans s'en servir).
     pub level: &'static str,
 }
 
 /// Niveaux, dans l'ordre de l'écran.
-pub const LEVELS: &[&str] = &["essential", "services", "experts"];
+pub const LEVELS: &[&str] = &["essential", "money", "rules", "services", "legacy"];
 
-/// Sections et clés connues. Toute autre clé est refusée à l'écriture (liste blanche, comme côté UPassport).
+/// Sections et clés connues. Toute autre clé est refusée à l'écriture (liste blanche, comme côté UPassport). L'`id` est
+/// aussi l'ancre de la section dans `docs/CONFIG_COOP.md` (lien « ? » de l'écran).
 pub const SECTIONS: &[Section] = &[
     Section { id: "uplanet", title: "Nom et charte de l'UPlanet", keys: &["UPLANET_NAME", "CHARTER_VERSION", "CHARTER_TEXT"], level: "essential" },
-    Section { id: "fiscal", title: "Paramètres fiscaux", keys: &["TVA_RATE", "IS_RATE_REDUCED", "IS_RATE_NORMAL", "IS_THRESHOLD"], level: "experts" },
-    Section { id: "shares", title: "Parts coopératives", keys: &["ZENCARD_SATELLITE", "ZENCARD_CONSTELLATION", "PAF", "NCARD", "ZCARD"], level: "experts" },
-    Section { id: "3x13", title: "Règle 3×1/3 + 1 %", keys: &["TREASURY_PERCENT", "RND_PERCENT", "ASSETS_PERCENT", "CAPTAIN_BONUS_PERCENT"], level: "experts" },
-    Section { id: "oc", title: "OpenCollective", keys: &["OCSLUG", "OCAPIKEY", "OC_AUTO_CREDIT", "OC_URL_CLOUD", "OC_URL_MEMBRE", "OC_URL_SATELLITE", "OC_URL_CONSTELLATION"], level: "services" },
-    Section { id: "tiers", title: "Routage des paliers", keys: &["TIER_SLUG_SATELLITE", "TIER_SLUG_CONSTELLATION", "TIER_SLUG_LABO", "TIER_SLUG_CLOUD"], level: "experts" },
-    Section { id: "api", title: "Clés d'API", keys: &["PLANTNET_API_KEY", "GIT_HOST", "GIT_TOKEN", "GIT_OWNER"], level: "services" },
-    Section { id: "mj", title: "Mailjet", keys: &["MJ_APIKEY_PUBLIC", "MJ_APIKEY_PRIVATE", "MJ_SENDER_EMAIL"], level: "services" },
-    Section { id: "ovh", title: "DNSLink OVH", keys: &["OVH_APP_KEY", "OVH_APP_SECRET", "OVH_CONSUMER_KEY", "OVH_ZONE"], level: "essential" },
+    Section { id: "ovh", title: "Domaine de la coopérative (OVH)", keys: &["OVH_ZONE", "OVH_APP_KEY", "OVH_APP_SECRET", "OVH_CONSUMER_KEY"], level: "essential" },
     Section { id: "mesh", title: "Stations relais du maillage", keys: &["P2P_RELAYS", "ORIGIN_RELAY"], level: "essential" },
+    Section { id: "oc", title: "OpenCollective", keys: &["OCSLUG", "OCAPIKEY", "OC_AUTO_CREDIT", "OC_URL_MEMBRE", "OC_URL_CLOUD", "OC_URL_SATELLITE", "OC_URL_CONSTELLATION"], level: "money" },
+    Section { id: "tiers", title: "Routage des paliers", keys: &["TIER_SLUG_SATELLITE", "TIER_SLUG_CONSTELLATION", "TIER_SLUG_LABO"], level: "money" },
+    Section { id: "3x13", title: "Règle 3×1/3 + 1 %", keys: &["TREASURY_PERCENT", "RND_PERCENT", "ASSETS_PERCENT", "CAPTAIN_BONUS_PERCENT"], level: "rules" },
+    Section { id: "fiscal", title: "Impôt sur les sociétés", keys: &["IS_RATE_REDUCED", "IS_RATE_NORMAL", "IS_THRESHOLD"], level: "rules" },
+    Section { id: "shares", title: "PAF suggérée", keys: &["PAF"], level: "rules" },
+    Section { id: "api", title: "Retours des utilisateurs (Git)", keys: &["GIT_HOST", "GIT_OWNER", "GIT_TOKEN"], level: "services" },
+    Section { id: "legacy", title: "Stations Astroport.ONE", keys: &["TVA_RATE", "ZENCARD_SATELLITE", "ZENCARD_CONSTELLATION", "NCARD", "ZCARD", "TIER_SLUG_CLOUD", "PLANTNET_API_KEY", "MJ_APIKEY_PUBLIC", "MJ_APIKEY_PRIVATE", "MJ_SENDER_EMAIL"], level: "legacy" },
 ];
 
 /// Relai ORIGIN de la coopérative, où une station ẐEN ouverte (Village, Place publique) annonce aussi sa balise : la carte
 /// des stations y trouve toutes les UPlanet. `ORIGIN_RELAY` le change ; `none` n'annonce rien hors de sa constellation.
 pub const DEFAULT_ORIGIN_RELAY: &str = "wss://relay.copylaradio.com";
 
-/// Relai ORIGIN où annoncer la balise d'une station de `uplanet_name` ; `None` en ORIGIN (son relai commun suffit) ou si
-/// la coopérative a choisi `none`.
-pub async fn origin_relay(db: &Db, uplanet_name: &str) -> Option<String> {
+/// Relais ORIGIN, au plus : celui de la coopérative et ceux qu'ajoutent les Capitaines.
+pub const MAX_ORIGIN_RELAYS: usize = 4;
+
+/// Lit `ORIGIN_RELAY` : adresses `wss://` séparées par des espaces, des virgules ou des retours à la ligne, ou `none` seul
+/// (liste vide : ne rien annoncer hors de la constellation). Les doublons sont retirés.
+pub fn parse_origin_relays(value: &str) -> Result<Vec<String>, String> {
+    let items: Vec<&str> = value.split(|c: char| c.is_whitespace() || c == ',').filter(|s| !s.is_empty()).collect();
+    if items == ["none"] {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<String> = Vec::new();
+    for raw in items {
+        let url = raw.trim_end_matches('/');
+        if !url.strip_prefix("wss://").is_some_and(valid_domain) {
+            return Err(format!("ORIGIN_RELAY : {raw} : une adresse wss://relai.exemple.org est attendue (une par ligne), ou none seul pour ne rien annoncer hors de la constellation"));
+        }
+        if !out.iter().any(|o| o == url) {
+            out.push(url.to_owned());
+        }
+    }
+    if out.len() > MAX_ORIGIN_RELAYS {
+        return Err(format!("ORIGIN_RELAY : {MAX_ORIGIN_RELAYS} relais au plus"));
+    }
+    Ok(out)
+}
+
+/// Relais ORIGIN où annoncer la balise d'une station de `uplanet_name` : vide si la coopérative a choisi `none` ;
+/// [`DEFAULT_ORIGIN_RELAY`] si rien n'est publié (ou si la valeur est illisible). Une station **ORIGIN** annonce toujours sur
+/// [`DEFAULT_ORIGIN_RELAY`] et lui seul : c'est là que la carte des UPlanet les trouve, et la configuration d'ORIGIN est signée
+/// par une clé que tout le monde peut calculer, donc on ne la suit pas pour ce choix.
+pub async fn origin_relays(db: &Db, uplanet_name: &str) -> Vec<String> {
     if uplanet_name == crate::init::ORIGIN_UPLANETNAME {
-        return None;
+        return vec![DEFAULT_ORIGIN_RELAY.to_owned()];
     }
-    match setting(db, uplanet_name, "ORIGIN_RELAY").await {
-        Some(v) if v == "none" => None,
-        Some(v) => Some(v),
-        None => Some(DEFAULT_ORIGIN_RELAY.to_owned()),
+    match setting(db, uplanet_name, "ORIGIN_RELAY").await.map(|v| parse_origin_relays(&v)) {
+        Some(Ok(list)) => list,
+        _ => vec![DEFAULT_ORIGIN_RELAY.to_owned()],
     }
+}
+
+/// Ventilation 3×1/3 de la constellation : les taux publiés par la coopérative (`IS_RATE_REDUCED`, `IS_RATE_NORMAL`,
+/// `IS_THRESHOLD`, `CAPTAIN_BONUS_PERCENT`, `TREASURY_PERCENT`, `RND_PERCENT`, `ASSETS_PERCENT`) remplacent ceux de `base` ;
+/// une valeur absente ou illisible garde celle de `base`. Lu à chaque clôture : une modification vaut dès la semaine suivante.
+pub async fn split_config(db: &Db, uplanet_name: &str, base: astro_economy::split::SplitConfig) -> astro_economy::split::SplitConfig {
+    let Ok((_, hex)) = coop_keys(uplanet_name) else { return base };
+    let Some(stored) = load(db, &hex).await else { return base };
+    split_of(&stored.values, base)
+}
+
+/// Les taux de `values` sur `base` (sans base de données : testable). Un pourcentage décimal (« 15.5 ») devient des points
+/// de base sans flottant ; un taux au-delà de 100 % est ignoré.
+pub fn split_of(values: &BTreeMap<String, String>, base: astro_economy::split::SplitConfig) -> astro_economy::split::SplitConfig {
+    let num = |k: &str| values.get(k).and_then(|v| crate::oc_emission::cents_of_decimal(v.trim()));
+    let bp = |k: &str, d: u32| num(k).and_then(|n| u32::try_from(n).ok()).filter(|n| *n <= 10_000).unwrap_or(d);
+    let mut c = base;
+    c.is_low_bp = bp("IS_RATE_REDUCED", c.is_low_bp);
+    c.is_high_bp = bp("IS_RATE_NORMAL", c.is_high_bp);
+    c.captain_bonus_bp = bp("CAPTAIN_BONUS_PERCENT", c.captain_bonus_bp);
+    let thirds = (bp("TREASURY_PERCENT", c.treasury_bp), bp("RND_PERCENT", c.rnd_bp), bp("ASSETS_PERCENT", c.assets_bp));
+    if thirds.0 + thirds.1 + thirds.2 > 0 {
+        (c.treasury_bp, c.rnd_bp, c.assets_bp) = thirds;
+    }
+    if let Some(cents) = num("IS_THRESHOLD") {
+        c.is_threshold = astro_core::Amount(cents);
+    }
+    c
 }
 
 /// Stations relais de la constellation, au plus.
@@ -146,7 +203,7 @@ pub fn validate(key: &str, value: &str) -> Result<(), String> {
     // La charte est un texte : 6000 caractères au plus et des retours à la ligne ; toute autre valeur tient sur une ligne.
     let (max, text) = match key {
         "CHARTER_TEXT" => (6000, true),
-        "P2P_RELAYS" => (1024, true),
+        "P2P_RELAYS" | "ORIGIN_RELAY" => (1024, true),
         _ => (1024, false),
     };
     if value.len() > max || value.chars().any(|c| c.is_control() && !(text && c == '\n')) {
@@ -171,8 +228,8 @@ pub fn validate(key: &str, value: &str) -> Result<(), String> {
     if key == "P2P_RELAYS" {
         parse_relays(value)?;
     }
-    if key == "ORIGIN_RELAY" && value != "none" && !value.strip_prefix("wss://").is_some_and(|h| valid_domain(h.trim_end_matches('/'))) {
-        return Err(format!("{key} : une adresse wss://relai.exemple.org, ou none pour ne rien annoncer hors de la constellation"));
+    if key == "ORIGIN_RELAY" {
+        parse_origin_relays(value)?;
     }
     if key == "OVH_ZONE" && !value.is_empty() && !valid_domain(value) {
         return Err(format!("{key} : un nom de domaine est attendu (ex. copylaradio.com)"));
@@ -354,6 +411,22 @@ mod tests {
     }
 
     #[test]
+    fn the_published_rates_drive_the_weekly_split() {
+        let base = astro_economy::split::SplitConfig::default();
+        let v: BTreeMap<String, String> = [("IS_RATE_REDUCED", "10"), ("IS_RATE_NORMAL", "20.5"), ("IS_THRESHOLD", "30000"), ("CAPTAIN_BONUS_PERCENT", "2"), ("TREASURY_PERCENT", "50"), ("RND_PERCENT", "24"), ("ASSETS_PERCENT", "24")]
+            .into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+        let c = split_of(&v, base.clone());
+        assert_eq!((c.is_low_bp, c.is_high_bp, c.captain_bonus_bp, c.is_threshold), (1000, 2050, 200, astro_core::Amount(3_000_000)));
+        assert_eq!((c.treasury_bp, c.rnd_bp, c.assets_bp), (5000, 2400, 2400));
+        // Illisible, au-delà de 100 % ou absent : la valeur de base reste.
+        let bad: BTreeMap<String, String> = [("IS_RATE_REDUCED", "beaucoup"), ("IS_RATE_NORMAL", "150")].into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+        assert_eq!(split_of(&bad, base.clone()), base);
+        // Les pourcentages par défaut de cooperative_config.sh (33/33/33 + 1) donnent exactement la ventilation codée.
+        let legacy: BTreeMap<String, String> = [("TREASURY_PERCENT", "33"), ("RND_PERCENT", "33"), ("ASSETS_PERCENT", "33"), ("CAPTAIN_BONUS_PERCENT", "1"), ("IS_RATE_REDUCED", "15.0"), ("IS_RATE_NORMAL", "25.0"), ("IS_THRESHOLD", "42500")].into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+        assert_eq!(split_of(&legacy, base.clone()), base);
+    }
+
+    #[test]
     fn the_origin_relay_setting_is_a_wss_address_or_none() {
         assert!(validate("ORIGIN_RELAY", "wss://relay.copylaradio.com").is_ok());
         assert!(validate("ORIGIN_RELAY", "none").is_ok(), "none : ne rien annoncer hors de la constellation");
@@ -361,6 +434,11 @@ mod tests {
             assert!(validate("ORIGIN_RELAY", bad).is_err(), "{bad}");
         }
         assert!(!is_secret("ORIGIN_RELAY"), "en clair dans la configuration publiée");
+        // Plusieurs relais : celui de la coopérative et celui qu'un Capitaine ajoute, une adresse par ligne.
+        assert_eq!(parse_origin_relays("wss://relay.copylaradio.com\nwss://relai.chez-moi.org/, wss://relay.copylaradio.com").unwrap(), ["wss://relay.copylaradio.com", "wss://relai.chez-moi.org"]);
+        assert_eq!(parse_origin_relays("none").unwrap(), Vec::<String>::new());
+        assert!(parse_origin_relays("none wss://relay.copylaradio.com").is_err(), "none se suffit à lui-même");
+        assert!(parse_origin_relays("wss://a.org wss://b.org wss://c.org wss://d.org wss://e.org").is_err(), "quatre au plus");
     }
 
     #[test]
@@ -368,7 +446,11 @@ mod tests {
         assert!(SECTIONS.iter().all(|s| LEVELS.contains(&s.level)), "niveau inconnu");
         let level = |id: &str| SECTIONS.iter().find(|s| s.id == id).map(|s| s.level);
         assert_eq!(level("ovh"), Some("essential"), "le cockpit envoie ici pour activer les adresses : en tête d'écran");
-        assert_eq!((level("fiscal"), level("3x13")), (Some("experts"), Some("experts")), "la fiscalité reste repliée");
+        assert_eq!((level("fiscal"), level("3x13")), (Some("rules"), Some("rules")), "la fiscalité reste repliée");
+        // Chaque clé connue est dans une seule section (l'écran n'en perd ni n'en double aucune).
+        let all: Vec<&str> = SECTIONS.iter().flat_map(|s| s.keys.iter().copied()).collect();
+        assert!(all.iter().all(|k| all.iter().filter(|x| *x == k).count() == 1), "clé en double");
+        assert_eq!(all.len(), 40, "les 40 clés de la version précédente de l'écran, sans perte");
         assert!(LEVELS.iter().all(|l| SECTIONS.iter().any(|s| s.level == *l)), "aucun niveau vide");
     }
 

@@ -87,6 +87,54 @@ pub async fn read_relays_of(db: &Db, hex: &str) -> Vec<String> {
     astro_nostr_proto::relay_list::parse(&listed).into_iter().filter(|e| e.read).map(|e| e.url).collect()
 }
 
+impl MeshOutbox {
+    /// Lit `filter` chez la station de `author` (sa station d'accueil d'abord, puis ses relais de lecture et `--relay` ;
+    /// quatre cibles au plus : une lecture ne balaie pas l'essaim). Le défi NIP-42 est signé par `signer`, le membre qui lit :
+    /// le relai de l'ami décide lui-même de ce qu'il lui montre (ses vidéos ne vont qu'à son cercle N¹). Rend la première
+    /// réponse non vide (une autre station répond « rien » sans mentir), vide si toutes ont répondu vide, l'erreur sinon.
+    pub async fn fetch_as(&self, author: &str, filter: &astro_nostr_proto::Filter, signer: astro_sync::Signer) -> Result<Vec<Event>, String> {
+        let (mut failures, mut answered) = (Vec::new(), false);
+        for target in self.targets(author).await.into_iter().take(4) {
+            match self.client.fetch_signed(&target, filter, signer.clone()).await {
+                Ok(events) if !events.is_empty() => return Ok(events),
+                Ok(_) => answered = true,
+                Err(e) => failures.push(format!("{target} : {e}")),
+            }
+        }
+        if answered {
+            return Ok(Vec::new());
+        }
+        if failures.is_empty() {
+            failures.push("aucune station d'accueil connue".to_owned());
+        }
+        Err(failures.join(" ; "))
+    }
+}
+
+impl MeshOutbox {
+    /// Synchronise `local` (événements de `author` déjà connus) avec sa station d'accueil (Negentropy, NIP-77) : seuls les
+    /// nouveaux événements voyagent, et ceux qu'il a supprimés sont signalés. Sa station d'accueil seule fait foi ; sans
+    /// elle (inconnue ou injoignable), lecture complète par [`MeshOutbox::fetch_as`] et différence calculée ici.
+    pub async fn sync_as(&self, author: &str, filter: &astro_nostr_proto::Filter, local: &[(u64, String)], signer: astro_sync::Signer) -> Result<astro_sync::SyncResult, String> {
+        let home: Option<String> = {
+            let hex = author.to_owned();
+            self.db.readers().read(move |c| Ok(c.query_row("SELECT home_station FROM identities WHERE hex = ?1", [hex], |r| r.get::<_, Option<String>>(0)).optional()?.flatten())).await.ok().flatten()
+        };
+        if let Some(home) = home {
+            let target = format!("p2p://{}", home.split(':').next().unwrap_or_default());
+            if let Ok(r) = self.client.sync_signed(&target, filter, local, signer.clone()).await {
+                return Ok(r);
+            }
+        }
+        let events = self.fetch_as(author, filter, signer).await?;
+        let theirs: std::collections::HashSet<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        let mine: std::collections::HashSet<&str> = local.iter().map(|(_, id)| id.as_str()).collect();
+        let gone = local.iter().filter(|(_, id)| !theirs.contains(id.as_str())).map(|(_, id)| id.clone()).collect();
+        let missing = events.iter().filter(|e| !mine.contains(e.id.as_str())).cloned().collect();
+        Ok(astro_sync::SyncResult { missing, gone, negentropy: false })
+    }
+}
+
 impl Outbox for MeshOutbox {
     async fn send(&self, recipient_hex: &str, wrap: Event) -> Result<(), OutboxError> {
         let mut failures = Vec::new();

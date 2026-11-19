@@ -161,7 +161,8 @@ async fn bench_with(tag: &str, ollama: Option<&str>, tune: impl FnOnce(&mut DavC
             _ => Err(format!("section inconnue : {section}")),
         }
     })));
-    let app = astro_dav::router(dav)
+    let app = astro_dav::router(dav.clone())
+        .merge(astroportd::media::router(dav))
         .merge(site.clone().router())
         .merge(relay.router())
         .merge(astro_ui::web::static_router())
@@ -1913,4 +1914,70 @@ async fn every_route_keeps_its_access_level() {
             assert!(l.contains("member=403") || l.contains("member=401"), "route Capitaine ouverte à un membre : {l}");
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_media_library_indexes_fiches_streams_with_range_and_lets_the_owner_correct_them() {
+    let b = bench("media", None).await;
+    let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
+    let film: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    put(&b.app, &alice, "/Vidéos/Films/Chihiro (2001).mp4", &film).await;
+    put(&b.app, &alice, "/Vidéos/Films/Chihiro (2001).poster.jpg", b"\xff\xd8\xff affiche").await;
+    put(&b.app, &alice, "/Vidéos/Films/Chihiro (2001).fr.vtt", b"WEBVTT\n\n00:00.000 --> 00:01.000\nBonjour\n").await;
+    let fiche = json!({ "schema": "media/v1", "generated_at": 1, "type": "film", "file": "Chihiro (2001).mp4", "title": "Chihiro", "year": 2001,
+        "artwork": { "poster": "Chihiro (2001).poster.jpg" }, "subtitles": [{ "file": "Chihiro (2001).fr.vtt", "lang": "fr", "origin": "embedded" }],
+        "people": { "cast": [{ "name": "Rumi Hiiragi", "character": "Chihiro", "order": 0 }], "crew": [{ "name": "Hayao Miyazaki", "job": "Director" }] },
+        "technical": { "duration_s": 7500.0, "size": 200000, "mime": "video/mp4", "sha256": "a", "video": { "codec": "h264", "width": 1280, "height": 720 } },
+        "source": { "kind": "disc", "rights": "private_copy" }, "sharing": { "level": "private" } });
+    put(&b.app, &alice, "/Vidéos/Films/Chihiro (2001).media.json", fiche.to_string().as_bytes()).await;
+    put(&b.app, &alice, "/Vidéos/Films/Vacances.jpg", b"\xff\xd8\xff souvenir").await;
+
+    // Index : la fiche résumée, ses images et sous-titres à côté ; Bob ne voit rien.
+    let (s, lib) = b.get("/api/v1/ucloud/media", &alice).await;
+    assert_eq!(s, StatusCode::OK, "{lib}");
+    let item = &lib["items"][0];
+    assert_eq!((item["path"].as_str(), item["title"].as_str(), item["year"].as_i64()), (Some("/Vidéos/Films/Chihiro (2001).mp4"), Some("Chihiro"), Some(2001)));
+    assert_eq!((item["art"]["poster"].as_str(), item["subtitles"][0]["lang"].as_str(), item["directors"][0].as_str()), (Some("/Vidéos/Films/Chihiro (2001).poster.jpg"), Some("fr"), Some("Hayao Miyazaki")));
+    assert!(b.get("/api/v1/ucloud/media", &bob).await.1["items"].as_array().unwrap().is_empty());
+
+    // Rangement : ni la fiche ni ses compagnons dans la liste ni dans Photos ; le souvenir, si.
+    let (_, list) = b.get("/api/v1/ucloud/list?path=/Vidéos/Films", &alice).await;
+    let names: Vec<&str> = list["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Chihiro (2001).mp4", "Vacances.jpg"]);
+    let (_, photos) = b.get("/api/v1/ucloud/photos", &alice).await;
+    let shown: Vec<&str> = photos["items"].as_array().unwrap().iter().map(|i| i["path"].as_str().unwrap()).collect();
+    assert!(shown.contains(&"/Vidéos/Films/Vacances.jpg") && !shown.iter().any(|p| p.contains("poster")), "{shown:?}");
+
+    // Lecture en flux : une adresse par fichier lisible (pas l'affiche), Range servi en clair sans autre authentification.
+    let (s, play) = b.post("/api/v1/ucloud/media/play", &alice, json!({ "paths": ["/Vidéos/Films/Chihiro (2001).mp4", "/Vidéos/Films/Chihiro (2001).fr.vtt", "/Vidéos/Films/Chihiro (2001).poster.jpg"] })).await;
+    assert_eq!(s, StatusCode::OK, "{play}");
+    let urls = play["urls"].as_object().unwrap();
+    assert_eq!(urls.len(), 2, "l'affiche n'est pas un média : {urls:?}");
+    let url = urls["/Vidéos/Films/Chihiro (2001).mp4"].as_str().unwrap();
+    let (s, h, part) = call(&b.app, Method::GET, url, None, &[("range", "bytes=1000-1999")], vec![]).await;
+    assert_eq!((s, part.as_slice()), (StatusCode::PARTIAL_CONTENT, &film[1000..2000]));
+    assert_eq!(h[header::CACHE_CONTROL], "private, no-store");
+    let (s, h, vtt) = call(&b.app, Method::GET, urls["/Vidéos/Films/Chihiro (2001).fr.vtt"].as_str().unwrap(), None, &[], vec![]).await;
+    assert!(s.is_success() && h[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/vtt") && vtt.starts_with(b"WEBVTT"));
+    assert_eq!(call(&b.app, Method::GET, &format!("{url}x"), None, &[], vec![]).await.0, StatusCode::FORBIDDEN, "jeton altéré");
+    assert!(b.post("/api/v1/ucloud/media/play", &bob, json!({ "paths": ["/Vidéos/Films/Chihiro (2001).mp4"] })).await.1["urls"].as_object().unwrap().is_empty(), "Bob n'obtient rien chez Alice");
+
+    // Correction : les champs du formulaire, réécrits dans la fiche ; l'index suit.
+    let fpath = "/Vidéos/Films/Chihiro (2001).media.json";
+    let (s, form) = b.get(&format!("/api/v1/ucloud/media/fiche?path={}", percent_query(fpath)), &alice).await;
+    assert_eq!((s, form["cast"][0].as_str()), (StatusCode::OK, Some("Rumi Hiiragi")), "{form}");
+    let (s, r) = b.post("/api/v1/ucloud/media/edit", &alice, json!({ "path": fpath, "set": { "title": "Le Voyage de Chihiro", "keywords": ["esprits", "bains"], "genres": ["Animation", "Fantastique"] } })).await;
+    assert_eq!((s, r["item"]["title"].as_str()), (StatusCode::OK, Some("Le Voyage de Chihiro")), "{r}");
+    let (_, lib) = b.get("/api/v1/ucloud/media", &alice).await;
+    assert_eq!((lib["items"][0]["title"].as_str(), lib["items"][0]["keywords"][1].as_str()), (Some("Le Voyage de Chihiro"), Some("bains")));
+    let (_, _, raw) = call(&b.app, Method::GET, "/dav/Vid%C3%A9os/Films/Chihiro%20(2001).media.json", Some(&alice), &[], vec![]).await;
+    let written: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!((written["people"]["cast"][0]["character"].as_str(), written["schema"].as_str()), (Some("Chihiro"), Some("media/v1")), "le reste de la fiche est intact");
+    assert_eq!(b.post("/api/v1/ucloud/media/edit", &alice, json!({ "path": fpath, "set": { "technical": {} } })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(b.post("/api/v1/ucloud/media/edit", &bob, json!({ "path": fpath, "set": { "title": "pirate" } })).await.0, StatusCode::BAD_REQUEST, "Bob ne corrige pas la fiche d'Alice");
+    assert_eq!(b.get("/api/v1/ucloud/media", &alice).await.1["items"][0]["title"], "Le Voyage de Chihiro");
+}
+
+fn percent_query(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"/-_.".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }

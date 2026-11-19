@@ -88,9 +88,70 @@ impl P2pRelayClient {
 
 impl RelayClient for P2pRelayClient {
     async fn fetch(&self, relay: &str, filter: &Filter) -> Result<Vec<Event>, ClientError> {
+        self.fetch_via(&self.ws, relay, filter).await
+    }
+
+    async fn sync(&self, relay: &str, filter: &Filter, local: &[(u64, String)]) -> Result<astro_sync::SyncResult, ClientError> {
+        self.sync_via(&self.ws, relay, filter, local).await
+    }
+
+    async fn session<'a>(&'a self, relay: &'a str) -> Result<Box<dyn RelaySession + 'a>, ClientError> {
+        let inner = self.open(relay).await?;
+        Ok(Box::new(P2pSession { owner: self, relay, inner }))
+    }
+}
+
+impl P2pRelayClient {
+    /// Comme [`RelayClient::fetch`], en répondant au défi NIP-42 avec `signer` (la clé d'un membre) : le relai d'un ami ne
+    /// livre ses vidéos qu'aux clés de son cercle N¹. Mêmes tunnels, même repli.
+    pub async fn fetch_signed(&self, relay: &str, filter: &Filter, signer: astro_sync::Signer) -> Result<Vec<Event>, ClientError> {
+        let ws = self.ws.clone().with_signer(signer);
+        self.fetch_via(&ws, relay, filter).await
+    }
+
+    /// Synchronise `local` avec ce que `relay` a pour `filter` (Negentropy, NIP-77, sinon lecture complète), en répondant au
+    /// défi NIP-42 avec `signer`. Mêmes tunnels, même repli que la lecture.
+    pub async fn sync_signed(&self, relay: &str, filter: &Filter, local: &[(u64, String)], signer: astro_sync::Signer) -> Result<astro_sync::SyncResult, ClientError> {
+        let ws = self.ws.clone().with_signer(signer);
+        self.sync_via(&ws, relay, filter, local).await
+    }
+
+    async fn sync_via(&self, ws: &WsClient, relay: &str, filter: &Filter, local: &[(u64, String)]) -> Result<astro_sync::SyncResult, ClientError> {
         let target = parse_target(relay);
         let Some(peer) = target.peer else {
-            let got = self.ws.fetch(relay, filter).await;
+            let got = ws.sync_as(relay, relay, filter, local).await;
+            self.note(relay, if got.is_ok() { "direct" } else { "down" }, got.as_ref().err().map(ToString::to_string));
+            return got;
+        };
+        let primary = match &self.p2p {
+            None => Err(ClientError::Connection("maillage P2P inactif sur cette station".into())),
+            Some(handle) => match self.local_for(handle, peer).await {
+                Ok(addr) => ws.sync_as(&format!("ws://{addr}"), target.url.unwrap_or(relay), filter, local).await,
+                Err(e) => Err(e),
+            },
+        };
+        match primary {
+            Ok(r) => {
+                self.note(relay, "p2p", None);
+                Ok(r)
+            }
+            Err(e) if transport(&e) && target.url.is_some() => {
+                let url = target.url.unwrap_or_default();
+                let got = ws.sync_as(url, url, filter, local).await;
+                self.note(relay, if got.is_ok() { "wss" } else { "down" }, Some(format!("tunnel : {e}")));
+                got
+            }
+            Err(e) => {
+                self.note(relay, "down", Some(e.to_string()));
+                Err(e)
+            }
+        }
+    }
+
+    async fn fetch_via(&self, ws: &WsClient, relay: &str, filter: &Filter) -> Result<Vec<Event>, ClientError> {
+        let target = parse_target(relay);
+        let Some(peer) = target.peer else {
+            let got = ws.fetch(relay, filter).await;
             self.note(relay, if got.is_ok() { "direct" } else { "down" }, got.as_ref().err().map(ToString::to_string));
             return got;
         };
@@ -98,7 +159,7 @@ impl RelayClient for P2pRelayClient {
             None => Err(ClientError::Connection("maillage P2P inactif sur cette station".into())),
             Some(handle) => match self.local_for(handle, peer).await {
                 // L'authentification NIP-42 déclare l'adresse que le relai distant connaît, pas le port local du tunnel.
-                Ok(addr) => self.ws.fetch_as(&format!("ws://{addr}"), target.url.unwrap_or(relay), filter).await,
+                Ok(addr) => ws.fetch_as(&format!("ws://{addr}"), target.url.unwrap_or(relay), filter).await,
                 Err(e) => Err(e),
             },
         };
@@ -110,7 +171,7 @@ impl RelayClient for P2pRelayClient {
             Err(e) if transport(&e) && target.url.is_some() => {
                 let why = e.to_string();
                 let url = target.url.unwrap_or_default();
-                match self.ws.fetch(url, filter).await {
+                match ws.fetch(url, filter).await {
                     Ok(events) => {
                         self.note(relay, "wss", Some(format!("tunnel : {why}")));
                         Ok(events)
@@ -127,11 +188,6 @@ impl RelayClient for P2pRelayClient {
             }
         }
     }
-
-    async fn session<'a>(&'a self, relay: &'a str) -> Result<Box<dyn RelaySession + 'a>, ClientError> {
-        let inner = self.open(relay).await?;
-        Ok(Box::new(P2pSession { owner: self, relay, inner }))
-    }
 }
 
 /// Session du crawl sur la voie choisie à l'ouverture ; un échec en cours de route est noté dans l'état des routes.
@@ -146,6 +202,18 @@ impl RelaySession for P2pSession<'_> {
         Box::pin(async move {
             let got = self.inner.fetch(filter).await;
             if let Err(e) = &got {
+                self.owner.note(self.relay, "down", Some(e.to_string()));
+            }
+            got
+        })
+    }
+
+    fn sync<'s>(&'s mut self, filter: &'s Filter, local: &'s [(u64, String)]) -> BoxFuture<'s, Result<astro_sync::SyncResult, ClientError>> {
+        Box::pin(async move {
+            let got = RelaySession::sync(&mut self.inner, filter, local).await;
+            if let Err(e) = &got
+                && !matches!(e, ClientError::Unsupported(_) | ClientError::Closed(_))
+            {
                 self.owner.note(self.relay, "down", Some(e.to_string()));
             }
             got
@@ -245,6 +313,10 @@ pub struct SharedRelayClient(pub std::sync::Arc<P2pRelayClient>);
 impl RelayClient for SharedRelayClient {
     async fn fetch(&self, relay: &str, filter: &Filter) -> Result<Vec<Event>, ClientError> {
         self.0.fetch(relay, filter).await
+    }
+
+    async fn sync(&self, relay: &str, filter: &Filter, local: &[(u64, String)]) -> Result<astro_sync::SyncResult, ClientError> {
+        RelayClient::sync(&*self.0, relay, filter, local).await
     }
 
     async fn session<'a>(&'a self, relay: &'a str) -> Result<Box<dyn RelaySession + 'a>, ClientError> {

@@ -77,6 +77,30 @@ pub enum LibraryQuery {
     Map(MapQuery),
     /// Doublons exacts et visuels ; `true` : exacts de tous les types de fichiers (sinon photos et vidéos).
     Duplicates(bool),
+    /// Texte lu dans un fichier (OCR) : « Copier le texte » de la visionneuse.
+    Text(String),
+}
+
+/// « Lecture de vos documents » : ce que le membre consulte ou décide.
+#[derive(Debug, Clone)]
+pub enum ReadingOp {
+    /// Qui lit, où en est la lecture.
+    View,
+    /// Stations amies qui proposent la lecture (interrogées par le maillage : lent).
+    Offers,
+    /// Confier la lecture à une ou plusieurs stations amies (elles se partagent la charge).
+    Accept {
+        /// PeerID des stations choisies.
+        peers: Vec<String>,
+        /// Ce qui est confié (`ocr`).
+        tasks: Vec<String>,
+    },
+    /// Retirer une station (`Some`) ou toutes (`None`) : plus rien ne part vers elle(s).
+    Revoke(Option<String>),
+    /// Mettre en pause (`true`) ou reprendre (`false`) l'analyse de ses fichiers : ici comme chez les amis.
+    Pause(bool),
+    /// Effacer ce qui a été calculé (texte lu, photos regardées, paquet d'index) ; l'analyse est mise en pause.
+    Erase,
 }
 
 /// Opération du carnet d'adresses.
@@ -326,7 +350,7 @@ pub struct UiState<B> {
 }
 
 
-pub use ucloud::UcloudApi;
+pub use ucloud::{MediaWork, UcloudApi};
 pub use faces::FacesApi;
 pub use coop::CoopApi;
 pub use social::SocialApi;

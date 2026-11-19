@@ -25,6 +25,19 @@ const SCOPE: &str = "options";
 const KEY: &str = "p2p_bootstrap";
 /// Stations gardées au plus.
 pub const MAX_KEPT: usize = 32;
+/// Une offre de parrainage reçue par une station **déjà installée** doit venir de sa constellation : la `swarm.key` ne se
+/// change pas à chaud (il faudrait `astroportd init --join`). `plane` : `UPLANETNAME` de la station (`None` : pas de contrôle).
+pub fn check_offer_plane(offer: &crate::sponsor::Payload, plane: Option<&str>) -> Result<(), String> {
+    let theirs = offer.swarm_key.as_deref().and_then(|k| k.lines().map(str::trim).rfind(|l| !l.is_empty())).unwrap_or(crate::init::ORIGIN_UPLANETNAME);
+    match plane {
+        Some(mine) if mine != theirs => Err(format!(
+            "jeton d'une autre constellation ({}) : il sert à installer une nouvelle station (astroportd init --join), pas à relier celle-ci. Il est maintenant utilisé : demandez-en un autre si besoin",
+            if offer.swarm_key.is_some() { "ẐEN" } else { "ORIGIN" }
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Port libp2p par défaut (celui de DRAGON).
 pub const DEFAULT_PORT: u16 = 4101;
 /// Stations de l'annuaire jointes à chaque passage, au plus.
@@ -162,9 +175,14 @@ impl Mesh {
     }
 
     /// `{ dial: <adresse>, keep: bool }` (joindre, et garder si demandé), `{ keep: <adresse> }`, `{ forget: <adresse> }`.
+    /// `dial` accepte aussi un **jeton de parrainage** (`astro-join:v1|…`, donné par `astroportd parrainer`) : premier contact
+    /// d'une station déjà installée, ses stations d'amorçage sont jointes et gardées.
     pub async fn act(&self, b: &Value) -> Result<Value, String> {
         let h = self.handle.as_ref().ok_or("maillage P2P coupé sur cette station")?;
-        if let Some(addr) = b["dial"].as_str() {
+        if let Some(token) = b["dial"].as_str().map(str::trim).filter(|t| t.starts_with(crate::sponsor::TOKEN_PREFIX)) {
+            let offer = crate::sponsor::redeem(token).await?;
+            self.join_offer(h, &offer).await?;
+        } else if let Some(addr) = b["dial"].as_str() {
             let (m, peer) = parse_station(addr)?;
             if peer == h.peer_id() {
                 return Err("c'est l'adresse de cette station".into());
@@ -189,6 +207,30 @@ impl Mesh {
             return Err("action attendue : dial, keep ou forget".into());
         }
         Ok(self.view().await)
+    }
+
+    /// Joint et garde les stations d'amorçage d'une offre de parrainage, si elle vient de la même constellation.
+    async fn join_offer(&self, h: &P2pHandle, offer: &crate::sponsor::Payload) -> Result<(), String> {
+        check_offer_plane(offer, self.coop_uplanet.as_deref())?;
+        let (mut joined, mut errors) = (0, Vec::new());
+        for raw in &offer.bootstrap {
+            let Ok((m, peer)) = parse_station(raw) else { continue };
+            if peer == h.peer_id() {
+                continue;
+            }
+            match h.dial(m.clone()).await {
+                Ok(_) => {
+                    joined += 1;
+                    self.keep(m).await?;
+                }
+                Err(e) => errors.push(format!("{raw} : {e}")),
+            }
+        }
+        if joined == 0 {
+            return Err(format!("station marraine injoignable en P2P ({}) : son port 4101 est-il ouvert ? Demandez-lui un nouveau jeton une fois corrigé", if errors.is_empty() { "aucune adresse dans l'offre".to_owned() } else { errors.join(" ; ") }));
+        }
+        self.activity.publish_to(Audience::Captain, "system", "maillage", format!("parrainage : {joined} station(s) de {} jointe(s) et gardée(s)", offer.from), None);
+        Ok(())
     }
 
     async fn keep(&self, m: Multiaddr) -> Result<(), String> {
@@ -319,5 +361,15 @@ mod tests {
         db.writer().execute("UPDATE kv SET value = ?1 WHERE scope = 'options' AND key = 'p2p_bootstrap'", vec![json!(["n'importe quoi", addrs[0]]).to_string().into()]).await.unwrap();
         assert_eq!(kept(&db).await.len(), 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_sponsor_token_only_links_a_station_of_the_same_constellation() {
+        let offer = |key: Option<&str>| crate::sponsor::Payload { from: "marraine.exemple.org".into(), swarm_key: key.map(str::to_owned), bootstrap: vec![], relay: None };
+        let zen = offer(Some("/key/swarm/psk/1.0.0/\n/base16/\nabcdef\n"));
+        assert!(check_offer_plane(&zen, Some("abcdef")).is_ok(), "même swarm.key : même UPLANETNAME");
+        assert!(check_offer_plane(&zen, Some(crate::init::ORIGIN_UPLANETNAME)).unwrap_err().contains("autre constellation"));
+        assert!(check_offer_plane(&offer(None), Some(crate::init::ORIGIN_UPLANETNAME)).is_ok(), "ORIGIN parraine ORIGIN");
+        assert!(check_offer_plane(&offer(None), Some("abcdef")).is_err(), "une station ẐEN ne rejoint pas ORIGIN à chaud");
     }
 }

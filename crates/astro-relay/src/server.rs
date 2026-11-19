@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use astro_db::events::{InsertOutcome, classify, insert_event, query_events, KindClass};
 use astro_db::{Db, Statement, apply_statements};
+use astro_nostr_proto::negentropy::{Item, Negentropy, Storage};
 use astro_nostr_proto::{ClientMessage, Event, Filter, RelayMessage, kind};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
@@ -94,6 +95,17 @@ struct Conn {
     challenge: String,
     auth: AuthState,
     subs: HashMap<String, Vec<Filter>>,
+    /// Réconciliations Negentropy en cours (NIP-77).
+    negs: HashMap<String, Negentropy>,
+}
+
+/// Réponse du relai à un message Negentropy.
+fn neg_answer(neg: &mut Negentropy, sub_id: &str, message: &str) -> RelayMessage {
+    let reply = hex::decode(message).map_err(|_| "message illisible".to_owned()).and_then(|m| neg.reconcile(&m).map_err(|e| e.to_string()));
+    match reply {
+        Ok(round) => RelayMessage::NegMsg { sub_id: sub_id.to_owned(), message: hex::encode(round.next.unwrap_or_default()) },
+        Err(why) => RelayMessage::NegErr { sub_id: sub_id.to_owned(), reason: format!("closed: {why}") },
+    }
 }
 
 fn now_secs() -> u64 {
@@ -102,6 +114,12 @@ fn now_secs() -> u64 {
 
 /// Plafond d'un décompte (NIP-45) : au-delà, la réponse est marquée approximative.
 const COUNT_CAP: usize = 10_000;
+/// NIP-77 : enregistrements au plus dans une réconciliation (au-delà : `blocked`, le client découpe son filtre).
+pub const NEG_CAP: usize = 100_000;
+/// NIP-77 : réconciliations ouvertes en même temps sur une connexion.
+const NEG_MAX_OPEN: usize = 4;
+/// NIP-77 : taille d'une réponse (le reste de l'espace est résumé par une empreinte, le client redemande).
+const NEG_FRAME: usize = 512 * 1024;
 
 impl Relay {
     /// Crée le relai.
@@ -146,7 +164,7 @@ impl Relay {
         serde_json::json!({
             "name": self.config.name,
             "description": "Relais Nostr souverain astroportd (pare-feu social NIP-42)",
-            "supported_nips": [1, 9, 11, 17, 40, 42, 45, 50, 59, 70],
+            "supported_nips": [1, 9, 11, 17, 40, 42, 45, 50, 59, 70, 77],
             "software": "astroportd",
             "version": env!("CARGO_PKG_VERSION"),
             "limitation": {
@@ -170,7 +188,7 @@ impl Relay {
         if getrandom::fill(&mut challenge_bytes).is_err() {
             return;
         }
-        let mut conn = Conn { challenge: hex::encode(challenge_bytes), auth: AuthState::default(), subs: HashMap::new() };
+        let mut conn = Conn { challenge: hex::encode(challenge_bytes), auth: AuthState::default(), subs: HashMap::new(), negs: HashMap::new() };
         if !send(&mut socket, &RelayMessage::Auth(conn.challenge.clone())).await {
             return;
         }
@@ -243,7 +261,50 @@ impl Relay {
             }
             ClientMessage::Req { sub_id, filters } => self.on_req(socket, conn, sub_id, filters).await,
             ClientMessage::Count { sub_id, filters } => self.on_count(socket, conn, sub_id, filters).await,
+            ClientMessage::NegOpen { sub_id, filter, message } => self.on_neg_open(socket, conn, sub_id, filter, &message).await,
+            ClientMessage::NegMsg { sub_id, message } => {
+                let reply = match conn.negs.get_mut(&sub_id) {
+                    Some(neg) => neg_answer(neg, &sub_id, &message),
+                    None => RelayMessage::NegErr { sub_id: sub_id.clone(), reason: "closed: unknown reconciliation".into() },
+                };
+                if matches!(reply, RelayMessage::NegErr { .. }) {
+                    conn.negs.remove(&sub_id);
+                }
+                send(socket, &reply).await
+            }
+            ClientMessage::NegClose(sub_id) => {
+                conn.negs.remove(&sub_id);
+                true
+            }
         }
+    }
+
+    /// NIP-77 : ouvre une réconciliation sur les événements que **cette connexion** a le droit de lire (même contrôle qu'un `REQ`).
+    async fn on_neg_open(&self, socket: &mut WebSocket, conn: &mut Conn, sub_id: String, filter: Filter, message: &str) -> bool {
+        conn.negs.remove(&sub_id);
+        let err = |reason: &str| RelayMessage::NegErr { sub_id: sub_id.clone(), reason: reason.to_owned() };
+        if conn.negs.len() >= NEG_MAX_OPEN {
+            return send(socket, &err("blocked: too many open reconciliations")).await;
+        }
+        let events = match self.readable(conn, std::slice::from_ref(&filter), NEG_CAP + 1).await {
+            Ok(events) if events.len() > NEG_CAP => return send(socket, &err("blocked: this query is too big")).await,
+            Ok(events) => events,
+            Err(reason) => return send(socket, &err(reason)).await,
+        };
+        let items = events
+            .iter()
+            .filter_map(|e| {
+                let mut id = [0u8; 32];
+                hex::decode_to_slice(&e.id, &mut id).ok()?;
+                Some(Item { timestamp: e.created_at, id })
+            })
+            .collect();
+        let mut neg = Negentropy::new(Storage::new(items), NEG_FRAME);
+        let reply = neg_answer(&mut neg, &sub_id, message);
+        if !matches!(reply, RelayMessage::NegErr { .. }) {
+            conn.negs.insert(sub_id, neg);
+        }
+        send(socket, &reply).await
     }
 
     fn check_auth(&self, e: &Event, challenge: &str) -> Result<(), &'static str> {

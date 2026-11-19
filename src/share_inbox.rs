@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use astro_core::{ActivityBus, Audience};
 use astro_crypto::{KeySource, nip59};
-use astro_dav::adopt::{SharedFile, adopt_shared_file, sender_label};
+use astro_dav::adopt::{SharedFile, sender_label};
 use astro_dav::blob::is_cid;
 use astro_dav::{BlobStore, ManifestPublisher};
 use astro_db::Db;
@@ -39,7 +39,7 @@ const BATCH: usize = 50;
 /// Essais de rapatriement avant d'abandonner.
 const MAX_TRIES: u32 = 12;
 /// Taille maximale d'un fichier reçu (celle que le protocole de blobs accepte de servir).
-const MAX_BYTES: u64 = 1 << 30;
+const MAX_BYTES: u64 = astro_p2p::blob::MAX_BLOB_BYTES;
 
 /// Bilan d'un passage.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -221,7 +221,16 @@ impl<B: BlobStore> ShareInbox<B> {
                 let _ = prefetch(file.cid.clone(), peer).await;
             }
         }
-        if let Err(e) = self.blobs.open(&file.cid).await {
+        // Une copie de médiathèque indique le dossier d'origine : rangée au même endroit si c'est un dossier de bibliothèque.
+        let dir = rumor.tags.iter().find(|t| t.first().map(String::as_str) == Some("dir")).and_then(|t| t.get(1)).map(String::as_str);
+        // Un film demandé au clic « Lire » (copie de médiathèque) est annoncé dès que son arrivée a commencé : il se lit pendant
+        // qu'il arrive. Un partage ordinaire n'est annoncé qu'une fois **entièrement** reçu (lu jusqu'au bout), sinon réessayé.
+        let arrived = match self.blobs.open(&file.cid).await {
+            Ok((mut reader, _)) if dir.is_none() => tokio::io::copy(&mut reader, &mut tokio::io::sink()).await.map(|_| ()).map_err(|e| e.to_string()),
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(e) = arrived {
             let tries = self.attempts(&wrap.id).await + 1;
             if tries >= MAX_TRIES {
                 self.claim(&wrap.id, now).await;
@@ -233,7 +242,7 @@ impl<B: BlobStore> ShareInbox<B> {
             }
             return;
         }
-        match adopt_shared_file(&self.db, owner, &sender, &label, &file, "friend-share").await {
+        match astro_dav::adopt::adopt_shared_file_into(&self.db, owner, &sender, &label, &file, "friend-share", dir).await {
             Ok(path) => {
                 self.claim(&wrap.id, now).await;
                 if let Some(p) = &self.publisher {
@@ -297,6 +306,13 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     use super::*;
+
+    #[test]
+    fn the_largest_file_an_account_may_store_can_still_be_pulled_by_a_friend() {
+        let c = astro_dav::DavConfig::new(vec![0; 32]);
+        let largest = c.max_file_multipass.max(c.max_file_zencard);
+        assert!(largest <= MAX_BYTES && MAX_BYTES <= astro_p2p::blob::MAX_BLOB_BYTES, "{largest} > {MAX_BYTES}");
+    }
 
     const ALICE: [u8; 32] = [0xA1; 32]; // destinataire, hébergée ici
     const BOB: [u8; 32] = [0xB2; 32]; // ami réciproque, hébergé ailleurs
@@ -399,7 +415,7 @@ mod tests {
         no_key.retain(|t| t[0] != "decryption-key");
         deliver(&r.db, &BOB, no_key, 1_800_000_002).await;
         let mut huge = file_tags_for(&cid, "enorme.bin");
-        huge.iter_mut().find(|t| t[0] == "size").unwrap()[1] = (2u64 << 30).to_string();
+        huge.iter_mut().find(|t| t[0] == "size").unwrap()[1] = (MAX_BYTES + 1).to_string();
         deliver(&r.db, &BOB, huge, 1_800_000_003).await;
         deliver(&r.db, &BOB, file_tags_for(&cid, "../../etc/passwd"), 1_800_000_004).await; // nom piégé : accepté mais assaini
         let stats = r.inbox.poll_once(1_800_000_100).await;
