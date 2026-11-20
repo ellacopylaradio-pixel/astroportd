@@ -182,9 +182,9 @@ fi
 
 echo
 echo "── Récapitulatif ($PROFILE, astroportd $VERSION) ──"
-for t in "${built[@]}";   do echo "  ✓ $t → $OUT/$BIN-$VERSION-$t.tar.gz"; done
-for t in "${skipped[@]}"; do echo "  ⏭ $t (chaîne d'outils absente : $(install_hint "$t"))"; done
-for t in "${failed[@]}";  do echo "  ✗ $t (échec de compilation)"; done
+for t in ${built[@]+"${built[@]}"};   do echo "  ✓ $t → $OUT/$BIN-$VERSION-$t.tar.gz"; done
+for t in ${skipped[@]+"${skipped[@]}"}; do echo "  ⏭ $t (chaîne d'outils absente : $(install_hint "$t"))"; done
+for t in ${failed[@]+"${failed[@]}"};  do echo "  ✗ $t (échec de compilation)"; done
 
 [ "${#failed[@]}" -eq 0 ] || exit 1
 [ "$STRICT" = 0 ] || [ "${#skipped[@]}" -eq 0 ] || exit 1

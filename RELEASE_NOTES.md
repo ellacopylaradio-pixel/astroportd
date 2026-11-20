@@ -1,3 +1,7 @@
+## astroportd 1.6.1 — binaires macOS
+
+- **macOS : les archives Apple sont enfin publiées.** La compilation réussissait, mais `build-all.sh` échouait juste après, dans son récapitulatif : le bash 3.2 de macOS tient un tableau vide pour une variable non définie sous `set -u`. Le script parcourt maintenant ses listes d'une façon que bash 3.2 accepte.
+
 ## astroportd 1.6.0 — le disque d'abord (Kubo en miroir), install_sudo.sh, recherche par mots entiers
 
 - **ORIGIN : le disque d'abord, Kubo en miroir.** Les fichiers s'écrivent toujours sur le disque de la station, même quand Kubo répond : un Kubo arrêté (ou un `stop.sh` d'Astroport.ONE qui l'arrête) ne rend plus rien illisible. Kubo devient un **miroir de publication** sur le réseau IPFS des stations ORIGIN (swarm.key à zéros, pas l'IPFS mondial ; `src/kubo_mirror.rs`) : il rapatrie sur le disque, après vérification, ce qui était rangé dans Kubo seulement ; il publie le reste **par référence au fichier** (*filestore*, `nocopy` : aucune place en plus), ou par copie si Kubo ne peut pas relire le disque (le Capitaine est prévenu) ; il désépingle ce qui n'est plus référencé. Les gros fichiers gardent le CID `raw` du fichier entier : vérifiables chaque nuit, et échangeables par le maillage entre stations. `init` donne `--kubo` à ORIGIN, comme `planes`.
