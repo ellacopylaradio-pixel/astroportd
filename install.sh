@@ -718,20 +718,29 @@ install_search_models() {
 if [ "$WANT_FACE" = 0 ] && [ "$WANT_EMBED" = 0 ] && [ "$WANT_SEARCH" = 0 ]; then
   step "Modèles locaux"; say "  aucun demandé par le profil « $(pname "$PROFILE_CHOSEN") » (rien à télécharger)."
 fi
-if [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; then
-  step "Modèles locaux"
+# Rejouable : si pip manque ici, install_sudo.sh l'installe plus bas et l'étape est relancée.
+ORT_PENDING=0
+setup_local_models() {
   if install_ort; then
+    ORT_PENDING=0
     if [ "$WANT_SEARCH" = 1 ]; then
       install_search_models || warn "recherche multimédia locale incomplète : voir « astroportd models list »"
     fi
     if [ "$WANT_FACE" = 1 ]; then install_models || warn "reconnaissance de visages locale incomplète : voir « astroportd face-check » (ou serve --face-engine http://…)"; fi
     if [ "$WANT_EMBED" = 1 ]; then install_embed_models || warn "embeddings locaux incomplets : voir « astroportd embed-check » (ou serve --ollama http://… pour les vecteurs)"; fi
-  else
+    if [ "$WANT_EMBED" = 1 ] && [ -f "${MODELS}/bge-m3-int8.onnx" ]; then
+      "${PREFIX}/bin/${BIN}" embed-check || warn "essai des embeddings locaux en échec : voir le message ci-dessus"
+    fi
+  elif { command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; }; then
     warn "ONNX Runtime absent : ni visages ni embeddings locaux (voir « astroportd face-check » / « embed-check »)"
+  else
+    ORT_PENDING=1
+    say "  ONNX Runtime attend python3-pip : il sera proposé avec les outils du système, puis cette étape reprendra."
   fi
-  if [ "$WANT_EMBED" = 1 ] && [ -f "${MODELS}/bge-m3-int8.onnx" ]; then
-    "${PREFIX}/bin/${BIN}" embed-check || warn "essai des embeddings locaux en échec : voir le message ci-dessus"
-  fi
+}
+if [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; then
+  step "Modèles locaux"
+  setup_local_models
 fi
 
 # --- Outils du système : ce script n'utilise jamais sudo ; ce qui manque est proposé à part (install_sudo.sh) ---------
@@ -790,6 +799,16 @@ else
       *) say "  D'accord. Plus tard : ${sudo_cmd}" ;;
     esac
   fi
+fi
+
+# pip vient peut-être d'arriver avec install_sudo.sh : reprendre ONNX Runtime et les modèles (visages, embeddings, recherche).
+if [ "$ORT_PENDING" = 1 ]; then
+  say ""
+  say "▶ Modèles locaux (reprise, maintenant que python3-pip est là)"
+  if command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; then
+    setup_local_models
+  fi
+  [ "$ORT_PENDING" = 0 ] || warn "ONNX Runtime toujours absent : sudo apt install python3-pip, puis relancez ce script (la station est conservée)."
 fi
 
 # --- Ports déjà occupés (cause fréquente de « Address already in use ») ------------------------------------------
@@ -864,7 +883,7 @@ show_final() {
     say "     • sur cette machine :              ${url}"
     if [ -n "${SSH_CONNECTION:-}" ] || [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
       say "     • depuis votre PC (tunnel SSH) :   lancez sur votre PC"
-      say "       $ ssh -L 8090:127.0.0.1:8090 ${USER:-$(id -un)}@${host}"
+      say "       $ ssh -fN -L 8090:127.0.0.1:8090 ${USER:-$(id -un)}@${host}"
       say "       puis ouvrez http://localhost:8090/ dans son navigateur."
     fi
     say "     • accès direct sur le réseau ou HTTPS : ${BIN} init --domain votre.domaine"
@@ -874,6 +893,14 @@ show_final() {
   else say "  2. Créez le Capitaine d'abord (l'inscription web n'ouvre qu'après lui) :
        $ ${BIN} multipass create votre@email --captain"; fi
   say "  3. Sauvegardez vos clés : ~/.zen/game"
+  # « init » écrit l'unité systemd sans la lancer : on propose de la démarrer ici (et à chaque démarrage de la machine).
+  if [ "$(service_state)" != active ] && [ -f "$UNIT" ] && command -v systemctl >/dev/null 2>&1 \
+     && confirm "Démarrer la station maintenant (et à chaque démarrage de la machine) ?"; then
+    systemctl --user enable --now "$BIN" >/dev/null 2>&1 || warn "démarrage refusé par systemd : journalctl --user -u ${BIN} -n 50"
+    sleep 3
+    if [ "$(service_state)" = active ]; then say "  ✔ station démarrée : ${url}"
+    else warn "la station ne tourne pas : journalctl --user -u ${BIN} -n 50"; fi
+  fi
   if [ "$(service_state)" != active ]; then
     say "  4. La station n'est pas encore démarrée : lancez la commande « Démarrer » affichée plus haut,"
     say "     ou installez-la en service : $ ${BIN} init --systemd"
