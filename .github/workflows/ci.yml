@@ -39,8 +39,8 @@ jobs:
       - name: Scripts shell
         run: |
           sudo apt-get install -y --no-install-recommends shellcheck
-          bash -n install.sh build-all.sh
-          shellcheck install.sh build-all.sh
+          bash -n install.sh install_sudo.sh build-all.sh
+          shellcheck install.sh install_sudo.sh build-all.sh
 
   macos:
     name: macOS (Apple Silicon)

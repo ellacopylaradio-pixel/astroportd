@@ -791,3 +791,15 @@ CREATE TABLE IF NOT EXISTS index_delegation (
   accepted_at INTEGER NOT NULL,
   PRIMARY KEY (owner_hex, peer)
 ) STRICT, WITHOUT ROWID;
+
+-- Miroir Kubo (ORIGIN seulement) : « le disque d'abord, Kubo en miroir ». Chaque blob que la base référence vit sur le disque
+-- de la station ; il est aussi publié dans Kubo, par référence au fichier (filestore, `nocopy` = 1) ou par copie. `root` est
+-- la racine que Kubo lui donne (égale à `blob` pour un fichier d'un seul bloc, une racine `dag-pb` au-delà). ÉTAT LOCAL : sa
+-- perte fait seulement republier. Colonnes nommées hors de la règle `cid` / `*_cid` : une ligne ici ne retient aucun blob
+-- (le bassin et le ménage ne la comptent pas comme une référence).
+CREATE TABLE IF NOT EXISTS kubo_mirror (
+  blob   TEXT PRIMARY KEY,
+  root   TEXT NOT NULL,
+  nocopy INTEGER NOT NULL CHECK (nocopy IN (0, 1)),
+  at     INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;

@@ -927,6 +927,12 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let dnslink = Arc::new(astroportd::dnslink::Dnslink::new(db.clone(), uplanet_name.clone(), services_peer.clone(), astroportd::init::hostname(), activity.clone()));
     tasks::dnslink_sync(&parts, &dnslink, &mut background);
     background.push(tokio::spawn(backup.clone().run(Duration::from_secs(60), stop_watch.clone())));
+    // Le disque d'abord, Kubo en miroir (ORIGIN seulement : `--kubo` est refusé avec une swarm.key).
+    if let Some(kubo) = local.kubo().cloned() {
+        let mirror = Arc::new(astroportd::kubo_mirror::Mirror::new(db.clone(), local.fs().clone(), kubo));
+        background.push(tokio::spawn(mirror.run_forever(Duration::from_secs(30), Duration::from_secs(60), activity.clone(), stop_watch.clone())));
+        println!("kubo : miroir de publication sur le réseau IPFS d'ORIGIN (les fichiers vivent sur le disque ; Kubo arrêté ne rend rien illisible)");
+    }
     tasks::exif_backfill(&parts, &mut background);
     // Documents demandés par `#upload` : rapatriés, chiffrés et déposés dans /Uploads (le demandeur est prévenu).
     tasks::crawl(&parts, &relay_client, &mut background);

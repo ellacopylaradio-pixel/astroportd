@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use astro_dav::blob::{AutoBlobStore, BlobError, BlobStore, BlobWriter, FsBlobStore, KuboBlobStore, cid_raw_sha256, is_cid};
+use astro_dav::kubo::AddMode;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
@@ -25,6 +26,10 @@ struct Mock {
     cat_queries: Vec<String>,
     calls: Vec<String>,
     fail_add: bool,
+    /// `Experimental.FilestoreEnabled`.
+    filestore: bool,
+    /// Références au disque (`nocopy`) : CID → chemin absolu reçu dans `Abspath`.
+    referenced: HashMap<String, String>,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -49,7 +54,7 @@ async fn kubo(State(m): State<Shared>, req: Request) -> Response {
         "/api/v0/add" => {
             let body = axum::body::to_bytes(req.into_body(), 64 << 20).await.unwrap();
             let mut g = m.lock().unwrap();
-            g.add_queries.push(query);
+            g.add_queries.push(query.clone());
             if g.fail_add {
                 return json_error("disque plein");
             }
@@ -57,12 +62,38 @@ async fn kubo(State(m): State<Shared>, req: Request) -> Response {
             let start = body.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
             let end = body.len() - format!("\r\n--{b}--\r\n").len();
             assert_eq!(&body[end..], format!("\r\n--{b}--\r\n").as_bytes(), "le multipart doit se terminer correctement");
+            let head = String::from_utf8_lossy(&body[..start]).into_owned();
+            let abspath = head.lines().find_map(|l| l.strip_prefix("Abspath: ")).map(str::to_owned);
             let content = body[start..end].to_vec();
             let cid = cid_raw_sha256(&Sha256::digest(&content).into());
             let size = content.len();
-            g.blobs.insert(cid.clone(), content);
+            let reply = format!("{{\"Name\":\"blob\",\"Hash\":\"{cid}\",\"Size\":\"{size}\"}}\n");
+            if query_param(&query, "only-hash").as_deref() == Some("true") {
+                return reply.into_response(); // rien n'est gardé
+            }
+            if query_param(&query, "nocopy").as_deref() == Some("true") {
+                // Comme Kubo 0.40 : refus sans filestore, ou sans chemin du fichier.
+                let Some(path) = abspath.filter(|_| g.filestore) else { return json_error("missing file path or URL, can't create filestore reference") };
+                g.referenced.insert(cid.clone(), path);
+            } else {
+                g.blobs.insert(cid.clone(), content);
+            }
             g.pinned.insert(cid.clone());
-            format!("{{\"Name\":\"blob\",\"Hash\":\"{cid}\",\"Size\":\"{size}\"}}\n").into_response()
+            reply.into_response()
+        }
+        "/api/v0/config" => {
+            let on = m.lock().unwrap().filestore;
+            format!("{{\"Key\":\"Experimental.FilestoreEnabled\",\"Value\":{on}}}").into_response()
+        }
+        "/api/v0/pin/add" => {
+            let cid = query_param(&query, "arg").unwrap();
+            let mut g = m.lock().unwrap();
+            if g.blobs.contains_key(&cid) {
+                g.pinned.insert(cid.clone());
+                format!("{{\"Pins\":[\"{cid}\"]}}").into_response()
+            } else {
+                json_error("block was not found locally (offline): ipld: could not find")
+            }
         }
         "/api/v0/files/stat" => {
             let cid = query_param(&query, "arg").unwrap().trim_start_matches("/ipfs/").to_owned();
@@ -206,45 +237,106 @@ async fn kubo_errors_surface_and_abandoned_writes_pin_nothing() {
 }
 
 #[tokio::test]
-async fn auto_store_falls_back_to_disk_and_returns_to_kubo_when_it_comes_back() {
+async fn auto_store_writes_to_disk_first_even_when_kubo_answers_and_reads_old_kubo_blobs_last() {
     let dir = TempDir::new("auto");
     let fs = FsBlobStore::open(dir.0.join("blobs")).unwrap();
-    // Kubo absent : tout va sur disque.
-    let auto = AutoBlobStore::new(Some(KuboBlobStore::new("http://127.0.0.1:1")), fs.clone()).with_health_ttl(Duration::from_millis(50));
-    let mut w = auto.begin().await.unwrap();
-    w.write_all(b"local").await.unwrap();
-    let local = w.commit().await.unwrap();
-    assert!(fs.open(&local.cid).await.is_ok());
-    // Sans Kubo configuré : idem.
-    let only_fs = AutoBlobStore::new(None, fs.clone());
-    let (mut r, _) = only_fs.open(&local.cid).await.unwrap();
-    let mut got = String::new();
-    r.read_to_string(&mut got).await.unwrap();
-    assert_eq!(got, "local");
-
-    // Kubo démarre : les nouvelles écritures vont à Kubo, les anciens blobs locaux restent lisibles.
     let (url, mock) = mock_kubo().await;
-    let auto = AutoBlobStore::new(Some(KuboBlobStore::new(&url)), fs.clone()).with_health_ttl(Duration::from_millis(1));
+    let kubo = KuboBlobStore::new(&url);
+    // Un blob d'avant « le disque d'abord » : rangé dans Kubo seulement.
+    let mut w = kubo.begin().await.unwrap();
+    w.write_all(b"ancien").await.unwrap();
+    let old = w.commit().await.unwrap();
+
+    // Kubo répond : l'écriture va quand même sur le disque, et rien n'est envoyé à Kubo.
+    let auto = AutoBlobStore::new(Some(kubo.clone()), fs.clone()).with_health_ttl(Duration::from_millis(1));
+    let adds = mock.lock().unwrap().add_queries.len();
     let mut w = auto.begin().await.unwrap();
-    w.write_all(b"distant").await.unwrap();
-    let remote = w.commit().await.unwrap();
-    assert!(mock.lock().unwrap().pinned.contains(&remote.cid));
-    assert!(fs.open(&remote.cid).await.is_err(), "pas de copie locale");
-    let (mut r, len) = auto.open(&remote.cid).await.unwrap();
-    assert_eq!(len, 7);
+    w.write_all(b"nouveau").await.unwrap();
+    let new = w.commit().await.unwrap();
+    assert!(fs.open(&new.cid).await.is_ok(), "le disque d'abord");
+    assert_eq!(mock.lock().unwrap().add_queries.len(), adds, "la publication sur Kubo est l'affaire du miroir, pas de l'écriture");
+
+    // Lecture : le disque, puis Kubo en dernier recours (avec accès aléatoire).
+    let (mut r, len) = auto.open(&old.cid).await.unwrap();
+    assert_eq!(len, 6);
     r.seek(std::io::SeekFrom::Start(2)).await.unwrap();
     let mut rest = String::new();
     r.read_to_string(&mut rest).await.unwrap();
-    assert_eq!(rest, "stant");
-    let (mut r, _) = auto.open(&local.cid).await.unwrap();
-    let mut old = String::new();
-    r.read_to_string(&mut old).await.unwrap();
-    assert_eq!(old, "local");
-    // Suppression des deux côtés.
-    auto.remove(&local.cid).await.unwrap();
-    auto.remove(&remote.cid).await.unwrap();
-    assert!(matches!(auto.open(&remote.cid).await, Err(BlobError::NotFound)));
-    assert!(matches!(auto.open(&local.cid).await, Err(BlobError::NotFound)));
+    assert_eq!(rest, "cien");
+
+    // Kubo arrêté : ce qui est sur le disque reste lisible ; seul l'ancien blob non rapatrié manque.
+    let down = AutoBlobStore::new(Some(KuboBlobStore::new("http://127.0.0.1:1")), fs.clone()).with_health_ttl(Duration::from_millis(1));
+    let (mut r, _) = down.open(&new.cid).await.unwrap();
+    let mut got = String::new();
+    r.read_to_string(&mut got).await.unwrap();
+    assert_eq!(got, "nouveau");
+    assert!(matches!(down.open(&old.cid).await, Err(BlobError::NotFound)));
+    let mut w = down.begin().await.unwrap();
+    w.write_all(b"sans kubo").await.unwrap();
+    assert!(fs.open(&w.commit().await.unwrap().cid).await.is_ok());
+
+    // Suppression : le disque, et l'épingle de même nom dans Kubo.
+    auto.remove(&new.cid).await.unwrap();
+    auto.remove(&old.cid).await.unwrap();
+    assert!(matches!(auto.open(&new.cid).await, Err(BlobError::NotFound)));
+    assert!(matches!(auto.open(&old.cid).await, Err(BlobError::NotFound)));
+}
+
+#[tokio::test]
+async fn a_disk_file_is_published_by_reference_when_kubo_allows_it_otherwise_copied() {
+    let dir = TempDir::new("addfile");
+    let fs = FsBlobStore::open(dir.0.join("blobs")).unwrap();
+    let mut w = fs.begin().await.unwrap();
+    let data = sample(150_000, 3);
+    w.write_all(&data).await.unwrap();
+    let meta = w.commit().await.unwrap();
+    let path = fs.blob_path(&meta.cid).unwrap();
+    let (url, mock) = mock_kubo().await;
+    let kubo = KuboBlobStore::new(&url);
+
+    // Seulement l'empreinte : rien n'est gardé.
+    assert_eq!(kubo.add_file(&path, AddMode::OnlyHash).await.unwrap(), meta.cid);
+    assert!(mock.lock().unwrap().pinned.is_empty());
+    // Sans filestore, Kubo refuse la référence : l'erreur remonte (la station se rabat alors sur une copie).
+    assert!(!kubo.filestore_enabled().await);
+    assert!(kubo.add_file(&path, AddMode::NoCopy).await.unwrap_err().to_string().contains("filestore"));
+    // Avec filestore : une référence au fichier, par son chemin absolu, sans copie des octets.
+    mock.lock().unwrap().filestore = true;
+    assert!(kubo.filestore_enabled().await);
+    assert_eq!(kubo.add_file(&path, AddMode::NoCopy).await.unwrap(), meta.cid);
+    {
+        let g = mock.lock().unwrap();
+        assert_eq!(g.referenced[&meta.cid], std::fs::canonicalize(&path).unwrap().to_str().unwrap());
+        assert!(!g.blobs.contains_key(&meta.cid) && g.pinned.contains(&meta.cid), "épinglé, sans copie");
+        assert!(g.add_queries.last().unwrap().contains("nocopy=true"));
+    }
+    // Copie : Kubo garde les octets.
+    assert_eq!(kubo.add_file(&path, AddMode::Copy).await.unwrap(), meta.cid);
+    assert_eq!(mock.lock().unwrap().blobs[&meta.cid], data);
+    kubo.pin(&meta.cid).await.unwrap();
+    assert!(matches!(kubo.pin("../x").await, Err(BlobError::BadCid)));
+}
+
+#[tokio::test]
+async fn a_named_blob_is_refused_when_its_raw_content_does_not_match() {
+    let dir = TempDir::new("named");
+    let fs = FsBlobStore::open(dir.0.join("blobs")).unwrap();
+    let good = cid_raw_sha256(&Sha256::digest(b"juste").into());
+    let mut w = fs.begin_named(&good).await.unwrap();
+    w.write_all(b"juste").await.unwrap();
+    assert_eq!(w.commit().await.unwrap().cid, good);
+    let mut w = fs.begin_named(&cid_raw_sha256(&Sha256::digest(b"autre").into())).await.unwrap();
+    w.write_all(b"faux").await.unwrap();
+    let tmp = w.tmp_path().to_owned();
+    assert!(w.commit().await.unwrap_err().to_string().contains("empreinte"));
+    assert!(!tmp.exists(), "le contenu refusé ne reste pas sur le disque");
+    // Une racine dag-pb ne se recalcule pas ici : l'appelant l'a vérifiée (par Kubo), le blob prend ce nom.
+    let root = "bafybeic54ggur77oamccaa44omnsezmbhsdcjisl5l3hswcigrcecpd7oq";
+    let mut w = fs.begin_named(root).await.unwrap();
+    w.write_all(b"verifie par kubo").await.unwrap();
+    assert_eq!(w.commit().await.unwrap().cid, root);
+    assert!(fs.open(root).await.is_ok());
+    assert!(matches!(fs.begin_named("../etc").await, Err(BlobError::BadCid)));
 }
 
 #[tokio::test]

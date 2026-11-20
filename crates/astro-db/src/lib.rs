@@ -152,6 +152,44 @@ pub fn open(path: &Path) -> Result<Connection, DbError> {
 /// mémoire quand la machine s'y prête (voir [`mmap_budget`]).
 pub(crate) fn tune_connection(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(&format!("PRAGMA temp_store = MEMORY; PRAGMA mmap_size = {};", mmap_budget()))?;
+    register_functions(conn)
+}
+
+/// Mots d'un texte, sans accents ni majuscules : tout ce qui n'est ni lettre ni chiffre sépare (espaces, ponctuation, tirets,
+/// soulignés, `/` d'un chemin). « IMG_20260621_202533.jpg » donne `img`, `20260621`, `202533`, `jpg`.
+pub fn words_of(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.chars().map(astro_nostr_proto::filter::fold).collect())
+}
+
+/// Forme d'un mot pour la comparaison : sans accents ni majuscules, et sans la marque du pluriel (`s` ou `x` final, au-delà de
+/// trois lettres) : « chats » et « chat », « bateaux » et « bateau » se valent.
+pub fn word_stem(word: &str) -> String {
+    let w: String = word.chars().map(astro_nostr_proto::filter::fold).collect();
+    match w.strip_suffix(['s', 'x']) {
+        Some(s) if w.chars().count() > 3 => s.to_owned(),
+        _ => w,
+    }
+}
+
+/// `text` contient-il le **mot** `word` (mot entier, sans accents ni majuscules, au pluriel près) ? « chat » ne se trouve
+/// pas dans « achat », ni « 2025 » dans « 202533 ». Un `word` de plusieurs mots : tous, dans n'importe quel ordre.
+pub fn has_word(text: &str, word: &str) -> bool {
+    let wanted: Vec<String> = words_of(word).map(|w| word_stem(&w)).collect();
+    if wanted.is_empty() {
+        return false;
+    }
+    let have: std::collections::HashSet<String> = words_of(text).map(|w| word_stem(&w)).collect();
+    wanted.iter().all(|w| have.contains(w))
+}
+
+/// Fonctions SQL propres à astroportd, sur chaque connexion : `has_word(texte, mot)` (voir [`has_word`] ; `NULL` vaut faux).
+fn register_functions(conn: &Connection) -> Result<(), DbError> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function("has_word", 2, FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC, |ctx| {
+        let text: Option<String> = ctx.get(0)?;
+        let word: Option<String> = ctx.get(1)?;
+        Ok(matches!((text, word), (Some(t), Some(w)) if has_word(&t, &w)))
+    })?;
     Ok(())
 }
 
@@ -231,6 +269,7 @@ pub fn open_in_memory() -> Result<Connection, DbError> {
     let conn = Connection::open_in_memory()?;
     apply_schema(&conn)?;
     migrate(&conn)?;
+    register_functions(&conn)?;
     Ok(conn)
 }
 
@@ -268,6 +307,23 @@ mod tests {
 
     fn vec_literal(dim: usize, hot: usize) -> Vec<u8> {
         (0..dim).flat_map(|i| if i == hot { 1.0f32 } else { 0.0 }.to_le_bytes()).collect()
+    }
+
+    /// Un mot se cherche **entier**, sans accents ni majuscules, au pluriel près : relevé sur une vraie station, « chat »
+    /// trouvait « achat » et « 2025 » des photos de 2026 dont le nom portait l'heure 20:25.
+    #[test]
+    fn a_word_is_found_whole_without_accents_and_up_to_the_plural() {
+        assert!(has_word("un adulte tenant un chat tricolore", "chat"));
+        assert!(has_word("deux chats sur le canapé", "chat") && has_word("un chat", "Chats"));
+        assert!(!has_word("ticket d'achat", "chat"), "pas dans un autre mot");
+        assert!(!has_word("/Images/2026/10/IMG_20260621_202533.jpg", "2025"), "ni dans un nombre plus long");
+        assert!(has_word("/Images/2025/Plage-Été.jpg", "2025") && has_word("/Images/2025/Plage-Été.jpg", "ete"), "dossier, tiret, accent");
+        assert!(has_word("FACTURE électricité", "electricite") && has_word("Des bateaux au port", "bateau"));
+        assert!(has_word("lac de garde en été", "été lac"), "plusieurs mots : tous, dans n'importe quel ordre");
+        assert!(!has_word("plage", "") && !has_word("", "plage"));
+        let conn = open_in_memory().unwrap();
+        let hit: (bool, bool, bool) = conn.query_row("SELECT has_word('un achat', 'chat'), has_word('Chats perchés', 'chat'), has_word(NULL, 'chat')", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!(hit, (false, true, false), "la même règle en SQL ; NULL vaut faux");
     }
 
     #[test]

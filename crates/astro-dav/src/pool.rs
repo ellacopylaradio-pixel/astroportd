@@ -54,12 +54,17 @@ pub fn referenced_by_peers(peers: &[PathBuf], cid: &str) -> bool {
 
 /// Tous les blobs qu'une base référence (entrées, clés, miniatures, tables à colonne `cid` / `*_cid`).
 pub fn referenced_set(db: &Path) -> Result<std::collections::HashSet<String>, String> {
-    let mut out = std::collections::HashSet::new();
     if !db.exists() {
-        return Ok(out);
+        return Ok(std::collections::HashSet::new());
     }
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| format!("{} : {e}", db.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    referenced_set_of(&conn).map_err(|e| format!("{} : {e}", db.display()))
+}
+
+/// Tous les blobs que la base ouverte `conn` référence (voir [`referenced_set`]).
+pub fn referenced_set_of(conn: &Connection) -> Result<std::collections::HashSet<String>, String> {
+    let mut out = std::collections::HashSet::new();
     let mut stmt = conn.prepare(COLUMNS_SQL).map_err(|e| e.to_string())?;
     let cols = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
     for (table, column) in cols {

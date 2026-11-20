@@ -2,9 +2,13 @@
 //!
 //! - écriture : `POST /add?cid-version=1&raw-leaves=true&pin=true` en multipart **en flux** (jamais le fichier entier en mémoire) ;
 //! - lecture : `POST /cat?arg=<cid>&offset=…&length=…`, avec accès aléatoire pour les requêtes `Range` ;
-//! - suppression : `POST /pin/rm?arg=<cid>` (le ramasse-miettes de Kubo libère l'espace).
+//! - suppression : `POST /pin/rm?arg=<cid>` (le ramasse-miettes de Kubo libère l'espace) ;
+//! - publication d'un fichier du disque ([`KuboBlobStore::add_file`]) : copie, ou simple référence au fichier (*filestore*,
+//!   `nocopy`) quand Kubo l'autorise : rien n'est écrit deux fois.
 //!
-//! [`AutoBlobStore`] bascule de façon transparente sur le stockage local si Kubo ne répond pas.
+//! [`AutoBlobStore`] : **le disque d'abord**. Tout s'écrit sur le disque local, qui reste la vérité de la station ; Kubo n'y
+//! est qu'un **miroir de publication** (ORIGIN seulement), tenu à part par la station. Kubo arrêté ne rend donc rien illisible.
+//! Il reste lu en dernier recours, pour les blobs d'avant ce choix qui n'ont pas encore été rapatriés sur le disque.
 
 use std::future::Future;
 use std::io::{self, SeekFrom};
@@ -106,6 +110,81 @@ impl KuboBlobStore {
     pub async fn ping(&self) -> bool {
         tokio::time::timeout(Duration::from_millis(1500), self.json("/api/v0/id")).await.is_ok_and(|r| r.is_ok())
     }
+
+    /// Kubo accepte-t-il les références à des fichiers du disque (`Experimental.FilestoreEnabled`) ? Une erreur vaut « non ».
+    pub async fn filestore_enabled(&self) -> bool {
+        self.json("/api/v0/config?arg=Experimental.FilestoreEnabled").await.is_ok_and(|v| v["Value"].as_bool() == Some(true))
+    }
+
+    /// Kubo sait-il **vraiment** relire `cid` (un octet, par `cat`) ? Pour un ajout par référence : Kubo lit le fichier du
+    /// disque au moment de servir, et un fichier qu'il n'a pas le droit d'ouvrir ne se voit qu'ici.
+    pub async fn readable(&self, cid: &str) -> bool {
+        if !is_cid(cid) {
+            return false;
+        }
+        match self.post(&format!("/api/v0/cat?arg={cid}&offset=0&length=1"), empty()).await {
+            Ok(r) => r.into_body().collect().await.is_ok_and(|b| b.to_bytes().len() == 1),
+            Err(_) => false,
+        }
+    }
+
+    /// Épingle `cid`, déjà connu de Kubo.
+    pub async fn pin(&self, cid: &str) -> Result<(), BlobError> {
+        if !is_cid(cid) {
+            return Err(BlobError::BadCid);
+        }
+        let r = self.post(&format!("/api/v0/pin/add?arg={cid}"), empty()).await?;
+        let _ = r.into_body().collect().await;
+        Ok(())
+    }
+
+    /// Ajoute le fichier `path` du disque à Kubo, découpé comme [`BlobStore::begin`] (CID v1, feuilles `raw`, sha2-256), et rend
+    /// la racine que Kubo lui donne. Le fichier est lu **en flux**.
+    pub async fn add_file(&self, path: &std::path::Path, mode: AddMode) -> Result<String, BlobError> {
+        let file = tokio::fs::File::open(path).await?;
+        let mut rnd = [0u8; 12];
+        getrandom::fill(&mut rnd).map_err(|e| BlobError::Io(io_err(e)))?;
+        let boundary = format!("astro{}", hex::encode(rnd));
+        // Le filestore exige le chemin absolu du fichier dans l'en-tête `Abspath` de la partie (relevé sur Kubo 0.40.0).
+        let abspath = match mode {
+            AddMode::NoCopy => {
+                let abs = std::fs::canonicalize(path)?;
+                let text = abs.to_str().filter(|s| !s.contains(['\r', '\n'])).ok_or_else(|| BlobError::Io(io_err("chemin du blob inutilisable par Kubo")))?.to_owned();
+                format!("Abspath: {text}\r\n")
+            }
+            _ => String::new(),
+        };
+        let prefix = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"blob\"\r\n{abspath}Content-Type: application/octet-stream\r\n\r\n");
+        let suffix = format!("\r\n--{boundary}--\r\n");
+        let body_stream = futures_util::stream::once(async move { Ok::<_, io::Error>(Bytes::from(prefix)) })
+            .chain(tokio_util::io::ReaderStream::with_capacity(file, CHUNK))
+            .chain(futures_util::stream::once(async move { Ok::<_, io::Error>(Bytes::from(suffix)) }))
+            .map(|r| r.map(Frame::data));
+        let body: ReqBody = StreamBody::new(body_stream).boxed_unsync();
+        let options = match mode {
+            AddMode::Copy => "pin=true",
+            AddMode::NoCopy => "pin=true&nocopy=true",
+            AddMode::OnlyHash => "pin=false&only-hash=true",
+        };
+        let url = format!("{}/api/v0/add?cid-version=1&raw-leaves=true&hash=sha2-256&quieter=true&progress=false&{options}", self.base);
+        let req = Request::post(url).header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}")).body(body).map_err(|e| BlobError::Io(io_err(e)))?;
+        let resp = check_status(self.client.request(req).await.map_err(|e| BlobError::Io(io_err(e)))?).await?;
+        let bytes = resp.into_body().collect().await.map_err(|e| BlobError::Io(io_err(e)))?.to_bytes();
+        let last = String::from_utf8_lossy(&bytes).lines().rev().find(|l| !l.trim().is_empty()).map(str::to_owned).unwrap_or_default();
+        let hash = serde_json::from_str::<serde_json::Value>(&last).ok().and_then(|v| v.get("Hash").and_then(|h| h.as_str().map(str::to_owned)));
+        hash.filter(|h| is_cid(h)).ok_or_else(|| BlobError::Io(io_err(format!("réponse /add inattendue : {last}"))))
+    }
+}
+
+/// Façon d'ajouter un fichier du disque à Kubo ([`KuboBlobStore::add_file`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddMode {
+    /// Kubo garde sa propre copie des blocs.
+    Copy,
+    /// Kubo ne garde qu'une référence au fichier du disque (*filestore*) : aucune place en plus. Le fichier doit rester là.
+    NoCopy,
+    /// Rien n'est gardé : seule la racine est calculée (pour vérifier qu'un contenu est bien celui d'un CID de Kubo).
+    OnlyHash,
 }
 
 /// Extrait les `PeerID` des fournisseurs d'un flux NDJSON de `routing/findprovs` (`Type` 4 = fournisseur trouvé).
@@ -343,10 +422,9 @@ impl BlobStore for KuboBlobStore {
     }
 }
 
-/// Kubo si disponible, sinon le dossier local : les écritures vont à Kubo tant qu'il répond (état vérifié au plus
-/// toutes les `health_ttl`), les lectures cherchent d'abord en local puis sur Kubo.
-///
-/// Un blob local garde son CID `raw` sha2-256 ; il n'est publiable sur IPFS tel quel que s'il tient en un bloc.
+/// **Le disque d'abord** : toutes les écritures vont au dossier local, qui garde chaque blob sous son CID `raw` sha2-256
+/// (vérifiable, et échangeable par le maillage). Kubo, s'il est donné, n'est lu qu'en dernier recours (blobs rangés là avant
+/// ce choix, en attente de rapatriement) ; la publication sur Kubo est l'affaire du miroir de la station, pas de ce magasin.
 pub struct AutoBlobStore {
     kubo: Option<KuboBlobStore>,
     fs: FsBlobStore,
@@ -354,14 +432,6 @@ pub struct AutoBlobStore {
     health: Mutex<Option<(Instant, bool)>>,
     /// Bases des autres plans qui partagent ce dossier de blobs (voir [`crate::pool`]).
     peers: Vec<std::path::PathBuf>,
-}
-
-/// Écrivain de [`AutoBlobStore`].
-pub enum AutoWriter {
-    /// Vers Kubo.
-    Kubo(Box<KuboWriter>),
-    /// Vers le disque local.
-    Fs(Box<FsBlobWriter>),
 }
 
 /// Lecteur de [`AutoBlobStore`].
@@ -390,6 +460,16 @@ impl AutoBlobStore {
         self
     }
 
+    /// Le dossier local.
+    pub fn fs(&self) -> &FsBlobStore {
+        &self.fs
+    }
+
+    /// Le Kubo donné, qu'il réponde ou non.
+    pub fn kubo(&self) -> Option<&KuboBlobStore> {
+        self.kubo.as_ref()
+    }
+
     async fn kubo_up(&self) -> Option<&KuboBlobStore> {
         let kubo = self.kubo.as_ref()?;
         let cached = *self.health.lock().unwrap_or_else(|e| e.into_inner());
@@ -401,38 +481,6 @@ impl AutoBlobStore {
         let up = kubo.ping().await;
         *self.health.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), up));
         up.then_some(kubo)
-    }
-}
-
-macro_rules! delegate_write {
-    ($self:ident, $cx:ident, $method:ident $(, $arg:expr)*) => {
-        match $self.get_mut() {
-            AutoWriter::Kubo(w) => Pin::new(w).$method($cx $(, $arg)*),
-            AutoWriter::Fs(w) => Pin::new(w).$method($cx $(, $arg)*),
-        }
-    };
-}
-
-impl AsyncWrite for AutoWriter {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        delegate_write!(self, cx, poll_write, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        delegate_write!(self, cx, poll_flush)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        delegate_write!(self, cx, poll_shutdown)
-    }
-}
-
-impl BlobWriter for AutoWriter {
-    async fn commit(self) -> Result<BlobMeta, BlobError> {
-        match self {
-            Self::Kubo(w) => w.commit().await,
-            Self::Fs(w) => w.commit().await,
-        }
     }
 }
 
@@ -462,26 +510,21 @@ impl AsyncSeek for AutoReader {
 }
 
 impl BlobStore for AutoBlobStore {
-    type Writer = AutoWriter;
+    type Writer = FsBlobWriter;
     type Reader = AutoReader;
 
     fn disk_space(&self) -> Option<(u64, u64)> {
         self.fs.disk_space()
     }
 
-    async fn begin(&self) -> Result<AutoWriter, BlobError> {
-        if let Some(kubo) = self.kubo_up().await {
-            if let Ok(w) = kubo.begin().await {
-                return Ok(AutoWriter::Kubo(Box::new(w)));
-            }
-        }
-        Ok(AutoWriter::Fs(Box::new(self.fs.begin().await?)))
+    /// Toujours sur le disque, que Kubo réponde ou non.
+    async fn begin(&self) -> Result<FsBlobWriter, BlobError> {
+        self.fs.begin().await
     }
 
-    /// Un rapatriement reprenable s'écrit toujours sur le disque local : la partie reçue y survit à un redémarrage.
-    async fn begin_resumable(&self, cid: &str, max: u64, align: u64) -> Result<crate::blob::Resumed<AutoWriter>, BlobError> {
-        let r = self.fs.begin_resumable(cid, max, align).await?;
-        Ok(crate::blob::Resumed { writer: AutoWriter::Fs(Box::new(r.writer)), done: r.done, hasher: r.hasher, partial: r.partial })
+    /// Un rapatriement reprenable s'écrit sur le disque local : la partie reçue y survit à un redémarrage.
+    async fn begin_resumable(&self, cid: &str, max: u64, align: u64) -> Result<crate::blob::Resumed<FsBlobWriter>, BlobError> {
+        self.fs.begin_resumable(cid, max, align).await
     }
 
     async fn open_partial(&self, cid: &str) -> Result<Option<AutoReader>, BlobError> {

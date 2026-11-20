@@ -196,19 +196,37 @@ pub fn seen(c: &Connection, owner: &str, query: &[f32]) -> rusqlite::Result<Seen
     Ok(Seen { strict: distinct(&mut astro_index::siglip::stand_out(&scores).into_iter(), MAX_SEEN), near: distinct(&mut by_score.into_iter(), MAX_NEAR) })
 }
 
-fn like_escape(w: &str) -> String {
-    format!("%{}%", w.to_lowercase().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
-}
 
-/// Requête FTS5 sûre : chaque mot entre guillemets (guillemets internes doublés), début de mot accepté, tous requis.
-/// `None` si aucun mot n'a de lettre ni de chiffre.
+/// Requête FTS5 sûre : chaque mot entre guillemets (guillemets internes doublés), **mot entier** au pluriel près (comme
+/// [`astro_db::has_word`] : « chat » ne trouve pas « achat »), tous requis. `None` si aucun mot n'a de lettre ni de chiffre.
 pub fn fts_query(q: &str) -> Option<String> {
     fts_words(q, " ")
 }
 
 fn fts_words(q: &str, sep: &str) -> Option<String> {
-    let words: Vec<String> = q.split_whitespace().take(8).filter(|w| w.chars().any(char::is_alphanumeric)).map(|w| format!("\"{}\"*", w.chars().take(64).collect::<String>().replace('"', "\"\""))).collect();
-    (!words.is_empty()).then(|| words.join(sep))
+    let quote = |w: &str| format!("\"{}\"", w.chars().take(64).collect::<String>().replace('"', "\"\""));
+    let groups: Vec<String> = q
+        .split_whitespace()
+        .take(8)
+        .flat_map(|w| astro_db::words_of(w).collect::<Vec<_>>())
+        .map(|w| {
+            // Le mot, sa forme sans pluriel, et ses pluriels : l'index FTS est déjà sans accents ni majuscules.
+            let stem = astro_db::word_stem(&w);
+            let mut forms = vec![w, stem.clone(), format!("{stem}s"), format!("{stem}x")];
+            forms.sort();
+            forms.dedup();
+            format!("({})", forms.iter().map(|f| quote(f)).collect::<Vec<_>>().join(" OR "))
+        })
+        .collect();
+    (!groups.is_empty()).then(|| groups.join(sep))
+}
+
+/// Quelques mots autour du premier mot cherché trouvé dans `text` (la description d'une photo) : pourquoi elle est là.
+fn excerpt_of(text: &str, words: &[String]) -> Option<String> {
+    let toks: Vec<&str> = text.split_whitespace().collect();
+    let i = toks.iter().position(|t| words.iter().any(|w| astro_db::has_word(t, w)))?;
+    let (a, b) = (i.saturating_sub(5), (i + 6).min(toks.len()));
+    Some(format!("{}{}{}", if a > 0 { "…" } else { "" }, toks[a..b].join(" "), if b < toks.len() { "…" } else { "" }))
 }
 
 /// Empreintes sûres pour la requête (lettres et chiffres seulement, rien d'autre ne passe) : `e.sha_plain IN (…)`.
@@ -227,16 +245,15 @@ enum Mode {
     Loose,
 }
 
-/// Condition SQL d'un terme : trouvé par **tous** ses mots (nom, description, texte lu), ou par ce qu'il désigne (personne,
-/// lieu, année, mois).
+/// Condition SQL d'un terme : trouvé par **tous** ses mots (nom ou dossier, description, texte lu), ou par ce qu'il désigne
+/// (personne, lieu, année, mois). Un mot se cherche entier ([`astro_db::has_word`]).
 fn term_sql(t: &crate::search_query::Term, args: &mut Vec<rusqlite::types::Value>) -> String {
     let words: Vec<String> = t
         .words
         .iter()
         .map(|w| {
-            let pat = like_escape(w);
-            args.extend([pat.clone().into(), pat.into()]);
-            let mut alt = "lower(e.path) LIKE ? ESCAPE '\\' OR lower(COALESCE(e.desc_text, '')) LIKE ? ESCAPE '\\'".to_owned();
+            args.extend([w.clone().into(), w.clone().into()]);
+            let mut alt = "has_word(e.path, ?) OR has_word(e.desc_text, ?)".to_owned();
             if let Some(f) = fts_query(w) {
                 alt += " OR e.sha_plain IN (SELECT sha FROM search_text WHERE search_text MATCH ? AND owner_hex = ?1)";
                 args.push(f.into());
@@ -266,22 +283,38 @@ fn term_sql(t: &crate::search_query::Term, args: &mut Vec<rusqlite::types::Value
 
 /// Une lecture de la recherche (voir [`Mode`]) : `(élément, empreinte)` ; une ligne de plus que `limit` signale une page suivante.
 fn select(c: &Connection, owner: &str, s: &Search, terms: &[crate::search_query::Term], mode: Mode, limit: usize) -> rusqlite::Result<Vec<(Value, String)>> {
-    let all_words: String = terms.iter().flat_map(|t| t.words.iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
+    let words: Vec<String> = terms.iter().flat_map(|t| t.words.iter().cloned()).collect();
+    let all_words = words.join(" ");
     // Extrait : n'importe lequel des mots (chacun peut avoir été trouvé dans une source différente).
     let fts = fts_words(&all_words, " OR ");
     let shown = sha_list(if mode == Mode::Loose { &s.near } else { &s.seen });
     let seen_sql = (!shown.is_empty()).then(|| format!("e.sha_plain IN ({})", shown.iter().map(|(x, _)| format!("'{x}'")).collect::<Vec<_>>().join(",")));
-    // Pourquoi c'est trouvé : la source (`ocr`, `fiche` ; `vision` = vue par l'image, avec l'instant) et un extrait, séparés par l'octet 0x1F.
+    // Pourquoi c'est trouvé : la source (`ocr`, `fiche` ; `vision` = vue par l'image, avec l'instant ; `desc` = sa description
+    // dit l'un des mots) et un extrait, séparés par l'octet 0x1F. L'extrait d'une description se fait plus bas, en Rust.
     let by_image = if shown.is_empty() { "NULL".to_owned() } else { format!("CASE e.sha_plain {} END", shown.iter().map(|(x, t)| format!("WHEN '{x}' THEN 'vision' || char(31) || '{t}'")).collect::<Vec<_>>().join(" ")) };
-    let why = if fts.is_some() { format!("COALESCE((SELECT src || char(31) || snippet(search_text, 0, '', '', '…', 10) FROM search_text WHERE search_text MATCH ?2 AND owner_hex = ?1 AND sha = e.sha_plain LIMIT 1), {by_image})") } else { by_image };
+    // Numérotés explicitement (après ?1 le compte et ?2 la requête FTS) : un `?` anonyme placé avant tout `?1` dans le texte
+    // prendrait le numéro 1.
+    let first = if fts.is_some() { 3 } else { 2 };
+    let by_desc = if words.is_empty() {
+        "NULL".to_owned()
+    } else {
+        format!("CASE WHEN {} THEN 'desc' || char(31) END", (0..words.len()).map(|i| format!("has_word(e.desc_text, ?{})", first + i)).collect::<Vec<_>>().join(" OR "))
+    };
+    let why = if fts.is_some() {
+        format!("COALESCE((SELECT src || char(31) || snippet(search_text, 0, '', '', '…', 10) FROM search_text WHERE search_text MATCH ?2 AND owner_hex = ?1 AND sha = e.sha_plain LIMIT 1), {by_image}, {by_desc})")
+    } else {
+        format!("COALESCE({by_image}, {by_desc})")
+    };
     // Film ou musique : un son, ou un fichier qui a sa fiche de la Médiathèque à côté (`<nom>.media.json`).
     let media = "(e.mime LIKE 'audio/%' OR EXISTS (SELECT 1 FROM ucloud_entries f WHERE f.owner_hex = e.owner_hex AND f.parent = e.parent AND f.path GLOB '*.media.json' \
                  AND substr(e.path, 1, length(f.path) - 10) = substr(f.path, 1, length(f.path) - 10)))";
-    let mut sql = format!("SELECT {COLS}, {why} AS why, {media} FROM ucloud_entries e WHERE {FILES}");
+    let mut sql = format!("SELECT {COLS}, {why} AS why, {media}, e.desc_text FROM ucloud_entries e WHERE {FILES}");
+    // Paramètres dans l'ordre du texte : compte (?1), requête FTS (?2), mots de la description (raison), puis les filtres.
     let mut args: Vec<rusqlite::types::Value> = vec![owner.to_owned().into()];
     if let Some(f) = &fts {
         args.push(f.clone().into());
     }
+    args.extend(words.iter().map(|w| w.clone().into()));
     if !terms.is_empty() {
         let (plain, named): (Vec<_>, Vec<_>) = terms.iter().partition(|t| t.plain());
         let named: Vec<String> = named.iter().map(|t| term_sql(t, &mut args)).collect();
@@ -343,12 +376,13 @@ fn select(c: &Connection, owner: &str, s: &Search, terms: &[crate::search_query:
             v["found"] = json!(match src {
                 "vision" => "seen",
                 "fiche" => "fiche",
+                "desc" => "desc",
                 _ => "text",
             });
-            if src == "vision" {
-                v["at_ms"] = json!(x.parse::<i64>().unwrap_or(0));
-            } else {
-                v["excerpt"] = json!(x);
+            match src {
+                "vision" => v["at_ms"] = json!(x.parse::<i64>().unwrap_or(0)),
+                "desc" => v["excerpt"] = json!(r.get::<_, Option<String>>(13)?.as_deref().and_then(|d| excerpt_of(d, &words))),
+                _ => v["excerpt"] = json!(x),
             }
         }
         if r.get::<_, bool>(12)? {
@@ -359,17 +393,21 @@ fn select(c: &Connection, owner: &str, s: &Search, terms: &[crate::search_query:
     rows.collect()
 }
 
-/// Les meilleurs résultats d'abord : les mots dans le nom du fichier, puis le texte lu, puis la photo qui montre le mieux la
-/// requête ; à égalité, le plus récent. Seuls les résultats qui ont une raison forte d'être là sont gardés ; moins de deux :
-/// rien (la liste par date suffit).
+/// Les meilleurs résultats d'abord : les mots dans le nom du fichier (mots entiers), puis le texte lu, puis la description de
+/// la photo, puis la photo qui montre le mieux la requête ; à égalité, le plus récent. Seuls les résultats qui ont une raison
+/// forte d'être là sont gardés ; moins de deux : rien (la liste par date suffit).
 fn best(rows: Vec<(Value, String)>, terms: &[crate::search_query::Term], seen: &[(String, i64)]) -> Vec<Value> {
-    let words: Vec<String> = terms.iter().flat_map(|t| t.words.iter()).map(|w| crate::search_query::fold_str(w)).filter(|w| !w.is_empty()).collect();
+    let words: Vec<&String> = terms.iter().flat_map(|t| t.words.iter()).filter(|w| astro_db::words_of(w).next().is_some()).collect();
     let mut scored: Vec<(f64, Value)> = rows
         .into_iter()
         .map(|(v, sha)| {
-            let name = crate::search_query::fold_str(v["path"].as_str().unwrap_or("").rsplit('/').next().unwrap_or(""));
-            let in_name = if words.is_empty() { 0.0 } else { words.iter().filter(|w| name.contains(w.as_str())).count() as f64 / words.len() as f64 };
-            let text = if matches!(v["found"].as_str(), Some("text" | "fiche")) { 2.5 } else { 0.0 };
+            let name = v["path"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("");
+            let in_name = if words.is_empty() { 0.0 } else { words.iter().filter(|w| astro_db::has_word(name, w)).count() as f64 / words.len() as f64 };
+            let text = match v["found"].as_str() {
+                Some("text" | "fiche") => 2.5,
+                Some("desc") => 2.2,
+                _ => 0.0,
+            };
             let image = seen.iter().position(|(x, _)| *x == sha).map_or(0.0, |p| 2.0 - 1.5 * p as f64 / seen.len().max(1) as f64);
             (3.0 * in_name + text + image, v)
         })
@@ -631,6 +669,36 @@ mod tests {
         assert!(memories(&c, ME, "05/17", 2026).unwrap().is_empty());
     }
 
+    /// Relevé sur une vraie station : « chat » trouvait « achat », « 2025 » des photos de 2026 dont le nom portait l'heure
+    /// 20:25, et une photo trouvée par sa description (« un chat tricolore ») n'était ni dans les meilleurs ni expliquée.
+    #[test]
+    fn a_word_is_found_whole_and_a_description_counts_among_the_best_with_its_excerpt() {
+        let c = db();
+        put(&c, "alice", "/Images/IMG_1.jpg", "image/jpeg", 10, Some(1_780_000_000), "d1", None, None);
+        put(&c, "alice", "/Images/IMG_2.jpg", "image/jpeg", 10, Some(1_780_000_100), "d2", None, None);
+        put(&c, "alice", "/Docs/ticket.jpg", "image/jpeg", 10, Some(1_780_000_200), "d3", None, None);
+        put(&c, "alice", "/Images/2026/10/IMG_20260621_202533.jpg", "image/jpeg", 10, Some(1_782_000_000), "d4", None, None);
+        put(&c, "alice", "/Images/2025/plage.jpg", "image/jpeg", 10, Some(1_740_000_000), "d5", None, None);
+        for (path, desc) in [
+            ("/Images/IMG_1.jpg", "un adulte assis tenant un chat tricolore sur ses genoux, lumière du soir"),
+            ("/Images/IMG_2.jpg", "deux chats dorment au soleil"),
+            ("/Docs/ticket.jpg", "un ticket de caisse : achat de pain"),
+        ] {
+            c.execute("UPDATE ucloud_entries SET desc_text = ?1 WHERE path = ?2", [desc, path]).unwrap();
+        }
+        let res = search(&c, "alice", &Search { q: Some("chat".into()), limit: 10, ..Search::default() }).unwrap();
+        let paths: Vec<&str> = res["items"].as_array().unwrap().iter().map(|h| h["path"].as_str().unwrap()).collect();
+        assert_eq!(paths, ["/Images/IMG_2.jpg", "/Images/IMG_1.jpg"], "mot entier, pluriel compris, jamais « achat »");
+        let best = res["best"].as_array().unwrap();
+        assert_eq!(best.len(), 2, "trouvées par leur description : parmi les meilleures");
+        let one = best.iter().find(|h| h["path"] == "/Images/IMG_1.jpg").unwrap();
+        assert_eq!(one["found"], "desc");
+        assert_eq!(one["excerpt"], "un adulte assis tenant un chat tricolore sur ses genoux, lumière…", "l'extrait dit pourquoi");
+        // « 2025 » : l'année (prise de vue) ou le dossier, jamais l'heure dans le nom d'une photo de 2026.
+        let y: Vec<String> = search(&c, "alice", &Search { q: Some("2025".into()), limit: 10, ..Search::default() }).unwrap()["items"].as_array().unwrap().iter().map(|h| h["path"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(y, ["/Images/2025/plage.jpg"]);
+    }
+
     #[test]
     fn words_read_inside_a_file_find_it_with_an_excerpt_and_only_for_its_owner() {
         let c = db();
@@ -644,7 +712,7 @@ mod tests {
         .unwrap();
         let find = |owner: &str, q: &str| search(&c, owner, &Search { q: Some(q.into()), limit: 10, ..Search::default() }).unwrap()["items"].as_array().unwrap().clone();
         let hits = find("alice", "electricite ecluse");
-        assert_eq!(hits.len(), 1, "sans accents, début de mot");
+        assert_eq!(hits.len(), 1, "sans accents, au pluriel près");
         assert_eq!((hits[0]["path"].as_str(), hits[0]["found"].as_str()), (Some("/Scans/scan001.jpg"), Some("text")));
         assert!(hits[0]["excerpt"].as_str().unwrap().contains("Électricité"));
         let both: Vec<_> = find("alice", "facture").iter().map(|h| h["path"].as_str().unwrap().to_owned()).collect();

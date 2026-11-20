@@ -298,6 +298,16 @@ pub fn front() -> bool {
     FRONT.get().copied().unwrap_or(false)
 }
 
+/// Dossier de blobs du plan dont la base est `db`, d'après `planes.json` s'il existe (le bassin commun des plans) ; `None` sans
+/// fichier, ou si aucun plan n'a cette base. Pour qu'une commande hors `serve` (`pull-webdav`) écrive là où le plan lit.
+pub fn blobs_for_db(home: &Path, db: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(default_path(home)).ok()?;
+    let planes = plan(&parse(&text).ok()?, home).ok()?;
+    let want = std::fs::canonicalize(db).unwrap_or_else(|_| db.to_owned());
+    let p = planes.iter().find(|p| std::fs::canonicalize(&p.db).unwrap_or_else(|_| p.db.clone()) == want)?;
+    p.args.windows(2).find(|w| w[0] == "--blobs").map(|w| PathBuf::from(&w[1]))
+}
+
 /// Chemin de `planes.json` par défaut.
 pub fn default_path(home: &Path) -> PathBuf {
     home.join(".zen/astroportd/planes.json")
@@ -309,7 +319,7 @@ pub fn load(path: &Path, home: &Path) -> Result<(PlanesFile, bool), PlaneError> 
     match std::fs::read_to_string(path) {
         Ok(text) => Ok((parse(&text)?, true)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let origin = PlaneSpec { name: "origin".into(), dir: Some("~/.zen/astroportd".into()), game: None, swarm_key: None, http_listen: Some("127.0.0.1:8090".into()), p2p_listen: Vec::new(), kubo: Some("http://127.0.0.1:5001".into()), args: Vec::new() };
+            let origin = PlaneSpec { name: "origin".into(), dir: Some("~/.zen/astroportd".into()), game: None, swarm_key: None, http_listen: Some("127.0.0.1:8090".into()), p2p_listen: Vec::new(), kubo: Some(crate::init::DEFAULT_KUBO.into()), args: Vec::new() };
             let _ = home;
             Ok((PlanesFile { pool: None, game_dir: None, root: None, planes: vec![origin] }, false))
         }
@@ -480,7 +490,7 @@ pub fn restore_origin(file: &mut PlanesFile, home: &Path, kept: Option<PausedOri
     }
     freeze(file, home)?;
     let kept = kept.filter(|k| k.origin.swarm_key.is_none());
-    let spec = kept.as_ref().map_or_else(|| PlaneSpec { name: "origin".into(), dir: Some("~/.zen/astroportd".into()), game: None, swarm_key: None, http_listen: Some("127.0.0.1:8090".into()), p2p_listen: Vec::new(), kubo: Some("http://127.0.0.1:5001".into()), args: Vec::new() }, |k| k.origin.clone());
+    let spec = kept.as_ref().map_or_else(|| PlaneSpec { name: "origin".into(), dir: Some("~/.zen/astroportd".into()), game: None, swarm_key: None, http_listen: Some("127.0.0.1:8090".into()), p2p_listen: Vec::new(), kubo: Some(crate::init::DEFAULT_KUBO.into()), args: Vec::new() }, |k| k.origin.clone());
     if file.planes.iter().any(|p| p.name == spec.name) {
         return Err(rule(&spec.name, "un plan porte déjà ce nom"));
     }

@@ -164,7 +164,8 @@ if [ "$CHECK_ONLY" = 0 ]; then
   say "  Parcours : [1/5] examen de la machine   [2/5] téléchargement et empreinte"
   say "             [3/5] modèles locaux         [4/5] configuration de la station"
   say "             [5/5] plugins (facultatif)       durée ≈ 2 à 3 minutes"
-  say "  Écrit dans : ${PREFIX}/bin et ~/.zen — aucun sudo, aucun paquet système."
+  say "  Écrit dans : ${PREFIX}/bin et ~/.zen — aucun sudo. Les outils du système qui manquent (ffmpeg, kubo…)"
+  say "               vous sont proposés à part, avec install_sudo.sh."
   say "  Désinstaller : arrêter le service, supprimer ${PREFIX}/bin/${BIN} et ~/.zen/astroportd."
   say "                 Vos clés (~/.zen/game) ne sont jamais supprimées par ce script."
   say "  Relançable sans risque : une station existante est conservée (mise à jour seule)."
@@ -722,7 +723,6 @@ if [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; then
   if install_ort; then
     if [ "$WANT_SEARCH" = 1 ]; then
       install_search_models || warn "recherche multimédia locale incomplète : voir « astroportd models list »"
-      command -v pdftoppm >/dev/null 2>&1 || warn "poppler absent : les PDF ne seront pas lus (sudo apt install poppler-utils)"
     fi
     if [ "$WANT_FACE" = 1 ]; then install_models || warn "reconnaissance de visages locale incomplète : voir « astroportd face-check » (ou serve --face-engine http://…)"; fi
     if [ "$WANT_EMBED" = 1 ]; then install_embed_models || warn "embeddings locaux incomplets : voir « astroportd embed-check » (ou serve --ollama http://… pour les vecteurs)"; fi
@@ -731,6 +731,64 @@ if [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; then
   fi
   if [ "$WANT_EMBED" = 1 ] && [ -f "${MODELS}/bge-m3-int8.onnx" ]; then
     "${PREFIX}/bin/${BIN}" embed-check || warn "essai des embeddings locaux en échec : voir le message ci-dessus"
+  fi
+fi
+
+# --- Outils du système : ce script n'utilise jamais sudo ; ce qui manque est proposé à part (install_sudo.sh) ---------
+SUDO_SCRIPT="${ASTRO_SUDO_SCRIPT:-https://raw.githubusercontent.com/${REPO}/main/install_sudo.sh}"
+SYS_NEEDS=()
+SUDO_ARGS=(--user "$(id -un)")
+{ command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; } || SYS_NEEDS+=("ffmpeg : images des vidéos pour la recherche, Médiathèque")
+[ "$WANT_SEARCH" = 1 ] && ! command -v pdftoppm >/dev/null 2>&1 && SYS_NEEDS+=("poppler : lecture des PDF")
+if { [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; } && ! have_ort && ! { command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; }; then
+  SYS_NEEDS+=("python3-pip : ONNX Runtime (visages, recherche)")
+fi
+command -v git >/dev/null 2>&1 || SYS_NEEDS+=("git : plugins (films, énergie, DNS)")
+# ORIGIN publie ses fichiers par Kubo, en miroir du disque, sur le réseau IPFS des stations ORIGIN (swarm.key à zéros) ; une station ẐEN n'a jamais de Kubo.
+if [ "$MODE" = zen ] || conf_get mode 2>/dev/null | grep -qx zen; then
+  SUDO_ARGS+=(--no-kubo)
+elif ! command -v ipfs >/dev/null 2>&1; then
+  SYS_NEEDS+=("kubo : publication des fichiers entre stations ORIGIN (miroir du disque ; facultatif)"); SUDO_ARGS+=(--kubo)
+elif [ "$(ipfs config --json Experimental.FilestoreEnabled 2>/dev/null)" != true ]; then
+  SYS_NEEDS+=("kubo : activer le filestore (publication sans doubler la place sur le disque)"); SUDO_ARGS+=(--kubo)
+else
+  SUDO_ARGS+=(--kubo)
+fi
+if command -v loginctl >/dev/null 2>&1 && loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q '=no'; then
+  SYS_NEEDS+=("démarrage avec la machine (linger) : sans lui, astroportd s'arrête quand vous fermez votre session")
+else
+  SUDO_ARGS+=(--no-linger)
+fi
+say ""
+say "▶ Outils du système"
+if [ ${#SYS_NEEDS[@]} = 0 ]; then
+  say "  ✔ tout est en place (ffmpeg, poppler, git, kubo et démarrage avec la machine, selon la station)"
+else
+  for n in "${SYS_NEEDS[@]}"; do say "  • manque ${n}"; done
+  sudo_cmd="curl -fsSL ${SUDO_SCRIPT} -o install_sudo.sh && sudo bash install_sudo.sh ${SUDO_ARGS[*]}"
+  if [ "$DRY" = 1 ] || [ "$YES" = 1 ] || [ ! -r /dev/tty ]; then
+    say "  Pour les installer (droits administrateur) :"
+    say "    \$ ${sudo_cmd}"
+  else
+    printf '  Les installer maintenant avec install_sudo.sh ? Il demande votre mot de passe (sudo) et ne fait que cela. [o/N] ' > /dev/tty
+    read -r _sys < /dev/tty || _sys="n"
+    case "${_sys:-n}" in
+      o|O|oui|Oui|y|Y)
+        # Lancé depuis un dépôt cloné : son install_sudo.sh ; sinon celui du dépôt, téléchargé (et gardé pour le relire).
+        _here=""; if _d="$(dirname "${BASH_SOURCE[0]:-$0}")" && [ -d "$_d" ]; then _here="$(cd "$_d" && pwd)"; fi
+        if [ -n "$_here" ] && [ -f "${_here}/install_sudo.sh" ]; then _sudo_sh="${_here}/install_sudo.sh"
+        else
+          _sudo_sh="${DATA}/install_sudo.sh"; mkdir -p "$DATA"
+          curl -fsSL --proto '=https' --tlsv1.2 -o "$_sudo_sh" "$SUDO_SCRIPT" || { warn "install_sudo.sh introuvable : ${SUDO_SCRIPT}"; _sudo_sh=""; }
+        fi
+        if [ -n "$_sudo_sh" ]; then
+          say "  ${_sudo_sh} (lisible avant de l'accepter)"
+          # Le terminal sert aux questions du script (et au mot de passe de sudo) ; la redirection est voulue côté utilisateur.
+          # shellcheck disable=SC2024
+          sudo bash "$_sudo_sh" "${SUDO_ARGS[@]}" < /dev/tty || warn "install_sudo.sh interrompu : relancez « sudo bash ${_sudo_sh} ${SUDO_ARGS[*]} »"
+        fi ;;
+      *) say "  D'accord. Plus tard : ${sudo_cmd}" ;;
+    esac
   fi
 fi
 

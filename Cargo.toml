@@ -1,6 +1,6 @@
 [package]
 name = "astroportd"
-version = "1.5.0"
+version = "1.6.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -92,7 +92,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.5.0"
+version = "1.6.0"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
@@ -133,7 +133,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 secp256k1 = { version = "0.30", default-features = false, features = ["std"] }
 url = "2"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "functions"] }
 sqlite-vec = "0.1"
 scrypt = { version = "0.11", default-features = false }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }

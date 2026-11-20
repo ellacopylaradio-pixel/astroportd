@@ -16,6 +16,9 @@ use crate::{plane, systemd_unit};
 /// `UPLANETNAME` d'une constellation ORIGIN (pas de `swarm.key`) : 64 zéros, comme `tools/my.sh`.
 pub const ORIGIN_UPLANETNAME: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+/// API de Kubo d'une station ORIGIN (miroir de publication sur le réseau IPFS des stations ORIGIN : voir `kubo_mirror`).
+pub const DEFAULT_KUBO: &str = "http://127.0.0.1:5001";
+
 /// Constellation à rejoindre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Mode {
@@ -155,11 +158,17 @@ fn kubo_config_of(given: Option<PathBuf>) -> Option<PathBuf> {
 }
 
 /// `swarm.key` posée dans le dossier de kubo (réseau privé IPFS) : elle désigne la constellation ẐEN de cette machine.
-/// Rendue seulement si le fichier est une clé valide.
+/// Rendue seulement si le fichier est une clé valide **et n'est pas celle d'ORIGIN** : le kubo d'une station ORIGIN porte la
+/// clé à zéros (le réseau IPFS des stations ORIGIN, pas l'IPFS mondial), qui ne fait pas d'elle une station ẐEN.
 fn kubo_swarm_key() -> Option<PathBuf> {
-    let p = ipfs_dir()?.join("swarm.key");
+    kubo_swarm_key_in(&ipfs_dir()?)
+}
+
+fn kubo_swarm_key_in(ipfs: &std::path::Path) -> Option<PathBuf> {
+    let p = ipfs.join("swarm.key");
     let text = std::fs::read_to_string(&p).ok()?;
-    astro_p2p::parse_swarm_key(&text).ok().map(|_| p)
+    astro_p2p::parse_swarm_key(&text).ok()?;
+    (shared_secret(&text).as_deref() != Some(ORIGIN_UPLANETNAME)).then_some(p)
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -519,6 +528,9 @@ pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
     let bootstrap = a.joined.as_ref().map(|j| j.bootstrap.clone()).unwrap_or_default();
     if mode == Mode::Zen {
         serve.push(format!("--swarm-key {}", home.join("swarm.key").display()));
+    } else {
+        // ORIGIN publie par Kubo sur le réseau IPFS des stations ORIGIN, en miroir du disque (Kubo absent ou arrêté : la publication attend, rien ne se perd).
+        serve.push(format!("--kubo {DEFAULT_KUBO}"));
     }
     if mode == Mode::Zen || !bootstrap.is_empty() {
         serve.push("--p2p-listen /ip4/0.0.0.0/tcp/4101".into());
@@ -715,5 +727,20 @@ mod tests {
     fn a_given_kubo_config_wins_over_the_default_one() {
         let given = PathBuf::from("/tmp/une-config-kubo");
         assert_eq!(kubo_config_of(Some(given.clone())), Some(given));
+    }
+
+    /// Le kubo d'une station ORIGIN porte la swarm.key à zéros (réseau IPFS des stations ORIGIN) : ce n'est pas une constellation
+    /// ẐEN, `init` ne doit ni la proposer ni la reprendre. Une vraie clé privée, elle, est reconnue ; une clé illisible, non.
+    #[test]
+    fn the_origin_kubo_key_is_not_taken_for_a_zen_constellation() {
+        let dir = std::env::temp_dir().join(format!("astroportd-kubo-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("swarm.key"), format!("/key/swarm/psk/1.0.0/\n/base16/\n{ORIGIN_UPLANETNAME}\n")).unwrap();
+        assert_eq!(kubo_swarm_key_in(&dir), None, "clé d'ORIGIN");
+        std::fs::write(dir.join("swarm.key"), astro_p2p::generate_swarm_key().unwrap()).unwrap();
+        assert_eq!(kubo_swarm_key_in(&dir), Some(dir.join("swarm.key")), "clé ẐEN");
+        std::fs::write(dir.join("swarm.key"), "pas une clé").unwrap();
+        assert_eq!(kubo_swarm_key_in(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

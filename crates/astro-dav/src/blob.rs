@@ -171,6 +171,23 @@ impl FsBlobStore {
     fn path_of(&self, cid: &str) -> Result<PathBuf, BlobError> {
         if is_cid(cid) { Ok(self.root.join(cid)) } else { Err(BlobError::BadCid) }
     }
+
+    /// Chemin du blob `cid` sur le disque, qu'il existe ou non (le miroir Kubo le donne au *filestore* de Kubo).
+    pub fn blob_path(&self, cid: &str) -> Result<PathBuf, BlobError> {
+        self.path_of(cid)
+    }
+
+    /// Écrivain qui range le blob sous le nom `cid` donné (rapatriement d'un blob connu par son CID). Un CID `raw`
+    /// (`bafkrei…`) est vérifié à la validation : un contenu qui n'a pas cette empreinte est refusé. Une racine `dag-pb`
+    /// (`bafybei…`) ne se recalcule pas ici : l'appelant la vérifie avant de valider (voir [`FsBlobWriter::tmp_path`]).
+    pub async fn begin_named(&self, cid: &str) -> Result<FsBlobWriter, BlobError> {
+        if !is_cid(cid) {
+            return Err(BlobError::BadCid);
+        }
+        let mut w = self.begin().await?;
+        w.name = Some(cid.to_owned());
+        Ok(w)
+    }
 }
 
 /// Écrivain du magasin disque : fichier temporaire haché au fil de l'eau.
@@ -183,9 +200,16 @@ pub struct FsBlobWriter {
     committed: bool,
     /// Partie reprenable : `(cid, registre)` ; non validée, elle reste sur le disque pour la fois suivante.
     partial: Option<(String, Arc<Mutex<HashSet<String>>>)>,
+    /// Nom imposé ([`FsBlobStore::begin_named`]) ; sinon le CID `raw` du contenu.
+    name: Option<String>,
 }
 
 impl FsBlobWriter {
+    /// Fichier temporaire en cours d'écriture : de quoi vérifier le contenu avant [`BlobWriter::commit`].
+    pub fn tmp_path(&self) -> &Path {
+        &self.tmp
+    }
+
     fn release(&mut self) {
         if let Some((cid, set)) = self.partial.take() {
             set.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&cid);
@@ -218,7 +242,14 @@ impl BlobWriter for FsBlobWriter {
         self.file.flush().await?;
         self.file.sync_all().await?;
         let digest: [u8; 32] = self.hasher.clone().finalize().into();
-        let cid = cid_raw_sha256(&digest);
+        let raw = cid_raw_sha256(&digest);
+        let cid = match self.name.take() {
+            Some(n) if n.starts_with("bafkrei") && n != raw => {
+                return Err(BlobError::Io(io::Error::new(io::ErrorKind::InvalidData, format!("contenu refusé : son empreinte est {raw}, pas {n}"))));
+            }
+            Some(n) => n,
+            None => raw,
+        };
         let dest = self.root.join(&cid);
         if tokio::fs::try_exists(&dest).await? {
             tokio::fs::remove_file(&self.tmp).await?; // même contenu déjà présent
@@ -255,7 +286,7 @@ impl BlobStore for FsBlobStore {
         getrandom::fill(&mut id).map_err(|e| io::Error::other(e.to_string()))?;
         let tmp = self.root.join(".tmp").join(hex::encode(id));
         let file = tokio::fs::File::create(&tmp).await?;
-        Ok(FsBlobWriter { file, hasher: Sha256::new(), size: 0, tmp, root: self.root.clone(), committed: false, partial: None })
+        Ok(FsBlobWriter { file, hasher: Sha256::new(), size: 0, tmp, root: self.root.clone(), committed: false, partial: None, name: None })
     }
 
     async fn begin_resumable(&self, cid: &str, max: u64, align: u64) -> Result<Resumed<FsBlobWriter>, BlobError> {
@@ -275,7 +306,7 @@ impl BlobStore for FsBlobStore {
                 return Err(e.into());
             }
         };
-        let mut w = FsBlobWriter { file, hasher: Sha256::new(), size: 0, tmp, root: self.root.clone(), committed: false, partial: Some((cid.to_owned(), self.resuming.clone())) };
+        let mut w = FsBlobWriter { file, hasher: Sha256::new(), size: 0, tmp, root: self.root.clone(), committed: false, partial: Some((cid.to_owned(), self.resuming.clone())), name: None };
         let len = w.file.metadata().await?.len();
         // Seuls des segments entiers sont gardés : un segment à moitié écrit (coupure pendant l'écriture) est redemandé.
         let keep = if align == 0 { 0 } else { len.min(max) / align * align };

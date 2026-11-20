@@ -25,6 +25,7 @@ pub mod identity_links;
 pub mod init;
 pub mod first_run;
 pub mod integrity;
+pub mod kubo_mirror;
 pub mod invites;
 pub mod library;
 pub mod media;

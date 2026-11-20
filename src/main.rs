@@ -605,18 +605,16 @@ struct PullArgs {
     account: String,
     #[command(subcommand)]
     action: PullAction,
-    /// Base `uplanet.db` d'astroportd (défaut : `~/.zen/astroportd/uplanet.db`).
+    /// Base `uplanet.db` d'astroportd (défaut : `~/.zen/astroportd/uplanet.db` ; `--plane NOM` pour un autre plan).
     #[arg(long, global = true)]
     db: Option<PathBuf>,
-    /// Dossier des blobs d'astroportd (défaut : `~/.zen/astroportd/blobs`).
+    /// Dossier des blobs d'astroportd (défaut : celui du plan de cette base dans `planes.json`, sinon `~/.zen/astroportd/blobs`).
+    /// Les fichiers repris vont **sur le disque** ; en ORIGIN, le miroir Kubo de `serve` les publie ensuite.
     #[arg(long, global = true)]
     blobs: Option<PathBuf>,
     /// Dossier `~/.zen/game` (défaut : `$ASTRO_GAME_DIR`, sinon `$HOME/.zen/game`).
     #[arg(long, global = true)]
     game_dir: Option<PathBuf>,
-    /// API RPC d'IPFS Kubo où ranger les fichiers repris ; sans Kubo joignable, ils restent sur disque.
-    #[arg(long, global = true, default_value = "http://127.0.0.1:5001")]
-    kubo: String,
 }
 
 #[derive(Subcommand)]
@@ -1695,9 +1693,11 @@ async fn bridge_copy_cmd(args: BridgeCopyArgs) -> Result<(), Failure> {
 
 async fn pull_webdav_cmd(args: PullArgs) -> Result<(), Failure> {
     use astroportd::webdav_pull as pull;
-    let PullArgs { account, action, db, blobs, game_dir, kubo } = args;
+    let PullArgs { account, action, db, blobs, game_dir } = args;
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or("$HOME introuvable")?;
-    let (db_path, blobs_path) = (db.unwrap_or_else(|| home.join(".zen/astroportd/uplanet.db")), blobs.unwrap_or_else(|| home.join(".zen/astroportd/blobs")));
+    let db_path = db.unwrap_or_else(|| home.join(".zen/astroportd/uplanet.db"));
+    // Là où le plan de cette base lit ses blobs (le bassin commun avec `planes`), sinon le dossier d'une station à un seul plan.
+    let blobs_path = blobs.or_else(|| astroportd::plane::blobs_for_db(&home, &db_path)).unwrap_or_else(|| home.join(".zen/astroportd/blobs"));
     let station = identity::resolve(game_dir.as_deref(), true)?;
     let found = station.discovered.as_ref().ok_or("identités locales introuvables (--game-dir)")?;
     let owner = found.multipasses.iter().find(|m| m.email.eq_ignore_ascii_case(&account) || m.hex == account.to_ascii_lowercase()).ok_or_else(|| format!("compte « {account} » non hébergé ici"))?;
@@ -1747,7 +1747,8 @@ async fn pull_webdav_cmd(args: PullArgs) -> Result<(), Failure> {
                 }
                 .into());
             }
-            let local = Arc::new(AutoBlobStore::new(Some(KuboBlobStore::new(&kubo)), FsBlobStore::open(&blobs_path)?));
+            let local = Arc::new(AutoBlobStore::new(None, FsBlobStore::open(&blobs_path)?));
+            println!("fichiers repris rangés dans {}", blobs_path.display());
             let manifests = ManifestPublisher::spawn(db.clone(), local.clone(), keys.clone(), Duration::from_secs(3600));
             let dav = Arc::new(DavState { db: db.clone(), blobs: local, replay: Arc::new(SqliteReplayStore::open(&db_path)?), publisher: Some(manifests.clone()), config: DavConfig::new(station.secret.clone()), on_upload: None });
             let opts = pull::PullOptions { dry_run, limit, max_file: max_file_mb << 20, stop: None };

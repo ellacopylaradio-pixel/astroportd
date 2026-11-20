@@ -50,14 +50,15 @@ export default async function find(root, K, qs) {
       h('a', { class: 'fd-where', href: '#/cloud?p=' + encodeURIComponent(dir(it.path)) }, dir(it.path)),
       why(it) ? h('small', {}, why(it)) : null,
       it.at_ms ? h('button', { class: 'ghost fd-at', onclick: () => open(it, list) }, '▶ ' + t('vers {0}', clock(it.at_ms))) : null));
-  // Vignettes : une pastille dit pourquoi une photo est là (👁 ce qu'elle montre, T le texte lu dedans).
+  // Vignettes : une pastille dit pourquoi une photo est là (👁 ce qu'elle montre — vu par l'image, ou dit par sa description —,
+  // T le texte lu dedans).
   const tiles = (g, list, items) => {
     if (!items.length) return;
     K.tiles(g, list, items);
     [...g.children].slice(-items.length).forEach((b, i) => {
       const it = items[i], play = b.querySelector('.badge');
       if (it.at_ms && play) play.textContent = '▶ ' + clock(it.at_ms); // la visionneuse ouvre la vidéo à ce moment
-      if (it.found) { b.append(h('span', { class: 'badge txt', 'aria-hidden': 'true' }, it.found === 'seen' ? '👁' : 'T')); b.title = why(it) + (it.at_ms ? ' · ' + t('vers {0}', clock(it.at_ms)) : ''); }
+      if (it.found) { b.append(h('span', { class: 'badge txt', 'aria-hidden': 'true' }, it.found === 'seen' || it.found === 'desc' ? '👁' : 'T')); b.title = why(it) + (it.at_ms ? ' · ' + t('vers {0}', clock(it.at_ms)) : ''); }
     });
   };
   // Un mélange (meilleurs, peut-être) : les photos et vidéos en vignettes, les autres en lignes.

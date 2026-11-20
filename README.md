@@ -11,7 +11,7 @@ vos amis, vous fait **sauvegarder par vos proches** (et retrouver votre compte s
 une **comptabilité coopérative en Ẑen** (monnaie libre Ğ1) — sans plateforme, sans abonnement, sans serveur central.
 C'est le cœur souverain d'[Astroport.ONE](https://github.com/papiche/Astroport.ONE) et d'UPlanet, réécrit en Rust.
 
-> **Version 1.5.0.** Testé de bout en bout (≈ 1 020 tests, `clippy` sans avertissement) ; lisez aussi
+> **Version 1.6.0.** Testé de bout en bout (≈ 1 030 tests, `clippy` sans avertissement) ; lisez aussi
 > [les limites connues](#10-limites-connues). Licence **AGPL-3.0** · Auteur : Fred (support@qo-op.com) · Rust 2024 (≥ 1.85).
 
 **Par où commencer ?** Découvrir sans rien installer : [la page d'accueil](docs/index.html) · Ouvrir sa station :
