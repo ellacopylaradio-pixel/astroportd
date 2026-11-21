@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "astro-bro"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-core",
  "astro-crypto",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "astro-core"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "base64 0.22.1",
  "bech32",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "astro-crypto"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "astro-dav"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-crypto",
  "astro-db",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "astro-db"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-crypto",
  "astro-nostr-proto",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "astro-duniter"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-core",
  "astro-g1-runtime",
@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "astro-economy"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-core",
  "astro-db",
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "astro-erasure"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "hex",
  "sha2 0.10.9",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "astro-facecloud"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-crypto",
  "astro-dav",
@@ -446,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "astro-g1-runtime"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "parity-scale-codec",
  "subxt",
@@ -454,7 +454,7 @@ dependencies = [
 
 [[package]]
 name = "astro-index"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-dav",
  "astro-facecloud",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "astro-lifecycle"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-core",
  "astro-crypto",
@@ -498,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "astro-nostr-proto"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "hex",
  "secp256k1",
@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "astro-p2p"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-core",
  "astro-dav",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "astro-plugins"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "astro-relay"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-db",
  "astro-nostr-proto",
@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "astro-sync"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-crypto",
  "astro-dav",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "astro-ui"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "arc-swap",
  "astro-core",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "astroportd"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "astro-bro",
  "astro-core",
