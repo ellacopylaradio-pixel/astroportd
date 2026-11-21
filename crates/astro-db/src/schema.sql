@@ -151,6 +151,9 @@ CREATE TABLE IF NOT EXISTS ucloud_entries (
 CREATE UNIQUE INDEX IF NOT EXISTS ue_owner_path ON ucloud_entries(owner_hex, path);
 CREATE INDEX IF NOT EXISTS ue_parent     ON ucloud_entries(owner_hex, parent, path);   -- enfants d'un dossier, déjà triés
 CREATE INDEX IF NOT EXISTS ue_cid        ON ucloud_entries(cid)       WHERE cid IS NOT NULL;
+-- Miniature d'une entrée : le `CidGate` d'un bassin partagé demande « ce CID est-il à moi ? » à chaque blob servi. Expression
+-- gardée par `json_valid` (un JSON abîmé ne doit jamais faire échouer une écriture) ; `astro_dav::pool` l'écrit à l'identique.
+CREATE INDEX IF NOT EXISTS ue_thumb_cid  ON ucloud_entries(CASE WHEN json_valid(data) THEN json_extract(data, '$.thumb.cid') END);
 CREATE INDEX IF NOT EXISTS ue_sha_orig   ON ucloud_entries(sha_orig)  WHERE sha_orig IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ue_sha_plain  ON ucloud_entries(sha_plain) WHERE sha_plain IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ue_taken      ON ucloud_entries(owner_hex, COALESCE(taken_at, mtime) DESC)
@@ -175,32 +178,6 @@ CREATE TABLE IF NOT EXISTS ucloud_embeddings (
   model  TEXT NOT NULL,
   dsrc   TEXT
 ) STRICT;
-
--- Visages : remplace les collections Qdrant `faces_<hex64>`.
-CREATE TABLE IF NOT EXISTS faces (
-  face_id      INTEGER PRIMARY KEY,
-  owner_hex    TEXT NOT NULL,
-  cid          TEXT,
-  source_path  TEXT,
-  name         TEXT,                   -- 'Inconnu_<hash8>' tant que non nommé
-  pubkey       TEXT,
-  ref          TEXT CHECK (ref IN ('contact','shared') OR ref IS NULL),
-  email        TEXT,
-  det_score    REAL,
-  bbox_x1      REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL,  -- repère de l'image originale
-  embed_hash   TEXT NOT NULL,          -- id déterministe (sha256 de l'embedding arrondi à 6 décimales)
-  ts           INTEGER NOT NULL,
-  src_cid      TEXT,
-  ucloud_path  TEXT,                   -- photo d'origine dans le VFS
-  suggest_pubkey TEXT,                 -- zone grise [0,55 ; 0,82[ : « est-ce X ? », à valider par l'humain
-  suggest_name   TEXT,
-  suggest_score  REAL,
-  contact_uid    TEXT,                 -- UID vCard de la fiche de la personne (/Contacts) : le lien fait foi, pas le nom
-  suggest_contact_uid TEXT,            -- fiche de la personne suggérée
-  UNIQUE (owner_hex, embed_hash)
-) STRICT;
-CREATE INDEX IF NOT EXISTS faces_owner_name ON faces(owner_hex, name);
--- faces_owner_contact et identity_links_uid : créés par la migration (une base ancienne n'a pas encore la colonne ici).
 
 -- Annuaire des contacts : index des fiches vCard de `/Contacts` (le chiffré reste la source de vérité ; table rebuildable
 -- par un balayage). `pubkey` = clé Nostr rattachée à la fiche : donnée par la fiche (X-NOSTR-*) ou déduite de l'email d'un
@@ -330,30 +307,6 @@ CREATE TABLE IF NOT EXISTS invites (
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS invites_owner ON invites(owner_hex, created_at);
 
--- Mémoire BRO : remplace les collections Qdrant `memory_<hex16>`.
-CREATE TABLE IF NOT EXISTS memory (
-  mem_id       INTEGER PRIMARY KEY,
-  point_id     TEXT NOT NULL UNIQUE,   -- _stable_id(user_id, content_hash)
-  owner_hex    TEXT NOT NULL,
-  content      TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  ts           INTEGER NOT NULL,
-  event_id     TEXT,
-  season       TEXT,
-  importance   REAL,
-  kind         TEXT CHECK (kind IN ('fact','episode','trait','person')),
-  source       TEXT,
-  visibility   TEXT CHECK (visibility IN ('private','love','public')),
-  confidence   REAL,
-  status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded','deleted')),
-  embed_model  TEXT,
-  schema_v     INTEGER,
-  origin       TEXT,
-  slot         INTEGER,                -- seuls 0, 13, 14, 15 subsistent (SLOT_SCHEMA legacy)
-  src_cid      TEXT
-) STRICT;
-CREATE INDEX IF NOT EXISTS memory_owner ON memory(owner_hex, status, ts DESC);
-
 -- Économie : projections des kinds 30852 (ledger Ğ1-N²), 30800 (DID Node, capex) et 30850.
 CREATE TABLE IF NOT EXISTS ledger_n2 (
   event_id   TEXT PRIMARY KEY,
@@ -405,6 +358,63 @@ CREATE TABLE IF NOT EXISTS rent_payments (
   src_kind     INTEGER NOT NULL CHECK (src_kind IN (30851, 30852))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS rent_owner ON rent_payments(owner_hex, at DESC);
+-- Ordre d'arrivée quelconque : un loyer (30852 vers un NODE/Capitaine hébergé, ou 30851 `type=rent`) arrivé AVANT le DID qui
+-- fait connaître son payeur (email, rôle) ou avant l'hébergement d'un des comptes n'a rien pu constater ; il est rattrapé
+-- ici dès que l'identité apparaît ou change (même règle que `astro_sync::projector`, montant en centimes entiers).
+CREATE TRIGGER IF NOT EXISTS identities_rent_catch_up_ai AFTER INSERT ON identities BEGIN
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
+    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
+    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
+    WHERE p.role IN ('multipass', 'love') AND p.hex = NEW.hex
+      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
+    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
+    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
+    WHERE p.role IN ('multipass', 'love') AND m.hex = NEW.hex
+      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
+    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
+    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
+    WHERE p.role IN ('multipass', 'love') AND l.dest = NEW.hex
+      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT json_extract(d.value, '$.event_id'), m.hex, d.at, (CASE WHEN instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') = 0 THEN CAST(COALESCE(json_extract(d.value, '$.tags.amount'), '0') AS INTEGER) * 100 ELSE CAST(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), 1, instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') + 1) || '00', 1, 2) AS INTEGER) END), 30851 FROM identities m
+    JOIN done d ON d.key >= 'zen_issuance:' AND d.key < 'zen_issuance;' AND json_valid(d.value)
+      AND json_extract(d.value, '$.tags.type') = 'rent' AND json_extract(d.value, '$.tags.s') = 'OK'
+      AND json_extract(d.value, '$.tags.email') = m.email
+    WHERE m.hex = NEW.hex AND m.hosted = 1 AND m.role = 'multipass' AND json_extract(d.value, '$.event_id') IS NOT NULL
+      AND EXISTS (SELECT 1 FROM identities a WHERE a.hex = substr(d.key, 14, 64) AND a.hosted = 1 AND a.role IN ('node', 'captain'));
+END;
+CREATE TRIGGER IF NOT EXISTS identities_rent_catch_up_au AFTER UPDATE OF email, role, hosted ON identities BEGIN
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
+    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
+    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
+    WHERE p.role IN ('multipass', 'love') AND p.hex = NEW.hex
+      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
+    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
+    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
+    WHERE p.role IN ('multipass', 'love') AND m.hex = NEW.hex
+      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
+    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
+    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
+    WHERE p.role IN ('multipass', 'love') AND l.dest = NEW.hex
+      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
+    SELECT json_extract(d.value, '$.event_id'), m.hex, d.at, (CASE WHEN instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') = 0 THEN CAST(COALESCE(json_extract(d.value, '$.tags.amount'), '0') AS INTEGER) * 100 ELSE CAST(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), 1, instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') + 1) || '00', 1, 2) AS INTEGER) END), 30851 FROM identities m
+    JOIN done d ON d.key >= 'zen_issuance:' AND d.key < 'zen_issuance;' AND json_valid(d.value)
+      AND json_extract(d.value, '$.tags.type') = 'rent' AND json_extract(d.value, '$.tags.s') = 'OK'
+      AND json_extract(d.value, '$.tags.email') = m.email
+    WHERE m.hex = NEW.hex AND m.hosted = 1 AND m.role = 'multipass' AND json_extract(d.value, '$.event_id') IS NOT NULL
+      AND EXISTS (SELECT 1 FROM identities a WHERE a.hex = substr(d.key, 14, 64) AND a.hosted = 1 AND a.role IN ('node', 'captain'));
+END;
 
 -- Tout ce que le cycle de vie et la clôture hebdomadaire comptent comme loyer : les loyers du registre Ğ1-N² ci-dessus ET
 -- les virements d'hébergement faits par la station sur la Ğ1 (journal `hosting_fee`, montant en centimes de ẑ).
@@ -469,6 +479,58 @@ CREATE VIRTUAL TABLE IF NOT EXISTS dream_vectors USING vec0(
 );
 
 -- ═══════════════════════════ 2. LOCAL (non rejouable) ═══════════════════════════
+
+-- Visages : remplace les collections Qdrant `faces_<hex64>`. ÉTAT LOCAL (non rejouable : les noms donnés par le membre ne sont
+-- dans aucun événement) ; les visages nommés sont emportés dans son uCloud par `life_pack` (/_/Visages/faces.astroidx).
+CREATE TABLE IF NOT EXISTS faces (
+  face_id      INTEGER PRIMARY KEY,
+  owner_hex    TEXT NOT NULL,
+  cid          TEXT,
+  source_path  TEXT,
+  name         TEXT,                   -- 'Inconnu_<hash8>' tant que non nommé
+  pubkey       TEXT,
+  ref          TEXT CHECK (ref IN ('contact','shared') OR ref IS NULL),
+  email        TEXT,
+  det_score    REAL,
+  bbox_x1      REAL, bbox_y1 REAL, bbox_x2 REAL, bbox_y2 REAL,  -- repère de l'image originale
+  embed_hash   TEXT NOT NULL,          -- id déterministe (sha256 de l'embedding arrondi à 6 décimales)
+  ts           INTEGER NOT NULL,
+  src_cid      TEXT,
+  ucloud_path  TEXT,                   -- photo d'origine dans le VFS
+  suggest_pubkey TEXT,                 -- zone grise [0,55 ; 0,82[ : « est-ce X ? », à valider par l'humain
+  suggest_name   TEXT,
+  suggest_score  REAL,
+  contact_uid    TEXT,                 -- UID vCard de la fiche de la personne (/Contacts) : le lien fait foi, pas le nom
+  suggest_contact_uid TEXT,            -- fiche de la personne suggérée
+  UNIQUE (owner_hex, embed_hash)
+) STRICT;
+CREATE INDEX IF NOT EXISTS faces_owner_name ON faces(owner_hex, name);
+-- faces_owner_contact et identity_links_uid : créés par la migration (une base ancienne n'a pas encore la colonne ici).
+
+-- Mémoire BRO : remplace les collections Qdrant `memory_<hex16>`. ÉTAT LOCAL (écrite par astro-bro memory.rs et reve.rs, rien
+-- ne la rejoue) ; emportée dans l'uCloud du membre par `life_pack` (/_/Memoire/memory.astroidx).
+CREATE TABLE IF NOT EXISTS memory (
+  mem_id       INTEGER PRIMARY KEY,
+  point_id     TEXT NOT NULL UNIQUE,   -- _stable_id(user_id, content_hash)
+  owner_hex    TEXT NOT NULL,
+  content      TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  ts           INTEGER NOT NULL,
+  event_id     TEXT,
+  season       TEXT,
+  importance   REAL,
+  kind         TEXT CHECK (kind IN ('fact','episode','trait','person')),
+  source       TEXT,
+  visibility   TEXT CHECK (visibility IN ('private','love','public')),
+  confidence   REAL,
+  status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded','deleted')),
+  embed_model  TEXT,
+  schema_v     INTEGER,
+  origin       TEXT,
+  slot         INTEGER,                -- seuls 0, 13, 14, 15 subsistent (SLOT_SCHEMA legacy)
+  src_cid      TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS memory_owner ON memory(owner_hex, status, ts DESC);
 
 -- Anti-rejeu NIP-98 : persistant entre redémarrages, utile seulement pendant la fenêtre de 2×120 s.
 CREATE TABLE IF NOT EXISTS nip98_seen (

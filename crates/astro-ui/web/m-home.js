@@ -45,10 +45,17 @@ export default async function home(root, K) {
     const disk = fp?.disk, full = disk && !disk.unlimited && disk.quota_bytes && disk.used_bytes / disk.quota_bytes >= .9;
     const tile = (icon, title, line, href) => h('a', { class: 'card hm-tile', href }, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, icon), h('strong', {}, t(title)), h('span', { class: 'muted' }, line));
     const first = (me.email || '').split('@')[0];
+    // « Il y a un an » : les photos prises ce jour-là les années passées (la plus récente année d'abord), 4 vignettes.
+    const now = new Date(), two = n => String(n).padStart(2, '0');
+    const mem = (await soft(`/api/v1/ucloud/memories?md=${two(now.getMonth() + 1)}-${two(now.getDate())}&y=${now.getFullYear()}`))?.memories?.[0];
+    const memCard = mem ? (() => { const g = h('div', { class: 'photos' }); K.tiles(g, [], mem.items.slice(0, 4)); return h('section', { class: 'card hm-mem' },
+      h('h2', {}, '🕰️ ', mem.ago === 1 ? t('Il y a 1 an') : t('Il y a {0} ans', mem.ago), h('small', { class: 'muted' }, ' · ' + t('{0} photo(s) ce jour-là', mem.items.length))), g,
+      h('p', {}, h('a', { href: '#/library' }, t('Tous les souvenirs')), ' · ', h('a', { href: '#/library?tab=trips' }, t('Mes voyages')))); })() : null;
     root.replaceChildren(...[
       h('section', { class: 'hm-hero' }, h('h2', {}, first ? t('Bonjour {0}', first) : t('Bonjour')), h('p', { class: 'muted' }, s.files ? t('{0} fichier(s) chiffré(s) sur votre station, à vous seul.', s.files) : t('Votre espace est prêt. Commencez par y déposer quelques photos.'))),
       full ? h('p', { class: 'degraded', role: 'status' }, t('Votre espace est presque plein ({0} %).', Math.round(100 * disk.used_bytes / disk.quota_bytes)), ' ', h('a', { href: '#/money' }, t('Voir mon espace'))) : null,
       ...(n => n.length ? [h('section', { class: 'card hm-news', 'aria-label': t('Pour vous') }, h('ul', {}, n.map(x => h('li', {}, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, x.icon), h('span', {}, t(...x.text)), h('a', { class: 'ck-btn', href: x.href }, t(x.label))))))] : [])(news({ faces, shares, backup, fp })),
+      memCard,
       me.captain ? h('a', { class: 'card hm-cap', href: '#/cockpit' }, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, '⚓'), h('div', {}, h('strong', {}, t('Votre station')), h('p', { class: 'muted' }, health?.status === 'ok' ? t('✅ Tout fonctionne. Ouvrir le cockpit.') : health ? t('🟠 Quelque chose demande votre attention : ouvrir le cockpit.') : t('État inconnu : ouvrir le cockpit.')))) : null,
       h('div', { class: 'grid hm-tiles' },
         tile('📸', 'Mes photos', s.files ? t('{0} fichier(s)', s.files) : t('Envoyer des photos'), s.files ? '#/library' : '#/cloud'),

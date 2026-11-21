@@ -2,7 +2,8 @@
 // Recherche dans tout le uCloud (Fichiers › 🔍, la case est dans la barre de Fichiers : m-shell.js) : noms, texte lu dans les
 // documents, ce que montrent les photos et les vidéos, personnes reconnues, villes, mois et années — tout est cherché par la
 // station, rien ne la quitte. Les meilleurs résultats d'abord, puis tout, rangé en Documents / Photos et vidéos / Films et
-// musique. Rien de sûr : « Peut-être », jamais un « aucun résultat » sec.
+// musique. Rien de sûr : « Peut-être », jamais un « aucun résultat » sec. La même case retrouve aussi ce qui n'est pas un
+// fichier (`/api/v1/me/find`) : messages des conversations, notes et articles (les siens et ceux des amis), fiches du carnet.
 const day = 86400;
 const utc = v => (v ? Date.parse(v + 'T00:00:00Z') / 1000 : null);
 const ymd = s => new Date(s * 1000).toISOString().slice(0, 10);
@@ -33,7 +34,7 @@ export default async function find(root, K, qs) {
   if (!q && !kind && !from && !to) {
     const c = await can, ex = [c.text && 'facture', c.image && 'vélo rouge', 'Lyon', 'mars 2024'].filter(Boolean);
     root.replaceChildren(h('h2', {}, t('Recherche')), h('section', { class: 'card wide' },
-      h('p', {}, t('Tapez ce dont vous vous souvenez : un nom de fichier, un mot lu dans un document, ce que montre une photo, le prénom d’une personne reconnue, une ville, un mois ou une année.')),
+      h('p', {}, t('Tapez ce dont vous vous souvenez : un nom de fichier, un mot lu dans un document, ce que montre une photo, le prénom d’une personne reconnue, une ville, un mois ou une année — ou un mot d’un message, d’une note d’ami ou d’une fiche du carnet.')),
       h('p', { class: 'fd-chips' }, t('Par exemple :'), ex.map(x => h('button', { class: 'ghost', onclick: () => go({ q: x }) }, x))), hint));
     return;
   }
@@ -69,6 +70,25 @@ export default async function find(root, K, qs) {
     return [g.children.length ? g : null, ul.children.length ? ul : null];
   };
 
+  // ── Hors fichiers : messages, notes et articles, carnet. Chargé en même temps que la première page de fichiers. ──
+  const when = s => new Date(s * 1000).toLocaleDateString(K.lang, { day: 'numeric', month: 'short', year: 'numeric' });
+  const line = (icon, title, sub, href, extra) => h('li', {}, h('span', { 'aria-hidden': 'true' }, icon),
+    h('span', { class: 'fd-what' }, h('a', { href }, title), sub ? h('small', {}, sub) : null, extra || null));
+  const note = n => line(n.draft ? '✏️' : n.article ? '📰' : '📝', (n.title || (n.mine ? t('Ma note') : t('Note de {0}', n.name))) + (n.draft ? ' · ' + t('Brouillon') : ''), [n.article && !n.mine ? n.name + ' · ' : '', when(n.at), ' — ', n.excerpt].join(''),
+    n.article ? (n.mine ? '#/write?tab=article&edit=' + encodeURIComponent(n.d) : `#/write?tab=friends&open=${n.author}:${encodeURIComponent(n.d)}`) : n.mine ? '#/write?tab=list' : `#/write?reply=${n.id}&to=${n.author}`,
+    !n.article && !n.mine ? h('small', {}, t('Répondre')) : null);
+  const elsewhere = q ? K.api('/api/v1/me/find?q=' + encodeURIComponent(q)).catch(() => null) : Promise.resolve(null);
+  const others = h('div', { class: 'grid' });
+  elsewhere.then(o => {
+    if (!o) return;
+    const sec = (title, items, f) => (items.length ? h('section', { class: 'card wide' }, h('h3', {}, t(title), ' ', h('small', {}, '· ' + items.length)), h('ul', { class: 'files fd' }, items.map(f))) : null);
+    others.replaceChildren(...[
+      sec('Conversations', o.messages, m => line('💬', m.group ? m.name || t('Groupe') : m.name, (m.mine ? t('Moi') + ' · ' : '') + when(m.at) + ' — ' + m.excerpt, '#/chat?peer=' + m.peer)),
+      sec('Notes et articles', o.notes, note),
+      sec('Carnet', o.contacts, c => line('👤', c.name || c.path, c.org || '', '#/people?c=' + encodeURIComponent(c.path))),
+    ].filter(Boolean));
+  });
+
   // ── Groupes : remplis page après page ──
   const group = (title, el) => { const n = h('small', {}), s = h('section', { class: 'card wide', hidden: true }, h('h3', {}, t(title), ' ', n), el); s.n = 0; s.add = k => { s.n += k; n.textContent = '· ' + s.n; s.hidden = !s.n; }; return s; };
   const docs = h('ul', { class: 'files fd' }), docList = [], grid = h('div', { class: 'photos' }), picList = [], films = h('ul', { class: 'files fd' }), filmList = [];
@@ -101,13 +121,14 @@ export default async function find(root, K, qs) {
     const u = (r.understood || []).map(x => h('span', { class: 'pill' }, `${x.text} · ${x.as.map(a => t(LABEL[a])).join(t(' ou '))}`));
     if (u.length) top.append(h('p', { class: 'fd-chips muted' }, t('Compris :'), u));
     if (r.best?.length) top.append(h('section', { class: 'card wide fd-best' }, h('h3', {}, t('Les plus proches')), mixed(r.best)));
-    if (!r.items.length) {
-      says.replaceChildren(h('p', {}, q ? t('Rien de sûr pour « {0} ».', q) : t('Aucun fichier dans cette période.')),
+    if (!r.items.length) elsewhere.then(o => {
+      const found = o && (o.messages.length || o.notes.length || o.contacts.length);
+      says.replaceChildren(h('p', {}, found ? t('Aucun fichier pour « {0} », mais dans vos échanges :', q) : q ? t('Rien de sûr pour « {0} ».', q) : t('Aucun fichier dans cette période.')),
         ...(r.maybe?.length ? [h('section', { class: 'card wide' }, h('h3', {}, t('Peut-être :')), mixed(r.maybe))] : []),
-        h('p', { class: 'muted' }, t('Essayez un autre mot, moins de mots, ou retirez un filtre.')), hint);
-    }
+        ...(found ? [] : [h('p', { class: 'muted' }, t('Essayez un autre mot, moins de mots, ou retirez un filtre.')), hint]));
+    });
   };
   more.onclick = page;
-  root.replaceChildren(h('h2', {}, t('Recherche')), refine, says, top, h('div', { class: 'grid' }, G.docs, G.pics, G.films), h('p', {}, more));
+  root.replaceChildren(h('h2', {}, t('Recherche')), refine, says, top, others, h('div', { class: 'grid' }, G.docs, G.pics, G.films), h('p', {}, more));
   await page();
 }

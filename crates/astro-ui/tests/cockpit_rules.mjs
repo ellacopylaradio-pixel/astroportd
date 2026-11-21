@@ -80,4 +80,8 @@ const al = analyze({ ...healthy, al: { alerts: [{ id: 1, source: 'hosting', mess
 assert.equal(al.level, 'down'); assert.equal(al.floors.economy, 'down'); assert.equal(al.floors.station, 'degraded');
 assert.ok(al.todos.every(x => x.href === '#/alerts')); assert.equal(al.todos[1].why, 'issue inconnue');
 assert.equal(analyze({ ...healthy, al: { alerts: [], pending: [] } }).level, 'ok');
+// Nouvelle version : une information (jamais une panne) qui mène à Détails techniques ; à jour, rien.
+const up = analyze({ ...ok, up: { newer: true, latest: 'v1.8.0', current: '1.7.0' } });
+assert.equal(up.level, 'ok'); assert.equal(up.todos[0].href, '#/machine'); assert.deepEqual(up.todos[0].why.slice(1), ['v1.8.0', '1.7.0']);
+assert.equal(analyze({ ...ok, up: { newer: false } }).todos.length, 0);
 console.log('cockpit : règles OK');

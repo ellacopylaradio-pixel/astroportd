@@ -560,7 +560,14 @@ enum TunnelAction {
 #[derive(Subcommand)]
 enum ModelsAction {
     /// Liste le catalogue et ce qui est installé.
-    List,
+    List {
+        /// Seulement les modèles installables pas encore là, une ligne `id|Mo|tâches|nom` chacun (lu par `install.sh`).
+        #[arg(long)]
+        absent: bool,
+    },
+    /// Met à jour les modèles installés : seuls les fichiers dont l'empreinte a changé avec ce binaire sont retéléchargés.
+    /// Dit ensuite quels modèles du catalogue ne sont pas encore installés.
+    Update,
     /// Télécharge un modèle (`astroportd models add siglip2-base`) ; rien n'est gardé sans le bon SHA-256.
     Add {
         /// Identifiant du catalogue.
@@ -1840,11 +1847,20 @@ async fn models_cmd(dir: Option<PathBuf>, action: ModelsAction) -> Result<(), Fa
     let dir = dir.or_else(|| models_dir(None, home.as_deref())).ok_or("dossier des modèles inconnu : --dir")?;
     let find = |id: &str| Model::find(id).ok_or_else(|| format!("modèle « {id} » inconnu (astroportd models list)"));
     match action {
-        ModelsAction::List => print!("{}", models::list(&dir)),
+        ModelsAction::List { absent: false } => print!("{}", models::list(&dir)),
+        ModelsAction::List { absent: true } => print!("{}", models::absent_lines(&dir)),
         ModelsAction::Add { id } => {
             let gateway = std::env::var("ASTRO_IPFS_GATEWAY").unwrap_or_else(|_| models::DEFAULT_GATEWAY.to_owned());
             for note in models::add(find(&id)?, &dir, Some(&gateway), &astroportd::fetch::FetchLimits::new(0)).await? {
                 println!("  ✔ {note}");
+            }
+        }
+        ModelsAction::Update => {
+            let gateway = std::env::var("ASTRO_IPFS_GATEWAY").unwrap_or_else(|_| models::DEFAULT_GATEWAY.to_owned());
+            let report = models::update(&dir, Some(&gateway), &astroportd::fetch::FetchLimits::new(0)).await;
+            print!("{}", report.text);
+            if report.failed > 0 {
+                return Err(format!("{} modèle(s) non mis à jour", report.failed).into());
             }
         }
         ModelsAction::Remove { id } => println!("{} : {} fichier(s) supprimé(s)", id, models::remove(find(&id)?, &dir)?),

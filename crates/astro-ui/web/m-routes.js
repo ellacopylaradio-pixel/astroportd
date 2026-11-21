@@ -19,6 +19,7 @@ const R = [
   ['/favoris', 'm-favs.js', 'me', 'files', 'Favoris', null, 'Favoris'],
   ['/move', 'm-move.js', 'me', 'files', null, '/cloud', 'Déménager'],
   ['/find', 'm-find.js', 'me', 'files', null, null, 'Recherche'],
+  ['/person', 'm-person.js', 'me', 'files', null, '/library', 'Personne'],
   ['/people', 'm-contacts.js', 'me', 'people', 'Carnet', null, 'Proches'],
   ['/chat', 'c-chat.js', 'me', 'people', 'Conversations', null, 'Conversations'],
   ['/people/tri', 'm-people.js', 'me', 'people', null, '/people', 'Trier les visages'],

@@ -11,7 +11,7 @@ const COLS: &str = "e.path, e.mime, e.size, e.mtime, e.taken_at, COALESCE(e.take
 /// agenda : ce ne sont ni des photos, ni des documents à retrouver dans la bibliothèque). Plage `['/_/', '/_0')` : `_` est
 /// un joker de `LIKE`, et la plage suit l'index.
 /// Fichiers du membre, hors tiroir système et hors médiathèque (fiches, affiches, pochettes, sous-titres : [`crate::media`]).
-const FILES: &str = concat!("e.owner_hex = ?1 AND e.type = 'file' AND e.cid IS NOT NULL AND NOT (e.path >= '/_/' AND e.path < '/_0') AND ", crate::not_companion_sql!());
+pub(crate) const FILES: &str = concat!("e.owner_hex = ?1 AND e.type = 'file' AND e.cid IS NOT NULL AND NOT (e.path >= '/_/' AND e.path < '/_0') AND ", crate::not_companion_sql!());
 /// Plafond d'empreintes comparées pour les doublons visuels (borne la mémoire et le temps).
 const MAX_PHASH: usize = 30_000;
 /// Distance de Hamming maximale entre deux empreintes pour parler de « même image ».

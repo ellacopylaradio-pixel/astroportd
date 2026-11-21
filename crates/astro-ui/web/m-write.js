@@ -186,6 +186,9 @@ export default async function write(root, K) {
         p.image ? h('img', { src: p.image, alt: '', loading: 'lazy' }) : h('span', { class: 'wr-noimg', 'aria-hidden': 'true' }, p.reserved ? '🔒' : '📰'),
         h('span', { class: 't' }, h('b', {}, p.title), h('small', { class: 'muted' }, p.name, ' · ', new Date(p.published_at * 1000).toLocaleDateString(K.lang, { day: 'numeric', month: 'short' }), p.reserved ? ' · 🔒 ' + t('Réservé pour vous') : '')))));
       box.replaceChildren(list, reader);
+      // Lien direct vers un article (`#/write?tab=friends&open=<auteur>:<d>`, depuis la recherche).
+      const want = r.posts.find(p => `${p.author}:${p.d}` === q.get('open'));
+      if (want) open(want);
     }, e => box.replaceChildren(h('p', { class: 'err', role: 'alert' }, e.message)));
     return box;
   }

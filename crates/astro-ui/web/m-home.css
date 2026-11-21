@@ -16,3 +16,4 @@
 .hm-news li { display: flex; gap: .7rem; align-items: center; flex-wrap: wrap; }
 .hm-news li > span:nth-child(2) { flex: 1; min-width: 12rem; }
 .hm-news .hm-ico { font-size: 1.6rem; }
+.hm-mem .photos{grid-template-columns:repeat(4,1fr)}

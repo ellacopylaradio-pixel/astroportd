@@ -1,13 +1,15 @@
 //! Conversations privées 1 à 1 (NIP-17) : messages kind 14 emballés en NIP-59, comme pour le partage de fichiers.
 //!
 //! - **Envoi** : un message est emballé deux fois, pour l'ami (remis à sa station) et pour soi (copie publiée sur le relai local :
-//!   l'historique se retrouve sur n'importe quelle station qui héberge le compte). Le texte est rangé tout de suite dans
-//!   `chat_messages`, avec l'état `failed` si la remise a échoué : rien n'est perdu, l'erreur est dite.
+//!   cette copie ne vit que dans `nostr_events` de **cette** station, elle ne suit pas le compte ailleurs). Le texte est rangé
+//!   tout de suite dans `chat_messages`, avec l'état `failed` si la remise a échoué : rien n'est perdu, l'erreur est dite.
 //! - **Réception** : pour chaque MULTIPASS hébergé, les enveloppes nouvelles (suivies par un repère `seq`, car NIP-59 brouille
 //!   les dates) sont ouvertes ; seuls comptent les messages d'un proche (suivi par le titulaire) ou d'un compte hébergé ici.
 //!   Tout le reste est lu une fois et ignoré sans bruit. La signature du scellé prouve l'expéditeur.
 //! - Les messages déchiffrés sont un **état local** (`chat_messages`) : les enveloppes restent dans `nostr_events`, la base se
-//!   reconstruit en remettant le repère à zéro.
+//!   reconstruit en remettant le repère à zéro, **sur la même station seulement**. Si la station meurt ou si le compte
+//!   déménage, l'historique (messages, groupes, réactions, préférences, effacements) revient par le paquet
+//!   `/_/Messages/chat.astroidx` que [`crate::life_pack`] écrit dans l'uCloud du membre et que la restauration ramène.
 //! - **Appels visio** : la sonnerie et la poignée de main WebRTC (offre, réponse, raccrochage, refus, occupé) voyagent par le
 //!   même chemin, en rumeur privée `kind::CALL_SIGNAL` dans une enveloppe qui **expire** (elle contient des adresses réseau).
 //!   Seul un proche peut faire sonner. Un signal reçu est poussé en direct au navigateur (flux d'activité `call:<type>`) ;

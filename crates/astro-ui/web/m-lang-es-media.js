@@ -44,7 +44,6 @@ export default {
 "Série": "Serie",
 "Saison": "Temporada",
 "Épisode": "Episodio",
-"Avec": "Con",
 "Actualiser": "Actualizar",
 "Station injoignable : {0} (liste d'avant)": "Estación inaccesible: {0} (lista anterior)",
 "Vos amis ne partagent encore aucun film ni morceau avec vous.": "Tus amigos aún no comparten ninguna película ni canción contigo.",

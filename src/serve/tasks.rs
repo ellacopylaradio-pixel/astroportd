@@ -26,10 +26,12 @@ pub(super) struct Parts<'a> {
     /// Réveil de la balise de station (30850) ; la nuit la réveille après la clôture hebdomadaire.
     pub beacon_nudge: Arc<tokio::sync::Notify>,
     /// Membres dont le site public demande les événements (blog lu ici, hébergé ailleurs) : consommé par le crawl.
-    pub site_wants: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<(String, Option<String>)>>>,
+    pub site_wants: std::sync::Mutex<Option<SiteWants>>,
 }
 
 type Background = Vec<tokio::task::JoinHandle<()>>;
+/// Demandes du site public : (clé du membre, relai de sa station d'accueil).
+pub type SiteWants = tokio::sync::mpsc::UnboundedReceiver<(String, Option<String>)>;
 
 /// Les accès temporaires expirent, les amis changent : `authorized_keys` suit la politique toutes les 5 minutes.
 pub(super) fn ssh_sync(p: &Parts<'_>, tunnel_policy: &Arc<TunnelPolicy>, background: &mut Background) {
@@ -106,6 +108,37 @@ pub(super) fn exif_backfill(p: &Parts<'_>, background: &mut Background) {
             }
         }));
     }
+}
+
+/// Paquets de vie des membres (`life_pack` : visages nommés, chat, mémoire de BRO dans `/_/` de leur uCloud) : un premier tour
+/// 5 s après le démarrage (un paquet revenu par restauration est relu avant que l'analyse des visages ne range les photos
+/// revenues en « Inconnu » ; si elle passe avant, la fusion rend nom, fiche et clé), puis toutes les 10 minutes ; l'écriture
+/// elle-même n'a lieu qu'au plus une fois toutes les 20 h par paquet.
+pub(super) fn life_packs(p: &Parts<'_>, background: &mut Background) {
+    let (dav, bus, mut stop) = (p.dav.clone(), p.activity.clone(), p.stop_watch.clone());
+    background.push(tokio::spawn(async move {
+        let mut wait = Duration::from_secs(5);
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                _ = stop.changed() => return,
+            }
+            wait = Duration::from_secs(600);
+            match astroportd::life_pack::sync(&dav).await {
+                Ok(r) => {
+                    for problem in &r.problems {
+                        bus.publish_to(astro_core::Audience::Captain, "alert", "life_pack", problem.clone(), None);
+                    }
+                    if r.read > 0 {
+                        bus.publish_to(astro_core::Audience::Captain, "system", "life_pack", format!("visages, conversations et mémoire : {} paquet(s) relu(s) après restauration", r.read), None);
+                    }
+                }
+                Err(e) => {
+                    bus.publish_to(astro_core::Audience::Captain, "alert", "life_pack", format!("paquets de vie impossibles : {e}"), None);
+                }
+            }
+        }
+    }));
 }
 
 /// Synchronisation continue N¹/N² : les profils et événements des amis et de leurs amis, depuis les relais des stations de

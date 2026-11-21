@@ -6,7 +6,7 @@ const RANK = { down: 0, degraded: 1, info: 2, ok: 3 };
 const FLOORS = [['machine', '🖥️', 'Machine', '#/machine'], ['station', '📡', 'Station', '#/machine'], ['mesh', '🌐', 'Constellation', '#/planes'], ['services', '🔌', 'Services et accès', '#/options'], ['members', '👥', 'Membres', '#/members'], ['economy', '🪙', 'Économie', '#/coop']];
 const worst = (a, b) => (RANK[a] <= RANK[b] ? a : b);
 
-export function analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al }) {
+export function analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al, up }) {
   const todos = [], add = (level, floor, title, why, label, href, post) => todos.push({ level, floor, title, why, label, href, post });
   const nodes = cs?.nodes || [], me = nodes.find(n => n.self), others = nodes.filter(n => !n.self);
   // Station
@@ -45,6 +45,8 @@ export function analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al }) {
   // Énergie (plugin système energy) : absent = rien à dire ; arrêté ou hors contrat = à regarder.
   if (en?.state === 'stale') add('degraded', 'machine', 'Les mesures d\'énergie sont arrêtées', 'Le collecteur du plugin energy n\'écrit plus depuis plus d\'une heure : systemctl --user status energy-collect.timer', 'Voir la machine', '#/cockpit');
   else if (en?.state === 'invalid') add('degraded', 'machine', 'Mesures d\'énergie illisibles', en.error || '', 'Voir la machine', '#/cockpit');
+  // Mise à jour publiée : modèles de recherche et plugins sont revus en même temps (Détails techniques).
+  if (up?.newer) add('info', 'station', 'Nouvelle version disponible', ['La version {0} est publiée (vous avez {1}) : modèles et plugins sont revus en même temps.', up.latest, up.current], 'Voir la mise à jour', '#/machine');
   todos.sort((a, b) => RANK[a.level] - RANK[b.level]);
   const level = todos.some(x => x.level === 'down') ? 'down' : todos.some(x => x.level === 'degraded') ? 'degraded' : 'ok';
   const floors = Object.fromEntries(FLOORS.map(([k]) => [k, todos.filter(x => x.floor === k).reduce((l, x) => worst(l, x.level), 'ok')]));
@@ -179,12 +181,14 @@ export default async function cockpit(root, K) {
     K.cleanup(() => dlg.remove());
   };
   const welcome = () => { const d = welcomeDialog(K); K.cleanup(() => d.remove()); };
+  // Dernière version publiée : demandée une fois à l'ouverture (la station la garde 6 h), sans retarder le premier affichage.
+  let up = null;
   const draw = async () => {
     const [dash, health, cs, ec, ac, tun, tk, dns, fuel, en, paf, al] = await Promise.all([api('/api/v1/dashboard'), fetch('/health').then(r => r.json()).catch(() => null), soft('/api/v1/station/constellation'), soft('/api/v1/station/economy'), soft('/api/v1/station/accounts'), soft('/api/v1/station/admin/tunnels'), soft('/api/v1/station/admin/tasks'), soft('/api/v1/station/admin/dnslink'), soft('/api/v1/station/fuel'), soft('/api/v1/station/energy'), soft('/api/v1/station/paf'), soft('/api/v1/station/alerts')]);
-    const a = analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al }), st = dash.station, su = setup({ dash, cs, ac, dns });
+    const a = analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al, up }), st = dash.station, su = setup({ dash, cs, ac, dns });
     // Tant que la mise en service n'est pas finie, ses étapes disent déjà les informations (station seule, adresses) : pas de doublon.
     const todos = su.left ? a.todos.filter(x => x.level !== 'info') : a.todos;
-    const todo = x => h('li', { class: 'ck-todo ' + x.level }, h('div', {}, h('strong', {}, t(...[x.title].flat())), h('p', { class: 'muted' }, t(x.why))), x.post
+    const todo = x => h('li', { class: 'ck-todo ' + x.level }, h('div', {}, h('strong', {}, t(...[x.title].flat())), h('p', { class: 'muted' }, t(...[x.why].flat()))), x.post
       ? h('button', { type: 'button', class: 'ck-btn', onclick: async ev => { const b = ev.currentTarget; b.disabled = true; try { await K.api(x.post, { method: 'POST' }); K.toast(t('PASS déverrouillé'), 1); await draw(); } catch (e) { K.toast(e.message); b.disabled = false; } } }, t(x.label))
       : h('a', { class: 'ck-btn', href: x.href }, t(x.label)));
     const floors = FLOORS.map(([k, icon, name, href]) => {
@@ -219,5 +223,6 @@ export default async function cockpit(root, K) {
   };
   K.cleanup(() => link.remove());
   await draw();
+  soft('/api/v1/station/update').then(u => { if (u?.newer) { up = u; draw().catch(() => {}); } });
   K.every(30000, () => draw().catch(() => {}));
 }

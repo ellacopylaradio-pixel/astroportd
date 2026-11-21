@@ -78,11 +78,13 @@ async fn crawl_discovers_n1_then_n2_and_projects_everything() {
     let stats = crawler.run_until_stable(&[], 6).await.unwrap();
     assert!(stats.errors.is_empty(), "{:?}", stats.errors);
 
-    // Alice (hébergée) → Bob (N1) → Carol (N2) : 9 événements répliqués (3 + 3 + 3) ; ni Mallory, ni le privé.
-    assert_eq!(count(&db, "SELECT count(*) FROM nostr_events").await, 9);
+    // Alice (hébergée) → Bob (N1) → Carol (N2) : 8 événements répliqués (3 + 3 + 2 : d'un N2, ni notes ni articles) ; ni
+    // Mallory, ni le privé.
+    assert_eq!(count(&db, "SELECT count(*) FROM nostr_events").await, 8);
+    assert_eq!(count(&db, "SELECT count(*) FROM nostr_events WHERE content = 'note de carol'").await, 0);
     assert_eq!(count(&db, "SELECT count(*) FROM nostr_events WHERE kind = 30078").await, 0);
     assert_eq!(count(&db, "SELECT count(*) FROM nostr_events WHERE content = 'spam'").await, 0);
-    assert_eq!(stats.inserted, 9);
+    assert_eq!(stats.inserted, 8);
 
     assert_eq!(graph(&db).await, [row("alice", "bob", 1, None), row("alice", "carol", 2, Some("bob"))]);
     let did_rows: Vec<String> = db
@@ -115,13 +117,13 @@ async fn a_second_crawl_is_idempotent_and_the_cursor_picks_up_new_events() {
     // Le relai astroportd parle NIP-77 : la marge de relecture ne fait plus voyager un seul événement déjà connu.
     assert!(again.negentropy > 0, "lots réconciliés par Negentropy");
     assert_eq!((again.fetched, again.duplicates), (0, 0), "aucun événement retéléchargé");
-    assert_eq!(count(&db, "SELECT count(*) FROM nostr_events").await, 9);
+    assert_eq!(count(&db, "SELECT count(*) FROM nostr_events").await, 8);
 
-    // Un nouvel événement de Carol arrive sur le relai source.
-    ingest(&src, &ev(&CAROL, 1, 999, vec![], "nouvelle note")).await;
+    // Un nouvel événement de Bob (N1) arrive sur le relai source.
+    ingest(&src, &ev(&BOB, 1, 999, vec![], "nouvelle note")).await;
     let next = crawler.run_until_stable(&[], 6).await.unwrap();
     assert_eq!(next.inserted, 1);
-    assert_eq!(count(&db, "SELECT count(*) FROM nostr_events").await, 10);
+    assert_eq!(count(&db, "SELECT count(*) FROM nostr_events").await, 9);
 }
 
 #[tokio::test]

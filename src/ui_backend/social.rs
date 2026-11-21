@@ -179,11 +179,14 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
                 // 1. les calculs (et la pause) ; 2. le paquet du uCloud ; 3. la station l'oublie. Une panne entre deux étapes
                 // laisse au pire un paquet que la station ne relit pas : rien de ce qui a été effacé ne revient.
                 r.erase(&who.hex).await.map_err(ApiError::internal)?;
-                let (o, p) = (who.hex.clone(), format!("{}/{}", crate::search_pack::PACK_DIR, crate::search_pack::PACK_NAME));
-                match astro_dav::vfs::vfs_tx(&self.dav.db, move |tx| astro_dav::vfs::delete_tree_tx(tx, &o, &p)).await {
-                    Ok(cids) => astro_dav::server::release_blobs(&self.dav, cids).await,
-                    Err(astro_dav::vfs::VfsError::NotFound) => {}
-                    Err(e) => return Err(ApiError::internal(format!("paquet d'index : {e}"))),
+                // Toutes les parts d'un paquet découpé (`index.astroidx`, puis `index-N.astroidx`).
+                for i in 0..crate::search_pack::MAX_PARTS {
+                    let (o, p) = (who.hex.clone(), format!("{}/{}", crate::search_pack::PACK_DIR, crate::search_pack::part_name(i)));
+                    match astro_dav::vfs::vfs_tx(&self.dav.db, move |tx| astro_dav::vfs::delete_tree_tx(tx, &o, &p)).await {
+                        Ok(cids) => astro_dav::server::release_blobs(&self.dav, cids).await,
+                        Err(astro_dav::vfs::VfsError::NotFound) => {}
+                        Err(e) => return Err(ApiError::internal(format!("paquet d'index : {e}"))),
+                    }
                 }
                 r.forget_pack(&who.hex).await.map_err(ApiError::internal)?;
                 r.view(&who.hex).await.map_err(db_err)

@@ -31,6 +31,58 @@ pub fn list(dir: &Path) -> String {
     out
 }
 
+/// Modèles installables (révision figée) dont aucun fichier n'est dans `dir` : une ligne `id|Mo|tâches|nom` chacun.
+/// Format stable, lu par `install.sh` pour proposer ce qu'une nouvelle version a ajouté au catalogue.
+pub fn absent_lines(dir: &Path) -> String {
+    CATALOG
+        .iter()
+        .filter(|m| m.pinned() && m.state(dir) == State::Absent)
+        .map(|m| {
+            let tasks = m.tasks.iter().map(|t| t.name()).collect::<Vec<_>>().join(",");
+            format!("{}|{}|{}|{}\n", m.id, m.mb(), tasks, m.label.replace('|', "/"))
+        })
+        .collect()
+}
+
+/// Compte rendu de [`update`].
+#[derive(Debug, Default)]
+pub struct UpdateReport {
+    /// Texte à afficher, une ligne par modèle.
+    pub text: String,
+    /// Modèles dont au moins un fichier a été retéléchargé.
+    pub changed: usize,
+    /// Modèles qui n'ont pas pu être mis à jour.
+    pub failed: usize,
+}
+
+/// Met à jour les modèles déjà installés (même en partie) : [`add`] ne retélécharge que les fichiers absents ou dont
+/// l'empreinte n'est plus celle du catalogue de ce binaire. Les modèles absents sont seulement cités.
+pub async fn update(dir: &Path, gateway: Option<&str>, limits: &FetchLimits) -> UpdateReport {
+    let mut r = UpdateReport { text: format!("Modèles de la recherche multimédia ({})\n", dir.display()), ..UpdateReport::default() };
+    let mut absent = Vec::new();
+    for m in CATALOG.iter().filter(|m| m.pinned()) {
+        if m.state(dir) == State::Absent {
+            absent.push(m.id);
+            continue;
+        }
+        match add(m, dir, gateway, limits).await {
+            Ok(notes) if notes.iter().all(|n| n.ends_with("déjà là, intact")) => r.text += &format!("  ✔ {} : à jour\n", m.id),
+            Ok(_) => {
+                r.changed += 1;
+                r.text += &format!("  ✔ {} : mis à jour, empreintes vérifiées\n", m.id);
+            }
+            Err(e) => {
+                r.failed += 1;
+                r.text += &format!("  ✘ {} : {e}\n", m.id);
+            }
+        }
+    }
+    if !absent.is_empty() {
+        r.text += &format!("  Pas encore installés : {} (astroportd models add <nom>)\n", absent.join(", "));
+    }
+    r
+}
+
 /// Installe `m` dans `dir` ; rend une ligne par fichier. Sources, dans l'ordre : la passerelle IPFS `gateway` (copie UPlanet),
 /// puis la révision figée sur Hugging Face. Chaque fichier est borné à sa taille exacte et vérifié par son SHA-256.
 pub async fn add(m: &Model, dir: &Path, gateway: Option<&str>, limits: &FetchLimits) -> Result<Vec<String>, String> {
@@ -263,6 +315,24 @@ mod tests {
         std::fs::write(dir.join("a.onnx"), b"abc").unwrap();
         assert_eq!((remove(&model(good), &dir).unwrap(), remove(&model(good), &dir).unwrap()), (1, 0));
         assert!(list(&dir).contains("ppocrv6-small"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn update_only_touches_installed_models_and_names_the_new_ones() {
+        let dir = std::env::temp_dir().join(format!("astroportd-models-upd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Rien d'installé : rien n'est téléchargé (aucune adresse joignable ici), tout est cité comme nouveau.
+        let r = update(&dir, None, &FetchLimits::new(1)).await;
+        assert_eq!((r.changed, r.failed), (0, 0), "{}", r.text);
+        assert!(r.text.contains("Pas encore installés") && r.text.contains("whisper-base"), "{}", r.text);
+        let lines = absent_lines(&dir);
+        assert_eq!(lines.lines().count(), CATALOG.len(), "{lines}");
+        assert!(lines.lines().all(|l| l.split('|').count() == 4 && l.split('|').nth(1).is_some_and(|mb| mb.parse::<u64>().is_ok())), "{lines}");
+        // Un fichier d'un modèle suffit à le tenir pour installé (une mise à jour le complète) : il sort de la liste des absents.
+        std::fs::write(dir.join("ocr-det.yml"), b"x").unwrap();
+        assert!(!absent_lines(&dir).contains("ppocrv6-small"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

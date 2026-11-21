@@ -71,6 +71,10 @@ pub enum LibraryQuery {
     Memories(Option<(String, i64)>),
     /// Compteurs par mois, ou les éléments d'un mois (`2026-10`).
     Timeline(Option<String>),
+    /// Voyages repérés (photos loin de chez soi plusieurs jours de suite), du plus récent au plus ancien.
+    Trips,
+    /// Page d'une personne reconnue : nom donné par le membre, et fiche du carnet (UID) à laquelle ses visages sont rattachés.
+    Person(String, Option<String>),
     /// Recherche à filtres combinés.
     Search(LibrarySearch),
     /// Carte : regroupements géolocalisés d'une période et d'une zone, ou éléments d'une zone.

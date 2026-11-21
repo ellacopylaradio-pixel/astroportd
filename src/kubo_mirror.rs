@@ -26,6 +26,10 @@ use tokio::io::AsyncWriteExt;
 
 /// Blobs traités au plus par passage (rapatriés ou publiés) : le reste attend le passage suivant.
 pub const PASS_BUDGET: usize = 500;
+/// Scope `kv` (état local) des blobs introuvables au dernier essai : clé = CID, `updated_at` = date de l'échec.
+pub const MISSING_SCOPE: &str = "kubo_mirror_missing";
+/// Délai avant de rechercher un blob introuvable.
+pub const MISSING_RETRY_SECS: i64 = 24 * 3600;
 
 /// Ce qu'un passage a fait.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -102,19 +106,24 @@ impl Mirror {
             p.kubo_down = true;
             return Ok(p);
         }
-        let (referenced, mirrored): (HashSet<String>, HashMap<String, String>) = self
+        let since = now() - MISSING_RETRY_SECS;
+        let (referenced, mirrored, set_aside): (HashSet<String>, HashMap<String, String>, HashSet<String>) = self
             .db
             .readers()
-            .read(|c| {
-                let all = astro_dav::pool::referenced_set_of(c).map_err(|_| astro_db::DbError::Aborted)?;
+            .read(move |c| {
+                // Les caches du catalogue des amis ne sont pas à nous : leurs films restent chez eux.
+                let all = astro_dav::pool::referenced_set_except(c, astro_dav::pool::FOREIGN_CACHES).map_err(astro_db::DbError::Corrupt)?;
                 let mut stmt = c.prepare("SELECT blob, root FROM kubo_mirror")?;
                 let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<HashMap<_, _>, _>>()?;
-                Ok((all.into_iter().filter(|c| is_cid(c)).collect(), rows))
+                let mut stmt = c.prepare("SELECT key FROM kv WHERE scope = ?1 AND updated_at > ?2")?;
+                let aside = stmt.query_map(rusqlite::params![MISSING_SCOPE, since], |r| r.get::<_, String>(0))?.collect::<Result<HashSet<_>, _>>()?;
+                Ok((all.into_iter().filter(|c| is_cid(c)).collect(), rows, aside))
             })
             .await
             .map_err(|e| format!("lecture de la base : {e}"))?;
         let nocopy = self.by_reference.load(Ordering::Relaxed) && self.kubo.filestore_enabled().await;
-        let mut todo: Vec<&String> = referenced.iter().filter(|c| !mirrored.contains_key(*c)).collect();
+        // Un blob introuvable au passage précédent (ni disque ni Kubo) est écarté 24 h : il ne bloque plus la tête de la file.
+        let mut todo: Vec<&String> = referenced.iter().filter(|c| !mirrored.contains_key(*c) && !set_aside.contains(*c)).collect();
         todo.sort();
         p.waiting = todo.len().saturating_sub(budget);
         for cid in todo.into_iter().take(budget) {
@@ -140,7 +149,7 @@ impl Mirror {
         if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
             if !self.bring_back(cid).await? {
                 p.missing += 1;
-                return Ok(());
+                return self.set_aside(cid).await;
             }
             p.brought_back += 1;
             // Rangé dans Kubo par copie avant ce choix, et toujours épinglé : déjà publié.
@@ -193,9 +202,25 @@ impl Mirror {
     async fn record(&self, blob: &str, root: &str, nocopy: bool) -> Result<(), String> {
         self.db
             .writer()
+            .batch(vec![
+                astro_db::Statement::new(
+                    "INSERT INTO kubo_mirror(blob, root, nocopy, at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(blob) DO UPDATE SET root = excluded.root, nocopy = excluded.nocopy, at = excluded.at",
+                    vec![blob.to_owned().into(), root.to_owned().into(), i64::from(nocopy).into(), now().into()],
+                ),
+                astro_db::Statement::new("DELETE FROM kv WHERE scope = ?1 AND key = ?2", vec![MISSING_SCOPE.to_owned().into(), blob.to_owned().into()]),
+            ])
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("écriture de la base : {e}"))
+    }
+
+    /// Note qu'un blob référencé n'est ni sur le disque ni dans Kubo (état local, `kv`) : écarté [`MISSING_RETRY_SECS`].
+    async fn set_aside(&self, cid: &str) -> Result<(), String> {
+        self.db
+            .writer()
             .execute(
-                "INSERT INTO kubo_mirror(blob, root, nocopy, at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(blob) DO UPDATE SET root = excluded.root, nocopy = excluded.nocopy, at = excluded.at",
-                vec![blob.to_owned().into(), root.to_owned().into(), i64::from(nocopy).into(), now().into()],
+                "INSERT INTO kv(scope, key, value, updated_at) VALUES (?1, ?2, 'introuvable', ?3) ON CONFLICT(scope, key) DO UPDATE SET updated_at = excluded.updated_at",
+                vec![MISSING_SCOPE.to_owned().into(), cid.to_owned().into(), now().into()],
             )
             .await
             .map(|_| ())
@@ -237,8 +262,8 @@ impl Mirror {
                     if let Some(first) = p.failures.first() {
                         bus.publish_to(astro_core::Audience::Captain, "alert", "kubo", format!("miroir IPFS : {} échec(s), par exemple {first}", p.failures.len()), None);
                     }
-                    // Du travail en attente : le passage suivant vient vite.
-                    if p.waiting > 0 {
+                    // Du travail en attente, et ce passage a avancé : le suivant vient vite. Sans progrès, le rythme normal.
+                    if p.waiting > 0 && p.did_something() {
                         wait = Duration::from_secs(5);
                     }
                 }

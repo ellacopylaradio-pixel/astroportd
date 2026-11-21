@@ -961,6 +961,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         println!("kubo : miroir de publication sur le réseau IPFS d'ORIGIN (les fichiers vivent sur le disque ; Kubo arrêté ne rend rien illisible)");
     }
     tasks::exif_backfill(&parts, &mut background);
+    tasks::life_packs(&parts, &mut background);
     // Documents demandés par `#upload` : rapatriés, chiffrés et déposés dans /Uploads (le demandeur est prévenu).
     tasks::crawl(&parts, &relay_client, &mut background);
     tasks::funds(&parts, funds_chain, &squid_urls, &mut background);

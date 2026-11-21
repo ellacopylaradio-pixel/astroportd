@@ -71,6 +71,18 @@ with sync_playwright() as pw:
         page.locator('details.fd-refine button', has_text='Appliquer').click(); page.wait_for_selector('.fd-best'); page.wait_for_timeout(200)
         check('kind=image' in page.url and STATE['searches'][-1].get('kind') == ['image'] and page.locator('details.fd-refine').get_attribute('open') is not None, f'{tag} : Affiner envoie le type et reste ouvert')
 
+        # La même case retrouve ce qui n'est pas un fichier : conversations, notes et articles des amis, carnet ; chaque ligne mène au bon écran.
+        txt = page.inner_text('main')
+        check('Conversations' in txt and 'La facture d’électricité est arrivée' in txt and 'Groupe' in txt and 'Moi ·' in txt, f'{tag} : messages trouvés, groupe sans nom dit « Groupe »')
+        check(page.locator('a[href="#/chat?peer=' + 'bb' * 32 + '"]').count() == 1, f'{tag} : un message mène à la conversation')
+        check(page.locator('a[href="#/write?tab=friends&open=' + 'bb' * 32 + ':energie"]').count() == 1, f'{tag} : un article d’ami s’ouvre dans « Chez mes amis »')
+        check(page.locator('a[href="#/write?reply=' + 'ff' * 32 + '&to=' + 'bb' * 32 + '"]').count() == 1, f'{tag} : on répond à la note d’une amie')
+        check(page.locator('a[href="#/people?c=%2FContacts%2Fenercoop.vcf"]').count() == 1, f'{tag} : une fiche du carnet s’ouvre')
+        noscroll('échanges'); page.screenshot(path=str(OUT / f'search-elsewhere-{tag}.png'), full_page=True)
+        # Aucun fichier, mais un message : pas de « rien de sûr ».
+        box.fill('escale'); box.press('Enter'); page.wait_for_selector('text=On fait escale')
+        txt = page.inner_text('main')
+        check('mais dans vos échanges' in txt and 'Rien de sûr' not in txt, f'{tag} : trouvé ailleurs, jamais « rien de sûr »')
         # Rien de sûr : des pistes, jamais un « aucun résultat » sec.
         box.fill('zanzibar'); box.press('Enter'); page.wait_for_selector('text=Peut-être :')
         check('Rien de sûr pour « zanzibar »' in page.inner_text('main') and page.locator('section.card', has=page.locator('h3', has_text='Peut-être')).locator('.tile').count() == 1, f'{tag} : « Peut-être » avec les plus proches')

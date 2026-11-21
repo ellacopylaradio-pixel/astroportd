@@ -116,12 +116,20 @@ pub(super) fn blob_serve_opts(a: &ServeArgs) -> ServeOpts {
         return ServeOpts::default();
     }
     let db = Arc::new(a.db.clone());
+    // Réponses gardées 30 s : un pair qui redemande le même blob ne refait pas les requêtes ; une base illisible n'est pas retenue.
+    let cache = Arc::new(astro_dav::pool::VerdictCache::new(4096, std::time::Duration::from_secs(30)));
     let gate = astro_p2p::blob::CidGate(Arc::new(move |cid: String| {
-        let db = db.clone();
+        let (db, cache) = (db.clone(), cache.clone());
         Box::pin(async move {
-            let found = tokio::task::spawn_blocking(move || astro_dav::pool::referenced_in(&db, &cid).map_err(|e| (cid, e))).await;
+            if let Some(known) = cache.get(&cid) {
+                return known;
+            }
+            let found = tokio::task::spawn_blocking(move || astro_dav::pool::referenced_in(&db, &cid).map(|yes| (cid.clone(), yes)).map_err(|e| (cid, e))).await;
             match found {
-                Ok(Ok(yes)) => yes,
+                Ok(Ok((cid, yes))) => {
+                    cache.put(&cid, yes);
+                    yes
+                }
                 Ok(Err((cid, why))) => {
                     eprintln!("bassin de blobs : base illisible, blob {cid} non servi ({why})");
                     false

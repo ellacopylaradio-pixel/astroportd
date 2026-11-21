@@ -71,6 +71,10 @@ pub trait AccountApi: Auth {
     fn blog(&self, _who: &Principal, _op: &'static str, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("blog non disponible sur cette station")) }
     }
+    /// Recherche transversale (hors fichiers) : conversations, notes et articles du membre et de ses amis, carnet d'adresses.
+    fn find(&self, _who: &Principal, _q: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Ok(json!({ "messages": [], "notes": [], "contacts": [] })) }
+    }
     /// Signe un événement avec la clé du compte (signataire distant : la clé ne quitte jamais la station).
     fn account_sign(&self, _who: &Principal, _event: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("signature non disponible sur cette station")) }
@@ -130,6 +134,7 @@ pub(super) fn routes<B: AccountApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/account/sign", post(account_sign::<B>))
         .route("/api/v1/me/blog", get(blog_list::<B>))
         .route("/api/v1/me/blog/friends", get(blog_friends::<B>))
+        .route("/api/v1/me/find", get(find::<B>))
         .route("/api/v1/me/blog/publish", post(blog_op::<B, 0>))
         .route("/api/v1/me/blog/preview", post(blog_op::<B, 1>))
         .route("/api/v1/me/blog/image", post(blog_op::<B, 2>).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
@@ -252,6 +257,19 @@ async fn account_unlock<B: AccountApi>(State(st): State<Arc<UiState<B>>>, req: a
 
 async fn blog_list<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
     reply(st.backend.blog(&p, "list", Value::Null).await)
+}
+
+#[derive(Deserialize)]
+struct FindQuery {
+    q: String,
+}
+
+/// `GET /api/v1/me/find?q=` : 200 caractères au plus.
+async fn find<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(f): Query<FindQuery>) -> Response {
+    if f.q.len() > 200 {
+        return reply(Err(ApiError::bad_request("recherche : 200 caractères au plus")));
+    }
+    reply(st.backend.find(&p, f.q).await)
 }
 
 async fn blog_friends<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {

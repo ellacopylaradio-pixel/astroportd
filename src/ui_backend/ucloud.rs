@@ -193,7 +193,9 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
         }
         let now = now_secs();
         // Chaque valeur est vérifiée ; une valeur douteuse est ignorée (jamais une erreur pour tout le lot).
-        let rows: Vec<(String, Option<i64>, Option<f64>, Option<f64>, Option<String>)> = items
+        // (chemin, date de prise de vue, latitude, longitude, description)
+        type Meta = (String, Option<i64>, Option<f64>, Option<f64>, Option<String>);
+        let rows: Vec<Meta> = items
             .iter()
             .filter_map(|it| {
                 let path = astro_dav::vfs::normalize_path(it["path"].as_str()?).ok()?;
@@ -267,6 +269,8 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
                         let (y, md): (i64, String) = c.query_row("SELECT CAST(strftime('%Y', ?1, 'unixepoch') AS INTEGER), strftime('%m-%d', ?1, 'unixepoch')", [now], |r| Ok((r.get(0)?, r.get(1)?)))?;
                         Ok(json!({ "memories": crate::library::memories(c, &owner, &md, y)? }))
                     }
+                    Q::Trips => Ok(crate::souvenirs::trips(c, &owner, 40)?),
+                    Q::Person(name, uid) => Ok(crate::souvenirs::person(c, &owner, &name, uid.as_deref())?),
                     Q::Timeline(None) => Ok(json!({ "months": crate::library::timeline_buckets(c, &owner)? })),
                     Q::Timeline(Some(ym)) => crate::library::timeline_month(c, &owner, &ym)?.map(|items| json!({ "ym": ym, "items": items })).ok_or_else(|| ApiError::bad_request("mois attendu au format AAAA-MM")),
                     Q::Search(s) => {

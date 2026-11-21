@@ -130,7 +130,7 @@ export default async function card(K, { path, me, blank, groups, onSaved, onClos
   } }, t('Supprimer'));
 
   // Ses visages, reliés à la fiche par son UID : un clic montre la photo d'origine, le visage entouré.
-  const seen = !blank && d.faces ? h('section', { class: 'ab-seen' }, h('h4', {}, t('Ses visages ({0})', d.faces)), h('div', { class: 'ab-faces' }, h('span', { class: 'muted' }, t('Chargement…')))) : null;
+  const seen = !blank && d.faces ? h('section', { class: 'ab-seen' }, h('h4', {}, t('Ses visages ({0})', d.faces), ' · ', h('a', { href: '#/person?n=' + encodeURIComponent(f.name) + (d.uid ? '&uid=' + encodeURIComponent(d.uid) : '') }, t('Ses souvenirs'))), h('div', { class: 'ab-faces' }, h('span', { class: 'muted' }, t('Chargement…')))) : null;
   if (seen) (async () => {
     const r = await api('/api/v1/book/photo-choices?path=' + encodeURIComponent(d.path)), th = (await api('/api/v1/faces/thumbs', { method: 'POST', body: { ids: r.photos.map(p => p.id), size: 96 } })).thumbs, fr = await K.mod('m-framed.js');
     seen.lastChild.replaceChildren(...r.photos.map(p => h('button', { type: 'button', class: 'ab-face', title: t('Voir la photo'), onclick: () => fr.showFace(K, p, f.name + ' · ' + p.path) }, h('img', { src: th[p.id] || '', alt: '', width: 56, height: 56 }))),

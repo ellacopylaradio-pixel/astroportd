@@ -157,7 +157,7 @@ $('#share-x').onclick = () => $('#share').close();
 const share = async paths => (await mod('m-share.js')).default({ api, toast, h, $, when, b64 })(paths);
 let cleanups = [];
 const every = (ms, fn) => { const t = setInterval(fn, ms); cleanups.push(() => clearInterval(t)); };
-const pill = s => h('span', { class: 'pill ' + s }, { ok: 'OK', degraded: 'Dégradé', down: 'Panne', disabled: 'Inactif' }[s] || s);
+const pill = s => h('span', { class: 'pill ' + s }, t({ ok: 'OK', degraded: 'Dégradé', down: 'Panne', disabled: 'Inactif', warn: 'À regarder', info: 'Info', run: 'En cours' }[s] || s));
 const table = (cap, head, rows) => h('table', {}, h('caption', { class: 'muted' }, cap), h('thead', {}, h('tr', {}, head.map(x => h('th', { scope: 'col' }, x)))), h('tbody', {}, rows.map(r => h('tr', {}, r.map(c => h('td', {}, Array.isArray(c) ? c.flat(Infinity) : c))))));
 async function viewCloud(root, q) {
 const path = q.get('p') || '/', mode = q.get('m'), sources = mode === 'sources', organize = mode === 'organize';

@@ -56,6 +56,9 @@ fn clean(rest: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Sonde de joignabilité d'une station d'accueil (imposée par les tests).
+type Probe = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// Site public des comptes de la station.
 pub struct Site<B: BlobStore> {
     dav: Arc<DavState<B>>,
@@ -68,7 +71,7 @@ pub struct Site<B: BlobStore> {
     /// Dernière demande de réplication par membre : pas plus d'une toutes les 10 min.
     asked: Mutex<std::collections::HashMap<String, Instant>>,
     /// Sonde imposée (tests : pas de réseau) ; `None` en production.
-    probe: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
+    probe: Option<Probe>,
     /// Photos nettoyées récemment servies (CID de l'original → copie nettoyée) : une photo très vue n'est pas redéchiffrée à chaque visite.
     cleaned: Mutex<std::collections::VecDeque<(String, bytes::Bytes)>>,
 }

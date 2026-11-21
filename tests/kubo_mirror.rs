@@ -255,3 +255,29 @@ async fn without_filestore_the_mirror_copies() {
     assert_eq!(mirrored(&st.db).await[&a].1, 0);
     assert!(mock.lock().unwrap().adds.iter().all(|q| !q.contains("nocopy")), "pas de tentative de référence sans filestore");
 }
+
+#[tokio::test]
+async fn friends_films_stay_with_them_and_a_lost_blob_does_not_hold_the_queue() {
+    let st = station("friends-lost");
+    let (url, mock) = mock_kubo().await;
+    // Le film d'un ami, décrit par le catalogue mis en cache, est dans Kubo : il n'est pas à nous, il n'est pas rapatrié.
+    let film = b"film de l'ami".to_vec();
+    let film_cid = cid_raw_sha256(&Sha256::digest(&film).into());
+    mock.lock().unwrap().blobs.insert(film_cid.clone(), film);
+    st.db
+        .writer()
+        .execute("INSERT INTO friend_media(owner_hex, author, event_id, x, cid, item, created_at) VALUES ('aa', 'bb', 'e1', 'x', ?1, '{}', 1)", vec![film_cid.clone().into()])
+        .await
+        .unwrap();
+    let lost = cid_raw_sha256(&Sha256::digest(b"perdu pour de bon").into());
+    reference(&st.db, "/lost", &lost).await;
+    let mirror = Mirror::new(st.db.clone(), st.fs.clone(), KuboBlobStore::new(&url));
+    let p = mirror.pass(100).await.unwrap();
+    assert_eq!((p.brought_back, p.missing), (0, 1), "{p:?}");
+    assert!(st.fs.open(&film_cid).await.is_err(), "le film de l'ami reste chez lui");
+    // Le blob perdu est écarté 24 h : le passage suivant ne le recherche pas, et n'a rien à faire.
+    let again = mirror.pass(100).await.unwrap();
+    assert_eq!((again.missing, again.waiting, again.did_something()), (0, 0, false), "{again:?}");
+    let noted: i64 = st.db.readers().read(|c| Ok(c.query_row("SELECT count(*) FROM kv WHERE scope = 'kubo_mirror_missing'", [], |r| r.get(0))?)).await.unwrap();
+    assert_eq!(noted, 1);
+}

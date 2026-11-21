@@ -119,6 +119,11 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
             })
             .await
             .map_err(db_err)?;
+        // Où sont les données (zones), ce qui est à l'abri chez les amis, ce que le membre garde pour eux : `crate::spread`.
+        let spread = {
+            let owner = who.hex.clone();
+            svc.db.readers().read(move |c| Ok(crate::spread::spread(c, &owner)?)).await.map_err(db_err)?
+        };
         // Répartition de l'espace par nature de fichier, privé (uCloud) et public (/Public + images publiées), pour le camembert.
         let by_kind = {
             let owner = who.hex.clone();
@@ -150,7 +155,7 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
         let privacy = crate::privacy_watch::check(&svc.db, &who.hex).await.map_err(db_err)?;
         Ok(json!({
             "privacy": { "unserved": privacy.unserved.len(), "sensitive": privacy.sensitive.len() + privacy.papers.len(), "papers": privacy.papers.len() },
-            "disk": { "used_bytes": used, "files": files, "quota_bytes": quota, "unlimited": unlimited, "tier": format!("{:?}", account.tier), "by_kind": by_kind },
+            "disk": { "used_bytes": used, "files": files, "quota_bytes": quota, "unlimited": unlimited, "tier": format!("{:?}", account.tier), "by_kind": by_kind, "spread": spread },
             "opex": opex, "capex": capex,
             "hosting": hosting,
         }))
@@ -232,6 +237,10 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
     }
     async fn account_unlock(&self, ip: Option<std::net::IpAddr>, email: String, pass: String) -> Result<Value, ApiError> {
         self.account_service()?.unlock(ip, &email, &pass).await.map_err(account_error)
+    }
+    async fn find(&self, who: &Principal, q: String) -> Result<Value, ApiError> {
+        let (owner, now) = (who.hex.clone(), crate::private_backup::now());
+        self.services.db.readers().read(move |c| Ok(crate::find_more::others(c, &owner, &q, now)?)).await.map_err(db_err)
     }
     async fn blog(&self, who: &Principal, op: &'static str, body: Value) -> Result<Value, ApiError> {
         let site = self.site.as_ref().ok_or_else(|| ApiError::unavailable("site public non activé sur cette station"))?;

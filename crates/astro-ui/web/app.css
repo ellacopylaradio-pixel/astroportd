@@ -215,3 +215,4 @@ main > .card, main > div:not(.grid):not(.bar) > .card { margin-top: 1rem; }
 #view-t { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; justify-content: center; }
 .pl-opt { display: flex; gap: .5rem; align-items: center; font-weight: 400; }
 .chat-in{display:inline-flex;align-items:center;gap:.2rem;min-height:40px;padding:0 .7rem;border-radius:1rem;background:var(--accent);color:var(--on-accent);text-decoration:none;animation:chat-in .9s ease 2}@keyframes chat-in{50%{transform:scale(1.12)}}@media (prefers-reduced-motion:reduce){.chat-in{animation:none}}
+pre.log{max-height:16em;overflow:auto;font-size:.78rem;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);padding:.6em;border-radius:.5rem}

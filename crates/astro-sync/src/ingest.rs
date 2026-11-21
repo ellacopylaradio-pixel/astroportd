@@ -58,6 +58,52 @@ pub async fn ingest_event(writer: &Writer, event: Event, owner: &str) -> Result<
     Ok(outcome)
 }
 
+/// Ingère une page d'événements en **une** transaction (le crawl en reçoit des centaines par page : une transaction chacun
+/// saturerait l'acteur d'écriture). Mêmes règles que [`ingest_event`] pour chacun ; rend un sort par événement, dans l'ordre.
+/// Tout ou rien : une erreur de base annule toute la page (les curseurs n'avancent pas, le passage suivant la reprend).
+pub async fn ingest_events(writer: &Writer, events: Vec<Event>, owner: &str) -> Result<Vec<Ingested>, SyncError> {
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+    let checked: Vec<(Event, bool)> = events.into_iter().map(|e| {
+        let ok = e.verify().is_ok();
+        (e, ok)
+    }).collect();
+    let owner = owner.to_owned();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let at = i64::try_from(now).unwrap_or(i64::MAX);
+    let out = writer
+        .transaction(move |tx| {
+            let mut out = Vec::with_capacity(checked.len());
+            for (event, valid) in &checked {
+                if !valid {
+                    out.push(Ingested::Rejected("signature ou identifiant invalide"));
+                    continue;
+                }
+                let claimed = tx.execute("INSERT OR IGNORE INTO claimed(owner, event_id, at) VALUES (?1, ?2, ?3)", params![owner, event.id, at])?;
+                if claimed == 0 {
+                    out.push(Ingested::Duplicate);
+                    continue;
+                }
+                out.push(match insert_event(tx, event)? {
+                    InsertOutcome::Inserted => {
+                        if let Ok(plan) = Projector::plan(event) {
+                            apply_statements(tx, &plan)?;
+                        }
+                        Ingested::Inserted
+                    }
+                    InsertOutcome::Duplicate => Ingested::Duplicate,
+                    InsertOutcome::Superseded => Ingested::Superseded,
+                    InsertOutcome::Ephemeral => Ingested::Rejected("kind éphémère non stocké"),
+                    InsertOutcome::Deleted => Ingested::Rejected("supprimé par son auteur (NIP-09)"),
+                });
+            }
+            Ok(out)
+        })
+        .await?;
+    Ok(out)
+}
+
 /// Purge les réclamations plus anciennes que `max_age_secs` (7 jours dans le legacy).
 pub async fn purge_claimed(writer: &Writer, max_age_secs: u64) -> Result<usize, SyncError> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());

@@ -1,9 +1,9 @@
 'use strict';
-// Bibliothèque : « ce jour-là », chronologie par mois, carte et doublons (la recherche est commune à tout Fichiers :
+// Bibliothèque : « ce jour-là », chronologie par mois, voyages, carte et doublons (la recherche est commune à tout Fichiers :
 // m-find.js). Tout est calculé par la station sur les métadonnées de vos fichiers ; rien n'est supprimé sans votre confirmation.
 const day = 86400;
 
-export default async function library(root, K) {
+export default async function library(root, K, qs) {
   const { h, t } = K, A = '/api/v1/ucloud/';
   const grid = (items, list = []) => { const g = h('div', { class: 'photos' }); K.tiles(g, list, items); return g; };
   const month = ym => new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5) - 1)).toLocaleDateString(K.lang, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -49,6 +49,11 @@ export default async function library(root, K) {
   const mapSection = h('section', { class: 'card wide' }, h('h2', {}, t('Carte')), h('p', { class: 'muted' }, t('Vos photos géolocalisées, regroupées par la station : aucun service de carte extérieur n\'est appelé.')));
   K.mod('m-map.js').then(m => mapSection.append(m.default(K, grid)), e => mapSection.append(h('p', { class: 'err' }, e.message)));
 
+  // ── Voyages : repérés par la station (m-trips.js), chargés à la première ouverture de l'onglet ──
+  const tripsSection = h('section', { class: 'card wide' }, h('h2', {}, t('Voyages')));
+  let tripsLoaded = false;
+  const loadTrips = () => { if (tripsLoaded) return; tripsLoaded = true; K.mod('m-trips.js').then(async m => tripsSection.append(await m.tripsView(K, grid)), e => tripsSection.append(h('p', { class: 'err' }, e.message))); };
+
   // ── Doublons ──
   const dupBox = h('div', {});
   const dupBtn = h('button', { class: 'ghost', onclick: async ev => {
@@ -85,11 +90,12 @@ export default async function library(root, K) {
   const dups = h('section', { class: 'card wide' }, h('h2', {}, t('Doublons')), h('p', { class: 'muted' }, t('Images identiques ou presque (recadrage, recompression). Cochez ce que vous voulez supprimer, en une seule action : rien n\'est supprimé sans votre confirmation.')), h('p', {}, dupBtn), dupBox);
 
   // ── Onglets : une vue à la fois (le fil du temps est long, la carte a besoin de place) ──
-  const views = [['time', 'Temps', tl], ['map', 'Carte', mapSection], ['dups', 'Doublons', dups]];
+  const views = [['time', 'Temps', tl], ['trips', 'Voyages', tripsSection], ['map', 'Carte', mapSection], ['dups', 'Doublons', dups]];
   const tabs = h('div', { class: 'bar', role: 'tablist' }, views.map(([id, label]) => h('button', { role: 'tab', id: 'lib-tab-' + id, 'aria-selected': 'false', onclick: () => pick(id) }, t(label))));
   const pick = id => {
     views.forEach(([k, , el]) => { el.hidden = k !== id; mem.hidden = id !== 'time'; tabs.querySelector('#lib-tab-' + k).setAttribute('aria-selected', String(k === id)); tabs.querySelector('#lib-tab-' + k).className = k === id ? '' : 'ghost'; });
     if (id === 'map') window.dispatchEvent(new Event('resize'));
+    if (id === 'trips') loadTrips();
   };
   const css = h('link', { rel: 'stylesheet', href: '/ui/m-photos.css' }); document.head.append(css); K.cleanup(() => css.remove());
   // ── Sélection de vignettes : tout sélectionner, tourner, supprimer ──
@@ -112,5 +118,5 @@ export default async function library(root, K) {
   P.change = paint; paint();
   K.cleanup(() => { P.on = false; P.set.clear(); P.all.clear(); P.lists.clear(); P.change = () => {}; });
   root.replaceChildren(h('h2', {}, t('Bibliothèque')), tabs, h('div', { class: 'bar' }, selBtn), selBar, mem, h('div', { class: 'grid' }, ...views.map(v => v[2])));
-  pick('time');
+  pick(views.some(v => v[0] === qs?.get?.('tab')) ? qs.get('tab') : 'time');
 }

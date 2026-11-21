@@ -48,6 +48,7 @@ GET /api/v1/me anon=401 member=200
 GET /api/v1/me/ai anon=401 member=200
 GET /api/v1/me/blog anon=401 member=200
 GET /api/v1/me/blog/friends anon=401 member=200
+GET /api/v1/me/find anon=401 member=400
 GET /api/v1/me/footprint anon=401 member=200
 GET /api/v1/me/links anon=401 member=200
 GET /api/v1/me/reading anon=401 member=501
@@ -73,6 +74,7 @@ GET /api/v1/station/oc/donations anon=401 member=403
 GET /api/v1/station/oc/peek anon=401 member=403
 GET /api/v1/station/paf anon=401 member=403
 GET /api/v1/station/planes anon=401 member=403
+GET /api/v1/station/update anon=401 member=403
 GET /api/v1/station/welcome anon=401 member=403
 GET /api/v1/stations anon=200 member=200
 GET /api/v1/ucloud/duplicates anon=401 member=200
@@ -85,10 +87,12 @@ GET /api/v1/ucloud/media/friends/match anon=401 member=400
 GET /api/v1/ucloud/media/safety anon=401 member=501
 GET /api/v1/ucloud/media/trace anon=401 member=400
 GET /api/v1/ucloud/memories anon=401 member=200
+GET /api/v1/ucloud/person anon=401 member=400
 GET /api/v1/ucloud/photos anon=401 member=200
 GET /api/v1/ucloud/search anon=401 member=200
 GET /api/v1/ucloud/text anon=401 member=400
 GET /api/v1/ucloud/timeline anon=401 member=200
+GET /api/v1/ucloud/trips anon=401 member=200
 GET /api/v1/welcome/{token} anon=404 member=404
 GET /check_balance anon=400 member=400
 GET /health anon=200 member=200
@@ -200,6 +204,7 @@ POST /api/v1/station/planes/origin anon=401 member=403
 POST /api/v1/station/planes/remove anon=401 member=403
 POST /api/v1/station/planes/service anon=401 member=403
 POST /api/v1/station/restart anon=401 member=403
+POST /api/v1/station/update anon=401 member=403
 POST /api/v1/station/welcome anon=401 member=403
 POST /api/v1/station/welcome/{token}/revoke anon=401 member=403
 POST /api/v1/station/zen-credit/preview anon=401 member=403

@@ -156,7 +156,7 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/chat/messages': return self.send(200, dict(peer='ab' * 32, messages=STATE['chat'], more=False))
         if p == '/api/v1/chat/settings': return self.send(200, dict(receipts=STATE.get('receipts', True)))
         if p == '/health': return self.send(200, dict(status='ok'))
-        if p == '/api/v1/me/footprint': return self.send(200, dict(disk=dict(used_bytes=2_400_000_000, files=5321, quota_bytes=10_000_000_000, unlimited=False, tier='Basic', by_kind=dict(ucloud=dict(photo=1_500_000_000, video=600_000_000, music=120_000_000, doc=40_000_000, other=20_000_000), public=dict(photo=90_000_000, doc=30_000_000)))))
+        if p == '/api/v1/me/footprint': return self.send(200, dict(disk=dict(used_bytes=2_400_000_000, files=5321, quota_bytes=10_000_000_000, unlimited=False, tier='Basic', by_kind=dict(ucloud=dict(photo=1_500_000_000, video=600_000_000, music=120_000_000, doc=40_000_000, other=20_000_000), public=dict(photo=90_000_000, doc=30_000_000)), spread=STATE.get('spread'))))
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/faces/folders': return self.send(200, dict(folders=[dict(dir='/Images/2026/10', faces=12, todo=9), dict(dir='/Images/2026/09', faces=4, todo=0)]))
         if p == '/api/v1/faces/board':
@@ -178,7 +178,9 @@ class H(BaseHTTPRequestHandler):
             if p == '/api/v1/book/photo': return self.send(200, dict(uri=None))
             if p == '/api/v1/book/photo-choices': return self.send(200, dict(faces=[7]))
             if p == '/api/v1/book/duplicates': return self.send(200, dict(groups=[dict(reasons=['même téléphone'], cards=[dict(path='/Contacts/Lea.vcf', name='Léa Martin', emails=[], phones=['+33 6 12']), dict(path='/Contacts/Lea2.vcf', name='L. Martin', emails=[], phones=['06 12'])])]))
-        if p == '/api/v1/ucloud/memories': return self.send(200, dict(memories=[]))
+        if p == '/api/v1/ucloud/memories': return self.send(200, STATE.get('memories') or dict(memories=[]))
+        if p == '/api/v1/ucloud/trips': return self.send(200, STATE.get('trips') or dict(trips=[], home=None))  # smoke_souvenirs.py
+        if p == '/api/v1/ucloud/person': return self.send(200, STATE.get('person') or dict(name='?', photos=0, items=[], years=[], trips=[]))
         if p == '/api/v1/ucloud/list' and 'Favoris' in self.path:
             return self.send(200, dict(dav='/dav', entries=[dict(name=k.rsplit('/', 1)[1], path=k, type='file', mime='application/internet-shortcut', size=len(v), mtime=1795000000) for k, v in STATE.setdefault('dav', {}).items() if k.startswith('/Favoris/')]))
         if p == '/api/v1/ucloud/list': return self.send(200, dict(dav='/dav', entries=[dict(name='Documents', path='/Documents', type='dir', mime=None, size=None, mtime=1790000000), dict(name='notes.txt', path='/notes.txt', type='file', mime='text/plain', size=120, mtime=1790000000)]))
@@ -194,7 +196,14 @@ class H(BaseHTTPRequestHandler):
             hit = lambda path, mime, x: dict(path=path, mime=mime, size=10, mtime=1790000000, taken_at=None, t=1790000000, thumb=None, lat=None, lon=None, **({'found': 'text', 'excerpt': x} if x else {}))
             items = [hit('/Scans/scan001.jpg', 'image/jpeg', '…FACTURE N° 2026-117 Électricité du hameau des Écluses…'), hit('/Documents/contrat-énergie.pdf', 'application/pdf', '…fourniture d’électricité, échéance trimestrielle…'), hit('/Photos/electricien.jpg', 'image/jpeg', None), dict(hit('/Photos/anniv.jpg', 'image/jpeg', None), found='seen'), dict(hit('/Vidéos/plage.mp4', 'video/mp4', None), found='seen', at_ms=83000), dict(hit('/Vidéos/Films/Le Voyage de Chihiro (2001).mkv', 'video/x-matroska', '…un voyage au pays des esprits…'), found='fiche', media=True)]
             if 'zanzibar' in self.path: return self.send(200, dict(items=[], next=None, understood=[], maybe=[items[3], items[1]]))
+            if 'escale' in self.path: return self.send(200, dict(items=[], next=None, understood=[], maybe=[]))
             return self.send(200, dict(items=items, next=None, understood=[dict(text='lea', **{'as': ['person']}, people=['Léa Martin'], month=None)], best=[items[1], items[4], items[0]]))
+        if p == '/api/v1/me/find':  # hors fichiers : un message, une note d'amie, un article de Léa, une fiche du carnet (smoke_search.py)
+            if 'zanzibar' in self.path or 'rien' in self.path: return self.send(200, dict(messages=[], notes=[], contacts=[]))
+            if 'escale' in self.path: return self.send(200, dict(messages=[dict(peer='bb' * 32, id='m1', at=1790000000, mine=False, group=False, name='Léa Martin', excerpt='On fait escale à Zanzibar en mars ?')], notes=[], contacts=[]))
+            return self.send(200, dict(messages=[dict(peer='bb' * 32, id='m1', at=1790000000, mine=False, group=False, name='Léa Martin', excerpt='La facture d’électricité est arrivée'), dict(peer='dd' * 32, id='m2', at=1789000000, mine=True, group=True, name='', excerpt='je paie la facture demain')],
+                notes=[dict(id='ee' * 32, author='bb' * 32, mine=False, name='Léa Martin', article=True, d='energie', title='Baisser sa facture', at=1788000000, excerpt='…notre facture a baissé de moitié…'), dict(id='ff' * 32, author='bb' * 32, mine=False, name='Léa Martin', article=False, d=None, title=None, at=1787000000, excerpt='Qui connaît un électricien ?')],
+                contacts=[dict(path='/Contacts/enercoop.vcf', name='Enercoop', org='SCIC')]))
         if p == '/api/v1/ucloud/text': return self.send(200, dict(text='FACTURE N° 2026-117\nÉlectricité du hameau des Écluses' if 'scan001' in self.path else None))
         if p == '/api/v1/ucloud/timeline':
             q = self.path.split('ym=')[1] if 'ym=' in self.path else None
@@ -210,6 +219,7 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/organize': return self.send(200, dict(folders=[], job=None, runs=[dict(run_id='r1', at=1790000000, moved=7, undone=False, options={})]))
         if p == '/api/v1/pull': return self.send(200, dict(sources=[dict(id='s1', label='Mon Nextcloud', url='https://nc.example/remote.php/dav/files/fred', username='fred', remote_path='Photos', dest_prefix='/Imports/Mon Nextcloud', private_ok=False,
             job=dict(state='running', dry_run=False, started=1, finished=None, progress=dict(done=40, total=100, imported=30, skipped=8, errors=2), report=None, error=None), last=None)]))
+        if p == '/api/v1/station/update': return self.send(200, STATE.get('update') or dict(current='1.7.0', latest='v1.7.0', newer=False, error=None, models=[], plugins=[], running=False, log=[], can_run=True, command='curl … | bash'))  # smoke_update.py
         if p == '/api/v1/dashboard': return self.send(200, STATE.get('dashboard') or dict(sovereignty=dict(encrypted_files=12)))  # accueil d'un membre (m-home.js) ; Détails techniques : smoke_backup_rs.py
         if p == '/api/v1/ucloud/media/safety': return self.send(200, STATE.get('safety') or dict(files={}))  # copies des fichiers partagés : smoke_backup_rs.py
         if p == '/api/v1/backup': return self.send(200, STATE.get('backup') or dict(mine=None, friends=[], hosting=[], share=None))  # gardiens : smoke_guardians.py
@@ -300,6 +310,7 @@ class H(BaseHTTPRequestHandler):
         if p.startswith('/api/v1/organize') or p.startswith('/api/v1/pull'): return self.send(200, dict(ok=True))
         if p == '/api/v1/station/admin/dnslink': return self.send(200, dict(ok=False, error='This credential is not valid') if body['values'].get('OVH_APP_SECRET') == 'faux' else dict(ok=True, zone='coop.example'))
         if p == '/api/v1/station/restart': return self.send(200, dict(restarting=True))
+        if p == '/api/v1/station/update': STATE.setdefault('update_posts', []).append(1); STATE['update'] = {**STATE.get('update', {}), 'running': True, 'log': ['▶ Téléchargement et vérification', '  ✔ empreinte SHA-256 vérifiée']}; return self.send(200, dict(started=True, version='v1.8.0'))
         if p == '/api/v1/station/planes/service': STATE['unit'] = 'planes'; return self.send(200, dict(state='switched', unit='/h/u', command='x', backup='/h/u.bak-1', carried=[], carried_to=None, to_carry=[], unreadable=False))
         if p == '/api/v1/station/admin/locks': ADMIN['locks']['mode'] = body['mode']; return self.send(200, ADMIN['locks'])
         if p == '/api/v1/station/admin/route':  # services ouverts par la constellation : ouvrir (station précise ou la plus puissante), fermer

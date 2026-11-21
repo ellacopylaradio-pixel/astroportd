@@ -71,3 +71,6 @@
 .ac-steps li.done .ac-step-ico { color: var(--ok); font-weight: 700; }
 .ac-steps a.button { flex: none; min-height: 44px; display: inline-grid; place-items: center; padding: 0 1rem; border-radius: var(--r); background: var(--accent); color: var(--on-accent); text-decoration: none; font-weight: 600; }
 .row:has(> .ac-way) { display: flex; align-items: center; gap: .2rem; flex-wrap: wrap; } .row:has(> .ac-way) > .t { flex: 1; min-width: 10rem; }
+.ac-z-prive { stroke: #3b82f6; background: #3b82f6; } .ac-z-partage { stroke: #06b6d4; background: #06b6d4; } .ac-z-public { stroke: #f59e0b; background: #f59e0b; }
+.ac-z-coffre { stroke: #ef4444; background: #ef4444; } .ac-z-souvenirs { stroke: #a855f7; background: #a855f7; } .ac-z-recherche { stroke: #10b981; background: #10b981; } .ac-z-carnet { stroke: #94a3b8; background: #94a3b8; }
+.ac-gauge { display: grid; gap: .2rem; margin: .4rem 0; } .ac-who { margin: .15rem 0; }

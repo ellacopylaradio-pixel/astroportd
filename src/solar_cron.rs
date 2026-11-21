@@ -329,6 +329,8 @@ impl<P: Publisher> Nightly<P> {
         };
         // NIP-40 : les événements expirés ne sont plus servis ; la nuit les retire de la base (leurs tags suivent).
         let expired = self.db.writer().execute("DELETE FROM nostr_events WHERE expires_at IS NOT NULL AND expires_at <= ?1", vec![int(now)]).await.map_err(|e| format!("événements expirés : {e}"))?.changes;
+        // Notes et articles d'auteurs sortis du cercle (ni hébergés, ni N1/N2) : le crawl ne les rapatrie plus, la nuit les retire.
+        let strangers = astro_sync::purge_strangers(self.db.writer()).await.map_err(|e| format!("notes hors du cercle : {e}"))?;
         // Journal des changements CardDAV : 30 jours de mémoire ; le dernier numéro purgé devient le plancher des jetons valides.
         let keep = int(now.saturating_sub(DAV_CHANGES_RETENTION_SECS));
         self
@@ -340,7 +342,7 @@ impl<P: Publisher> Nightly<P> {
             ])
             .await
             .map_err(|e| format!("journal CardDAV : {e}"))?;
-        Ok(format!("{claimed} réclamation(s) purgée(s) ; {expired} événement(s) expiré(s) ; journal CardDAV purgé ; {shares}"))
+        Ok(format!("{claimed} réclamation(s) purgée(s) ; {expired} événement(s) expiré(s) ; {strangers} note(s) hors du cercle ; journal CardDAV purgé ; {shares}"))
     }
 
     /// Vigie « vie privée » de `/Public` (voir [`crate::privacy_watch`]) : prévient chaque membre concerné, ne modifie rien.

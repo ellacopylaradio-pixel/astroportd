@@ -99,8 +99,8 @@ impl Delegation {
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?;
                 let paused_pack: (bool, Option<i64>) = c.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM kv WHERE scope = 'search_pause' AND key = ?1), (SELECT size FROM ucloud_entries WHERE owner_hex = ?1 AND path = ?2 AND type = 'file')",
-                    params![o, format!("{}/{}", crate::search_pack::PACK_DIR, crate::search_pack::PACK_NAME)],
+                    "SELECT EXISTS (SELECT 1 FROM kv WHERE scope = 'search_pause' AND key = ?1), (SELECT SUM(size) FROM ucloud_entries WHERE owner_hex = ?1 AND type = 'file' AND path LIKE ?2)",
+                    params![o, format!("{}/index%.astroidx", crate::search_pack::PACK_DIR)],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?;
                 Ok((stations, done, by_friend, failed, waiting, photos, station_on, member_on, paused_pack))

@@ -164,6 +164,8 @@ pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/ucloud/import-meta", post(import_meta::<B>))
         .route("/api/v1/ucloud/memories", get(library_memories::<B>))
         .route("/api/v1/ucloud/timeline", get(library_timeline::<B>))
+        .route("/api/v1/ucloud/trips", get(library_trips::<B>))
+        .route("/api/v1/ucloud/person", get(library_person::<B>))
         .route("/api/v1/ucloud/search", get(library_search::<B>))
         .route("/api/v1/ucloud/duplicates", get(library_duplicates::<B>))
         .route("/api/v1/ucloud/text", get(library_text::<B>))
@@ -385,6 +387,23 @@ struct MemoriesQuery {
 
 async fn library_memories<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<MemoriesQuery>) -> Response {
     reply(st.backend.library(&p, LibraryQuery::Memories(q.md.zip(q.y))).await)
+}
+
+async fn library_trips<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.library(&p, LibraryQuery::Trips).await)
+}
+
+#[derive(Deserialize)]
+struct PersonQuery {
+    name: String,
+    uid: Option<String>,
+}
+
+async fn library_person<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<PersonQuery>) -> Response {
+    if q.name.trim().is_empty() || q.name.len() > 128 || q.uid.as_ref().is_some_and(|u| u.len() > 256) {
+        return reply(Err(ApiError::bad_request("nom attendu (128 octets au plus)")));
+    }
+    reply(st.backend.library(&p, LibraryQuery::Person(q.name, q.uid.filter(|u| !u.is_empty()))).await)
 }
 
 #[derive(Deserialize)]

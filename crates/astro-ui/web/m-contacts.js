@@ -4,7 +4,7 @@
 // recherche instantanée, index A–Z, groupes, fiche détaillée modifiable (avec ses visages), import vCard, doublons à fusionner.
 // La première ligne est « Ma fiche » : votre profil Nostr et votre fiche réunis. Les fiches restent des fichiers chiffrés synchronisables avec un téléphone.
 
-export default async function contacts(root, K) {
+export default async function contacts(root, K, qs) {
   const { h, t } = K, api = K.api;
   const link = h('link', { rel: 'stylesheet', href: '/ui/m-book.css' });
   document.head.append(link); K.cleanup(() => link.remove());
@@ -149,5 +149,7 @@ export default async function contacts(root, K) {
       h('span', { class: 'ab-sas-go' }, h('button', { onclick: go(n ? '#/people/tri?grand' : '#/people/tri') }, n ? t('Ranger les visages') : t('Table de tri'))));
   }, () => {});
   root.replaceChildren(h('h2', {}, t('Proches')), sas, tabs, tools, selbar, main);
-  show0();
+  // Lien direct vers une fiche (`#/people?c=/Contacts/…vcf`, depuis la recherche).
+  const want = qs?.get?.('c');
+  if (want) select({ path: want }); else show0();
 }

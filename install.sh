@@ -58,6 +58,8 @@ Usage : install.sh [options]
   --check-hardware   affiche le diagnostic de la machine et le profil recommandé, sans rien installer
   --no-init          n'appelle pas `astroportd init` à la fin
   --force            réinstalle même si la version en place est déjà la dernière
+                     (sans --force, une station à jour est quand même vérifiée : modèles de recherche mis à jour,
+                     nouveaux modèles et nouveaux plugins proposés, plugins installés mis à jour)
   --yes, -y          mode non interactif : accepte les réponses par défaut
   --mode origin|zen  constellation à rejoindre (transmis à `astroportd init`)
   --email EMAIL      email du Capitaine (transmis à `astroportd init`)
@@ -168,7 +170,8 @@ if [ "$CHECK_ONLY" = 0 ]; then
   say "               vous sont proposés à part, avec install_sudo.sh."
   say "  Désinstaller : arrêter le service, supprimer ${PREFIX}/bin/${BIN} et ~/.zen/astroportd."
   say "                 Vos clés (~/.zen/game) ne sont jamais supprimées par ce script."
-  say "  Relançable sans risque : une station existante est conservée (mise à jour seule)."
+  say "  Relançable sans risque : une station existante est conservée ; binaire, modèles de recherche et"
+  say "                          plugins sont mis à jour, les nouveaux modèles et plugins vous sont proposés."
   say "════════════════════════════════════════════════════════════════════"
 fi
 
@@ -335,7 +338,7 @@ search_models() {
   case "${PROFILE_CHOSEN:-}" in
     actuel) for m in ppocrv6-small:ocr-det siglip2-base:siglip2-vision-int8 e5-small:e5-small-int8 whisper-base:whisper-base-encoder-int8; do
               [ -f "${MODELS}/${m#*:}.onnx" ] && out="${out:+$out }${m%%:*}"
-            done; printf '%s' "$out" ;;
+            done; printf '%s' "${out}${NEW_MODELS:+ $NEW_MODELS}" ;;
     confort|cerveau) printf 'ppocrv6-small siglip2-base e5-small whisper-base' ;;
     *) printf 'ppocrv6-small siglip2-base e5-small' ;;
   esac
@@ -480,14 +483,18 @@ confirm() {
   case "${a:-o}" in n|N|non|Non) return 1 ;; *) return 0 ;; esac
 }
 
+# Binaire déjà à jour : on ne le retélécharge pas, mais modèles et plugins sont quand même revus (un plugin ou un modèle
+# peut avoir été ajouté ou corrigé sans nouvelle version de la station).
+SKIP_BIN=0
 if [ "$UPDATE" = 1 ] && [ "$CHECK_ONLY" = 0 ]; then
   resolve_version
-  if [ "${VERSION#v}" = "$INSTALLED" ] && [ "$FORCE" = 0 ]; then
-    say ""; say "✔ Déjà à jour (${INSTALLED}). Rien à faire (--force pour réinstaller). Vérifier : ${BIN} doctor"
-    exit 0
-  fi
   say ""
-  if [ "$DRY" = 0 ]; then confirm "Mettre à jour ${INSTALLED} → ${VERSION#v} ?" || { say "D'accord, rien n'a changé."; exit 0; }; fi
+  if [ "${VERSION#v}" = "$INSTALLED" ] && [ "$FORCE" = 0 ]; then
+    SKIP_BIN=1
+    say "✔ Station déjà à jour (${INSTALLED}) — on vérifie les modèles de recherche et les plugins (--force réinstalle le binaire)."
+  elif [ "$DRY" = 0 ]; then
+    confirm "Mettre à jour ${INSTALLED} → ${VERSION#v} ?" || { SKIP_BIN=1; say "D'accord, binaire inchangé ; on vérifie seulement modèles et plugins."; }
+  fi
 fi
 
 recommend
@@ -523,7 +530,7 @@ if [ "$DRY" = 1 ]; then
   [ "$WANT_SEARCH" = 1 ] && say "  • modèles de recherche multimédia ($(search_models)) dans ${MODELS} (astroportd models add)"
   [ "$AI_INDEX" = friends ] && say "  • ouvrir le cerveau partagé (ai-index) aux Capitaines amis (init --ai-index friends)"
   { [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; } || say "  • aucun modèle local (profil sans calcul local)"
-  if [ "$UPDATE" = 1 ]; then say "  • proposer de redémarrer le service (station et données conservées)"
+  if [ "$UPDATE" = 1 ]; then say "  • mettre à jour les modèles installés, proposer ceux que le catalogue a ajoutés, puis les plugins (install-plugins.sh --update)"; say "  • proposer de redémarrer le service (station et données conservées)"
   elif [ "$RUN_INIT" = 1 ]; then say "  • lancer « ${BIN} init » (clés Y-Level, ORIGIN/ẐEN, réseau), puis proposer les plugins"
   else say "  • s'arrêter avant « init » (--no-init)"; fi
   say ""; say "Simulation terminée : rien n'a été installé ni écrit."
@@ -569,7 +576,9 @@ fetch_and_install() {
 }
 
 step "Téléchargement et vérification"
-if ! fetch_and_install; then
+if [ "$SKIP_BIN" = 1 ]; then
+  say "  binaire en place conservé : ${PREFIX}/bin/${BIN} (${INSTALLED})"
+elif ! fetch_and_install; then
   "${PREFIX}/bin/${BIN}" --version 2>&1 | head -n 3 >&2 || true
   # Auto-guérison : un binaire gnu qui ne démarre pas (glibc ou bibliothèque absente) est remplacé par le statique.
   case "$TARGET" in
@@ -705,14 +714,47 @@ install_embed_models() {
 }
 
 # Recherche multimédia : le binaire installe lui-même ses modèles (catalogue figé, SHA-256, IPFS puis Hugging Face).
+# Un modèle déjà là et intact n'est pas retéléchargé ; un fichier dont l'empreinte a changé avec la nouvelle version l'est.
+MODELS_CHANGED=0
 install_search_models() {
-  local id ok=0
+  local id ok=0 out
   for id in $(search_models); do
     say "  ${id} :"
-    "${PREFIX}/bin/${BIN}" models --dir "$MODELS" add "$id" || { warn "${id} non installé : relancez « ${BIN} models add ${id} »"; ok=1; }
+    if out="$("${PREFIX}/bin/${BIN}" models --dir "$MODELS" add "$id")"; then
+      say "$out"
+      case "$out" in *"installé depuis"*) MODELS_CHANGED=1 ;; esac
+    else
+      warn "${id} non installé : relancez « ${BIN} models add ${id} »"; ok=1
+    fi
   done
   return "$ok"
 }
+
+# Mise à jour : modèles que le catalogue de ce binaire connaît et qui ne sont pas encore là (ajoutés depuis la première
+# installation). Proposés seulement si la machine tient la recherche locale ; la parole (Whisper) seulement en confort.
+NEW_MODELS=""
+offer_new_models() {
+  local lines id mb tasks label rec def a
+  lines="$("${PREFIX}/bin/${BIN}" models --dir "$MODELS" list --absent 2>/dev/null)" || return 0
+  [ -n "$lines" ] || return 0
+  [ "$REC_SEARCH" = 1 ] || { say "  Recherche multimédia : de nouveaux modèles existent, mais cette machine la confie à un Capitaine ami."; return 0; }
+  say ""; say "▶ Nouveaux modèles de recherche disponibles"
+  while IFS='|' read -r id mb tasks label; do
+    [ -n "$id" ] || continue
+    rec=1; case "$tasks" in *speech*) case "$REC_PROFILE" in confort|cerveau) ;; *) rec=0 ;; esac ;; esac
+    def=$([ "$rec" = 1 ] && printf 'O/n' || printf 'o/N')
+    a=""
+    if [ "$YES" = 1 ]; then a=$([ "$rec" = 1 ] && printf o || printf n)
+    elif [ -r /dev/tty ]; then
+      printf '  %s — %s (≈ %s Mo)%s. L'\''installer ? [%s] ' "$id" "$label" "$mb" "$([ "$rec" = 1 ] || printf ', machine un peu juste')" "$def" > /dev/tty
+      read -r a < /dev/tty || a=""
+    fi
+    [ -n "$a" ] || a=$([ "$rec" = 1 ] && printf o || printf n)
+    case "$a" in o|O|oui|Oui|y|Y) NEW_MODELS="${NEW_MODELS:+$NEW_MODELS }${id}" ;; *) say "  ${id} : laissé de côté (plus tard : ${BIN} models add ${id})" ;; esac
+  done <<< "$lines"
+  [ -z "$NEW_MODELS" ] || WANT_SEARCH=1
+}
+[ "$PROFILE_CHOSEN" = actuel ] && offer_new_models
 
 # Seulement ce que le profil retenu demande.
 if [ "$WANT_FACE" = 0 ] && [ "$WANT_EMBED" = 0 ] && [ "$WANT_SEARCH" = 0 ]; then
@@ -826,12 +868,46 @@ case ":${PATH}:" in
   *) warn "${PREFIX}/bin n'est pas dans votre PATH. Ajoutez à ~/.bashrc :  export PATH=\"${PREFIX}/bin:\$PATH\"" ;;
 esac
 
+# --- Plugins : présentation et « git clone » par install-plugins.sh (media, energy, dnslink…) --------------------------
+PLUGINS_SCRIPT="${ASTRO_PLUGINS_SCRIPT:-https://raw.githubusercontent.com/papiche/astroportd-plugins/main/install-plugins.sh}"
+PLUGINS_DIR="${ASTRO_PLUGINS_DIR:-${HOME}/.zen/astroportd-plugins}"
+offer_plugins() {
+  [ "$YES" = 1 ] && return 0
+  step "Plugins (facultatif)"
+  [ -r /dev/tty ] || { say "Plugins (films, énergie, DNS…) : curl -fsSL ${PLUGINS_SCRIPT} | bash"; return 0; }
+  printf '  Des outils en plus : films et musique, énergie, DNSLink. Vous pourrez les ajouter plus tard.\n  Les voir et en installer ? [o/N] ' > /dev/tty
+  read -r answer < /dev/tty || answer="n"
+  case "${answer:-n}" in
+    o|O|oui|Oui|y|Y) curl -fsSL --proto '=https' --tlsv1.2 "$PLUGINS_SCRIPT" | bash || warn "installation des plugins interrompue : relancez-la quand vous voulez (${PLUGINS_SCRIPT})." ;;
+    *) say "D'accord. Quand vous voulez : curl -fsSL ${PLUGINS_SCRIPT} | bash" ;;
+  esac
+}
+# Mise à jour : les plugins déjà clonés sont mis à jour (git pull, puis réinstallation de ceux dont la version a changé) et
+# les nouveaux sont proposés. Le script le plus récent est pris en ligne (il sait lire l'état laissé par les anciens).
+# Sans plugins clonés, une ligne seulement : on ne repose pas à chaque mise à jour une question déjà refusée.
+update_plugins() {
+  if [ ! -d "${PLUGINS_DIR}/.git" ]; then
+    say ""; say "▶ Plugins : aucun installé. Quand vous voulez : curl -fsSL ${PLUGINS_SCRIPT} | bash"; return 0
+  fi
+  step "Plugins : mises à jour et nouveautés"
+  local args=(--update); [ "$YES" = 1 ] && args+=(--yes)
+  if [ ! -r /dev/tty ] && [ "$YES" = 0 ]; then args+=(--list); fi
+  curl -fsSL --proto '=https' --tlsv1.2 "$PLUGINS_SCRIPT" | bash -s -- "${args[@]}" \
+    || warn "mise à jour des plugins interrompue : ${PLUGINS_DIR}/install-plugins.sh --update"
+}
+
 # --- Mise à jour : redémarrer le service, jamais « init » --------------------------------------------------------
 if [ "$UPDATE" = 1 ]; then
+  update_plugins
   say ""
+  if [ "$SKIP_BIN" = 1 ] && [ "$MODELS_CHANGED" = 0 ]; then
+    say "Vérification terminée : binaire, modèles et plugins à jour. Vérifier : ${BIN} doctor"
+    exit 0
+  fi
+  why="passer à la nouvelle version"; [ "$SKIP_BIN" = 1 ] && why="charger les modèles mis à jour"
   case "$(service_state)" in
     active)
-      if confirm "Redémarrer le service ${BIN} pour passer à la nouvelle version ?"; then
+      if confirm "Redémarrer le service ${BIN} pour ${why} ?"; then
         systemctl --user restart "$BIN" || warn "redémarrage refusé par systemd : journalctl --user -u ${BIN}"
         sleep 3
         if [ "$(service_state)" = active ]; then say "  ✔ ${BIN} redémarré : $("${PREFIX}/bin/${BIN}" --version 2>/dev/null)"
@@ -852,20 +928,6 @@ if [ "$UPDATE" = 1 ]; then
   say "Mise à jour terminée. Station, comptes et données conservés. Vérifier : ${BIN} doctor"
   exit 0
 fi
-
-# --- Plugins : présentation et « git clone » par install-plugins.sh (media, energy, dnslink…) --------------------------
-PLUGINS_SCRIPT="${ASTRO_PLUGINS_SCRIPT:-https://raw.githubusercontent.com/papiche/astroportd-plugins/main/install-plugins.sh}"
-offer_plugins() {
-  [ "$YES" = 1 ] && return 0
-  step "Plugins (facultatif)"
-  [ -r /dev/tty ] || { say "Plugins (films, énergie, DNS…) : curl -fsSL ${PLUGINS_SCRIPT} | bash"; return 0; }
-  printf '  Des outils en plus : films et musique, énergie, DNSLink. Vous pourrez les ajouter plus tard.\n  Les voir et en installer ? [o/N] ' > /dev/tty
-  read -r answer < /dev/tty || answer="n"
-  case "${answer:-n}" in
-    o|O|oui|Oui|y|Y) curl -fsSL --proto '=https' --tlsv1.2 "$PLUGINS_SCRIPT" | bash || warn "installation des plugins interrompue : relancez-la quand vous voulez (${PLUGINS_SCRIPT})." ;;
-    *) say "D'accord. Quand vous voulez : curl -fsSL ${PLUGINS_SCRIPT} | bash" ;;
-  esac
-}
 
 # Carte finale : où aller maintenant (l'adresse est lue dans station.conf, écrit par « init »).
 show_final() {

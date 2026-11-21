@@ -44,7 +44,6 @@ export default {
 "Série": "Series",
 "Saison": "Season",
 "Épisode": "Episode",
-"Avec": "With",
 "Actualiser": "Refresh",
 "Station injoignable : {0} (liste d'avant)": "Station unreachable: {0} (earlier list)",
 "Vos amis ne partagent encore aucun film ni morceau avec vous.": "Your friends do not share any film or track with you yet.",

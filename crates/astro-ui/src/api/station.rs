@@ -33,6 +33,15 @@ pub trait StationApi: Auth {
     fn restart(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("redémarrage non disponible sur cette station")) }
     }
+    /// Mise à jour : version en place et dernière publiée, modèles de recherche, plugins, mise à jour en cours et son
+    /// journal (Capitaine). `fresh` redemande la dernière version au lieu du cache.
+    fn update_info(&self, _who: &Principal, _fresh: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("mise à jour depuis l'interface non disponible sur cette station")) }
+    }
+    /// Lance la mise à jour complète (binaire, modèles, plugins, redémarrage) hors du service (Capitaine).
+    fn update_start(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("mise à jour depuis l'interface non disponible sur cette station")) }
+    }
     /// Plans (ORIGIN, UPlanet privées) configurés sur cette station et ceux que ce processus sert (Capitaine).
     fn planes(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("configuration des plans non disponible sur cette station")) }
@@ -74,6 +83,7 @@ pub(super) fn routes<B: StationApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/station/paf", get(paf::<B>).post(paf_set::<B>))
         .route("/api/v1/station/domain", get(domain_info::<B>).post(domain_set::<B>))
         .route("/api/v1/station/restart", post(restart::<B>))
+        .route("/api/v1/station/update", get(update_info::<B>).post(update_start::<B>))
         .route("/api/v1/station/planes", get(planes::<B>).post(plane_add::<B>))
         .route("/api/v1/station/planes/remove", post(plane_remove::<B>))
         .route("/api/v1/station/planes/service", post(plane_service::<B>))
@@ -110,6 +120,16 @@ async fn domain_set<B: StationApi>(State(st): State<Arc<UiState<B>>>, Captain(p)
 
 async fn restart<B: StationApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
     reply(st.backend.restart(&p).await)
+}
+
+/// Mise à jour : `?fresh=1` redemande la dernière version publiée.
+async fn update_info<B: StationApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain, uri: Uri) -> Response {
+    let fresh = uri.query().is_some_and(|q| q.split('&').any(|kv| kv == "fresh=1"));
+    reply(st.backend.update_info(&p, fresh).await)
+}
+
+async fn update_start<B: StationApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    reply(st.backend.update_start(&p).await)
 }
 
 #[derive(Deserialize)]

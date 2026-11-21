@@ -41,7 +41,7 @@ impl Projector {
     /// Requêtes à exécuter dans la transaction d'insertion de `e`. Vide si le kind n'est pas projeté.
     pub fn plan(e: &Event) -> Result<Vec<Statement>, ProjectError> {
         match e.kind {
-            kind::CONTACTS => Ok(contacts(e)),
+            kind::CONTACTS => Ok(contacts(e, true)),
             kind::DID => did(e),
             kind::LEDGER_N2 => ledger(e),
             kind::ECONOMIC_HEALTH => Ok(economic_health(e)),
@@ -59,16 +59,40 @@ impl Projector {
         astro_dav::manifest::restore_statements(manifest, src_cid).map_err(|e| ProjectError::BadManifest(e.to_string()))
     }
 
+    /// Variante du replay : un kind 3 n'y recalcule pas les N2 (ce serait quadratique sur des milliers de listes) ; la phase
+    /// se termine par [`Projector::rebuild_social_graph`], un seul recalcul global.
+    pub fn plan_replay(e: &Event) -> Result<Vec<Statement>, ProjectError> {
+        match e.kind {
+            kind::CONTACTS => Ok(contacts(e, false)),
+            _ => Self::plan(e),
+        }
+    }
+
+    /// Fin de la phase « réseau social » du replay, en **une** transaction (le pare-feu ne voit jamais un graphe vide) :
+    /// retire les N1 dont la liste source n'existe plus (ou dont le propriétaire n'est plus hébergé), puis recalcule tous
+    /// les N2 depuis les listes stockées.
+    pub fn rebuild_social_graph() -> Vec<Statement> {
+        vec![
+            Statement::new(
+                "DELETE FROM social_graph WHERE level <> 2 AND (src_event IS NULL                  OR NOT EXISTS (SELECT 1 FROM nostr_events n WHERE n.id = social_graph.src_event AND n.kind = 3)                  OR NOT EXISTS (SELECT 1 FROM identities i WHERE i.hex = social_graph.owner_hex AND i.hosted = 1))",
+                vec![],
+            ),
+            Statement::new("DELETE FROM social_graph WHERE level = 2", vec![]),
+            Statement::new(format!("{N2_INSERT} WHERE sg.level = 1 AND length(t.value) = 64 AND t.value <> sg.owner_hex GROUP BY sg.owner_hex, t.value"), vec![]),
+        ]
+    }
+
     /// Variante pour les crochets sans canal d'erreur : un événement non projetable ne projette rien.
     pub fn plan_lossy(e: &Event) -> Vec<Statement> {
         Self::plan(e).unwrap_or_default()
     }
 
     /// Vide les tables de projection avant un replay. L'état LOCAL est conservé :
-    /// identités hébergées (`hosted = 1`) et marqueurs `done` sans événement source.
+    /// identités hébergées (`hosted = 1`) et marqueurs `done` sans événement source. `social_graph` n'est **pas** vidé :
+    /// le pare-feu social resterait fermé pendant tout le replay ; il est remis d'aplomb en fin de phase
+    /// ([`Projector::rebuild_social_graph`]).
     pub fn reset() -> Vec<Statement> {
         [
-            "DELETE FROM social_graph",
             "DELETE FROM ledger_n2",
             "DELETE FROM rent_payments",
             "DELETE FROM capital_assets",
@@ -116,7 +140,8 @@ fn tags_named<'a>(e: &'a Event, name: &'a str) -> impl Iterator<Item = &'a str> 
 /// N2 : contacts des N1, **recalculés** pour les propriétaires concernés à partir des listes stockées ; quand
 /// plusieurs N1 mènent au même N2, la plus petite clé est retenue (`via`). Le résultat ne dépend donc pas de
 /// l'ordre d'arrivée des événements.
-fn contacts(e: &Event) -> Vec<Statement> {
+/// `with_n2 = false` (replay) : N1 seulement, les N2 sont recalculés une fois en fin de phase.
+fn contacts(e: &Event, with_n2: bool) -> Vec<Statement> {
     let author = e.pubkey.as_str();
     let follows: BTreeSet<&str> = tags_named(e, "p").filter(|p| is_hex64(p) && *p != author).take(MAX_CONTACTS).collect();
     let ts = int(e.created_at);
@@ -134,22 +159,25 @@ fn contacts(e: &Event) -> Vec<Statement> {
             vec![text(author), text(p), ts.clone(), text(&e.id)],
         ));
     }
+    if !with_n2 {
+        return out;
+    }
+    // Temps réel : seulement si l'auteur est N1 d'un hébergé (ou hébergé lui-même) — sinon `AFFECTED` est vide et ces deux
+    // requêtes ne touchent rien. Les `p` viennent de `nostr_tags` (index `nt_lookup`), pas d'un `json_each` sur chaque liste.
     out.push(Statement::new(format!("DELETE FROM social_graph WHERE level = 2 AND owner_hex IN ({AFFECTED})"), vec![text(author)]));
     out.push(Statement::new(
-        format!(
-            "INSERT OR IGNORE INTO social_graph(owner_hex, pubkey, level, via, certified_a4l, updated_at, src_event) \
-             SELECT sg.owner_hex, json_extract(j.value, '$[1]'), 2, MIN(sg.pubkey), 0, c.created_at, c.id \
-             FROM social_graph sg \
-             JOIN nostr_events c ON c.pubkey = sg.pubkey AND c.kind = 3, json_each(c.tags) j \
-             WHERE sg.level = 1 AND sg.owner_hex IN ({AFFECTED}) \
-               AND json_extract(j.value, '$[0]') = 'p' AND length(json_extract(j.value, '$[1]')) = 64 \
-               AND json_extract(j.value, '$[1]') <> sg.owner_hex \
-             GROUP BY sg.owner_hex, json_extract(j.value, '$[1]')"
-        ),
+        format!("{N2_INSERT} WHERE sg.level = 1 AND sg.owner_hex IN ({AFFECTED}) AND length(t.value) = 64 AND t.value <> sg.owner_hex GROUP BY sg.owner_hex, t.value"),
         vec![text(author)],
     ));
     out
 }
+
+/// N2 = contacts (`p` des kind 3 stockés) des N1 ; à plusieurs chemins, la plus petite clé N1 est retenue (`via`).
+const N2_INSERT: &str = "INSERT OR IGNORE INTO social_graph(owner_hex, pubkey, level, via, certified_a4l, updated_at, src_event) \
+     SELECT sg.owner_hex, t.value, 2, MIN(sg.pubkey), 0, c.created_at, c.id \
+     FROM social_graph sg \
+     JOIN nostr_events c ON c.pubkey = sg.pubkey AND c.kind = 3 \
+     JOIN nostr_tags t ON t.event_id = c.seq AND t.name = 'p'";
 
 /// Kind 30800 : document DID W3C d'un MULTIPASS ou d'un NODE.
 fn did(e: &Event) -> Result<Vec<Statement>, ProjectError> {
@@ -227,6 +255,7 @@ fn did(e: &Event) -> Result<Vec<Statement>, ProjectError> {
         ],
     )];
     out.extend(assets);
+    // Les loyers arrivés avant ce DID sont rattrapés par le trigger `identities_rent_catch_up` (schéma).
     Ok(out)
 }
 

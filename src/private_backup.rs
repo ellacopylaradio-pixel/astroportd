@@ -659,7 +659,10 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
 
     /// Fichiers privés de `owner` pas encore sauvegardés chez `host`. `unpacked_only` (gardien k-sur-n) : seulement ceux
     /// que le flux de paquets ne prend pas (CID d'une autre forme que `bafkrei…`), qui partent donc en copie complète.
-    async fn pending_files(&self, owner: &str, host: &str, limit: usize, unpacked_only: bool) -> Vec<(String, u64)> {
+    /// Fichiers pas encore chez `host`, les plus anciens d'abord, **qui tiennent dans `room` octets** : un gros fichier qui ne
+    /// rentre plus dans le volume restant ne bouche pas la sélection (sinon les 100 plus anciens, trop gros, la tiendraient à
+    /// jamais). Une erreur de lecture est dite au Capitaine.
+    async fn pending_files(&self, owner: &str, host: &str, limit: usize, unpacked_only: bool, room: u64) -> Vec<(String, u64)> {
         let (o, h) = (owner.to_owned(), host.to_owned());
         self.db
             .readers()
@@ -673,13 +676,17 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                        AND NOT EXISTS (SELECT 1 FROM invites i WHERE i.owner_hex = e.owner_hex AND i.revoked_at IS NULL AND instr(i.items, e.cid) > 0) \
                        AND NOT EXISTS (SELECT 1 FROM backup_items b WHERE b.owner_hex = e.owner_hex AND b.host_hex = ?2 AND b.cid = e.cid) \
                        AND (?4 = 0 OR e.cid NOT LIKE 'bafkrei%') \
+                       AND COALESCE(e.size, 0) <= ?5 \
                      ORDER BY COALESCE(e.mtime, 0) LIMIT ?3",
                 )?;
-                let rows = stmt.query_map(rusqlite::params![o, h, i64::try_from(limit).unwrap_or(i64::MAX), i64::from(unpacked_only)], |r| Ok((r.get::<_, String>(0)?, u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0))))?;
+                let rows = stmt.query_map(rusqlite::params![o, h, i64::try_from(limit).unwrap_or(i64::MAX), i64::from(unpacked_only), i64::try_from(room).unwrap_or(i64::MAX)], |r| Ok((r.get::<_, String>(0)?, u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0))))?;
                 Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
             .await
-            .unwrap_or_default()
+            .unwrap_or_else(|e| {
+                self.activity.publish_to(Audience::Captain, "alert", "backup", format!("sauvegarde privée : fichiers à envoyer illisibles ({e})"), None);
+                Vec::new()
+            })
     }
 
     /// Le blob du manifeste uCloud de `owner` (son VFS et son trousseau, chiffrés), s'il n'est pas encore chez `host`.
@@ -752,7 +759,8 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             let mut used = self.used(&owner, &host).await;
             let mut stored_here = false;
             let mut todo: Vec<(String, u64)> = self.manifest_item(&owner, &host).await.into_iter().collect();
-            todo.extend(self.pending_files(&owner, &host, PER_PASS, coded).await);
+            let room = quota.saturating_sub(used).saturating_sub(todo.iter().map(|(_, n)| *n).sum());
+            todo.extend(self.pending_files(&owner, &host, PER_PASS, coded, room).await);
             for (cid, size) in todo {
                 if used.saturating_add(size) > quota {
                     continue; // trop gros pour le volume restant : les plus petits peuvent encore passer
@@ -2337,6 +2345,26 @@ mod tests {
         // Il révoque : ses blobs disparaissent et son quota est libéré.
         backup.respond(&bob, &alice, false, 0, 0).await.unwrap();
         assert_eq!(count(&db, "SELECT COUNT(*) FROM ucloud_entries WHERE owner_hex = ?1 AND path LIKE '/Sauvegardes/%' AND type = 'file'", bob).await, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn big_old_files_that_no_longer_fit_do_not_starve_the_small_ones() {
+        let (dir, db, _, backup) = rig("famine").await;
+        let (alice, bob) = (hex(&ALICE), hex(&BOB));
+        // Plus d'une passe de très gros fichiers, plus anciens que les trois petits : aucun ne tient dans le volume accordé.
+        for n in 0..(PER_PASS + 20) {
+            db.writer()
+                .execute(
+                    "INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, data) VALUES (?1, ?2, '/Films', 'file', ?3, 'video/mp4', 1000000, 0, '{}')",
+                    vec![alice.clone().into(), format!("/Films/{n}.mp4").into(), format!("bafkreigros{n:048}").into()],
+                )
+                .await
+                .unwrap();
+        }
+        backup.set(&alice, true, Some(&bob)).await.unwrap();
+        backup.respond(&bob, &alice, true, 100, 100).await.unwrap();
+        assert_eq!(backup.run_once().await, 3, "les petits fichiers passent malgré les gros, plus anciens");
         let _ = std::fs::remove_dir_all(dir);
     }
 

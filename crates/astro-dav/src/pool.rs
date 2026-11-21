@@ -14,6 +14,9 @@ use rusqlite::{Connection, OpenFlags};
 const COLUMNS_SQL: &str = "SELECT m.name, p.name FROM sqlite_master m, pragma_table_info(m.name) p \
     WHERE m.type = 'table' AND m.sql NOT LIKE 'CREATE VIRTUAL%' AND (p.name = 'cid' OR p.name LIKE '%\\_cid' ESCAPE '\\')";
 
+/// Miniature d'une entrée, écrite **exactement** comme l'index `ue_thumb_cid` du schéma (sinon SQLite ne s'en sert pas).
+const THUMB_CID: &str = "CASE WHEN json_valid(data) THEN json_extract(data, '$.thumb.cid') END";
+
 /// Le blob `cid` est-il référencé dans la base `db` (ouverte en lecture seule) ?
 pub fn referenced_in(db: &Path, cid: &str) -> Result<bool, String> {
     if !db.exists() {
@@ -35,7 +38,7 @@ pub fn referenced_by(conn: &Connection, cid: &str) -> Result<bool, String> {
             return Ok(true);
         }
     }
-    conn.query_row("SELECT 1 FROM ucloud_entries WHERE json_extract(data, '$.thumb.cid') = ?1 LIMIT 1", [cid], |_| Ok(()))
+    conn.query_row(&format!("SELECT 1 FROM ucloud_entries WHERE {THUMB_CID} = ?1 LIMIT 1"), [cid], |_| Ok(()))
         .map(|()| true)
         .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(false) } else { Err(e) })
         .map_err(|e| e.to_string())
@@ -64,20 +67,66 @@ pub fn referenced_set(db: &Path) -> Result<std::collections::HashSet<String>, St
 
 /// Tous les blobs que la base ouverte `conn` référence (voir [`referenced_set`]).
 pub fn referenced_set_of(conn: &Connection) -> Result<std::collections::HashSet<String>, String> {
+    referenced_set_except(conn, &[])
+}
+
+/// Tables qui ne font que **décrire** des blobs d'ailleurs (caches du catalogue des amis) : ils ne sont pas à nous, le miroir
+/// Kubo ne doit ni les rapatrier ni les publier.
+pub const FOREIGN_CACHES: &[&str] = &["friend_media"];
+
+/// Comme [`referenced_set_of`], sans les tables `skip` (voir [`FOREIGN_CACHES`]).
+pub fn referenced_set_except(conn: &Connection, skip: &[&str]) -> Result<std::collections::HashSet<String>, String> {
     let mut out = std::collections::HashSet::new();
     let mut stmt = conn.prepare(COLUMNS_SQL).map_err(|e| e.to_string())?;
     let cols = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
-    for (table, column) in cols {
+    for (table, column) in cols.into_iter().filter(|(t, _)| !skip.contains(&t.as_str())) {
         let mut q = conn.prepare(&format!("SELECT DISTINCT \"{column}\" FROM \"{table}\" WHERE \"{column}\" IS NOT NULL")).map_err(|e| e.to_string())?;
         for cid in q.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())? {
             out.insert(cid.map_err(|e| e.to_string())?);
         }
     }
-    let mut q = conn.prepare("SELECT DISTINCT json_extract(data, '$.thumb.cid') FROM ucloud_entries WHERE json_extract(data, '$.thumb.cid') IS NOT NULL").map_err(|e| e.to_string())?;
+    let mut q = conn.prepare(&format!("SELECT DISTINCT {THUMB_CID} FROM ucloud_entries WHERE {THUMB_CID} IS NOT NULL")).map_err(|e| e.to_string())?;
     for cid in q.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())? {
         out.insert(cid.map_err(|e| e.to_string())?);
     }
     Ok(out)
+}
+
+/// Mémoire courte des réponses « ce CID est-il à moi ? » du serveur de blobs d'un bassin partagé : un pair qui redemande le
+/// même blob (reprise, lecture par morceaux) ne refait pas les requêtes. Bornée en nombre ; une réponse vit `ttl` au plus
+/// (un fichier tout juste ajouté ou retiré est vu au plus tard après ce délai).
+#[derive(Debug)]
+pub struct VerdictCache {
+    ttl: std::time::Duration,
+    cap: usize,
+    map: std::sync::Mutex<std::collections::HashMap<String, (bool, std::time::Instant)>>,
+}
+
+impl VerdictCache {
+    /// `cap` réponses au plus, chacune gardée `ttl`.
+    pub fn new(cap: usize, ttl: std::time::Duration) -> Self {
+        Self { ttl, cap: cap.max(1), map: std::sync::Mutex::new(std::collections::HashMap::new()) }
+    }
+
+    /// Réponse encore fraîche pour `cid`.
+    pub fn get(&self, cid: &str) -> Option<bool> {
+        let map = self.map.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.get(cid).filter(|(_, at)| at.elapsed() < self.ttl).map(|(v, _)| *v)
+    }
+
+    /// Retient la réponse pour `cid`. Pleine : on oublie les périmées, puis les plus anciennes.
+    pub fn put(&self, cid: &str, verdict: bool) {
+        let mut map = self.map.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if map.len() >= self.cap && !map.contains_key(cid) {
+            let ttl = self.ttl;
+            map.retain(|_, (_, at)| at.elapsed() < ttl);
+            while map.len() >= self.cap {
+                let Some(oldest) = map.iter().min_by_key(|(_, (_, at))| *at).map(|(k, _)| k.clone()) else { break };
+                map.remove(&oldest);
+            }
+        }
+        map.insert(cid.to_owned(), (verdict, std::time::Instant::now()));
+    }
 }
 
 /// État du bassin : ce qu'il pèse, ce que chaque plan en référence, ce qui est partagé, ce qui n'est à personne.
@@ -155,6 +204,38 @@ mod tests {
         c.execute("DELETE FROM ucloud_entries", []).unwrap();
         c.execute("DELETE FROM ucloud_keyring", []).unwrap();
         assert!(!referenced_in(&path, "cid-entry").unwrap() && !referenced_in(&path, "cid-thumb").unwrap(), "plus de référence : libérable");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn the_catalogue_of_friends_is_not_ours_for_the_mirror() {
+        let (path, c) = peer_db("foreign");
+        c.execute("INSERT INTO friend_media(owner_hex, author, event_id, x, cid, item, created_at) VALUES ('aa', 'bb', 'e1', 'x', 'cid-ami', '{}', 1)", []).unwrap();
+        c.execute("INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, data) VALUES ('aa', '/a', '/', 'file', 'cid-moi', '{}')", []).unwrap();
+        assert!(referenced_set_of(&c).unwrap().contains("cid-ami"), "le bassin, lui, le garde");
+        let mine = referenced_set_except(&c, FOREIGN_CACHES).unwrap();
+        assert!(mine.contains("cid-moi") && !mine.contains("cid-ami"), "{mine:?}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn the_verdict_cache_is_short_and_bounded() {
+        let c = VerdictCache::new(2, std::time::Duration::from_millis(50));
+        c.put("a", true);
+        c.put("b", false);
+        assert_eq!((c.get("a"), c.get("b"), c.get("z")), (Some(true), Some(false), None));
+        c.put("c", true);
+        assert_eq!(c.map.lock().unwrap().len(), 2, "jamais plus que la borne");
+        assert_eq!(c.get("c"), Some(true));
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        assert_eq!(c.get("c"), None, "réponse périmée : on redemande à la base");
+    }
+
+    #[test]
+    fn the_thumbnail_lookup_uses_its_index() {
+        let (path, c) = peer_db("thumbidx");
+        let plan: String = c.query_row(&format!("EXPLAIN QUERY PLAN SELECT 1 FROM ucloud_entries WHERE {THUMB_CID} = ?1 LIMIT 1"), ["x"], |r| r.get(3)).unwrap();
+        assert!(plan.contains("ue_thumb_cid"), "balayage complet : {plan}");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

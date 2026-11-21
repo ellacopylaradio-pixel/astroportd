@@ -322,6 +322,17 @@ impl<B: BlobStore> StationApi for StationBackend<B> {
         crate::station_domain::request_restart(Duration::from_millis(500));
         Ok(json!({ "restarting": true }))
     }
+    async fn update_info(&self, _who: &Principal, fresh: bool) -> Result<Value, ApiError> {
+        let data = self.conf_path.as_deref().and_then(std::path::Path::parent).ok_or_else(|| ApiError::unavailable("dossier de la station inconnu"))?;
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or_else(|| ApiError::unavailable("HOME inconnu"))?;
+        Ok(crate::self_update::view(data, &home, fresh).await)
+    }
+    async fn update_start(&self, _who: &Principal) -> Result<Value, ApiError> {
+        let data = self.conf_path.as_deref().and_then(std::path::Path::parent).ok_or_else(|| ApiError::unavailable("dossier de la station inconnu"))?;
+        let r = crate::self_update::start(data).await.map_err(ApiError::conflict)?;
+        self.services.activity.publish_to(astro_core::Audience::Captain, "info", "station", format!("mise à jour vers {} lancée par le Capitaine (install.sh, puis redémarrage)", r["version"].as_str().unwrap_or("?")), None);
+        Ok(r)
+    }
     async fn paf(&self, _who: &Principal) -> Result<Value, ApiError> {
         let conf = self.conf_path.as_deref().ok_or_else(|| ApiError::unavailable("dossier de la station inconnu"))?;
         let home = conf.parent().ok_or_else(|| ApiError::unavailable("dossier de la station inconnu"))?;
