@@ -73,12 +73,19 @@ pub struct Site<B: BlobStore> {
     dav: Arc<DavState<B>>,
     uplanet_name: String,
     zone: Mutex<Option<(Instant, Option<String>)>>,
+    /// Photos nettoyées récemment servies (CID de l'original → copie nettoyée) : une photo très vue n'est pas redéchiffrée à chaque visite.
+    cleaned: Mutex<std::collections::VecDeque<(String, bytes::Bytes)>>,
 }
+
+/// Taille au-delà de laquelle une photo n'est pas nettoyée (donc pas servie) : le nettoyage la tient entière en mémoire.
+const MAX_CLEAN: u64 = 64 * 1024 * 1024;
+/// Octets de photos nettoyées gardés en mémoire.
+const CLEAN_CACHE: usize = 64 * 1024 * 1024;
 
 impl<B: BlobStore> Site<B> {
     /// Site pour la constellation `uplanet_name` (la zone DNS vient de sa configuration coopérative).
     pub fn new(dav: Arc<DavState<B>>, uplanet_name: String) -> Self {
-        Self { dav, uplanet_name, zone: Mutex::new(None) }
+        Self { dav, uplanet_name, zone: Mutex::new(None), cleaned: Mutex::new(std::collections::VecDeque::new()) }
     }
 
     async fn zone(&self) -> Option<String> {
@@ -198,7 +205,7 @@ impl<B: BlobStore> Site<B> {
         let resp = match self.entry(hex, &path).await {
             Some(e) if e.kind == EntryKind::File => {
                 let page = e.mime.as_deref().is_some_and(|m| m.starts_with("text/html"));
-                let r = secure(get_owner(&self.dav, hex, &path, headers, head).await);
+                let r = secure(self.file(hex, &path, &e, headers, head).await);
                 if page && !head && r.status() == StatusCode::OK {
                     self.count_visit(hex, &shown);
                 }
@@ -216,13 +223,105 @@ impl<B: BlobStore> Site<B> {
 
     async fn directory(&self, hex: &str, base: &str, rel: &str, path: &str, headers: &HeaderMap, head: bool) -> Response {
         let index = format!("{path}/index.html");
-        if self.entry(hex, &index).await.is_some_and(|e| e.kind == EntryKind::File) {
-            return secure(get_owner(&self.dav, hex, &index, headers, head).await);
+        if let Some(e) = self.entry(hex, &index).await.filter(|e| e.kind == EntryKind::File) {
+            return secure(self.file(hex, &index, &e, headers, head).await);
         }
         let entries: Vec<Entry> = self.children(hex, path).await.into_iter().filter(|e| !vfs::name_of(&e.path).starts_with('.')).collect();
         let profile = if rel.is_empty() { self.profile(hex).await } else { Value::Null };
         let body = default_page(&profile, base, rel, &entries);
         secure((StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], if head { String::new() } else { body }).into_response())
+    }
+
+    /// Sert un fichier de `/Public` : une photo (JPEG, PNG, WebP, reconnue à ses octets) part **nettoyée** de sa position et de
+    /// l'identité de l'appareil (`public_clean`) ; HEIC, AVIF et TIFF ne sont pas servis ; le reste part tel quel. L'original n'est
+    /// jamais modifié. Dans le doute (fichier changé entre-temps, structure douteuse, lecture incomplète), on refuse.
+    async fn file(&self, hex: &str, path: &str, e: &Entry, headers: &HeaderMap, head: bool) -> Response {
+        use crate::public_clean::{Kind, SNIFF_LEN, sniff};
+        let Some(cid) = e.cid.as_deref() else { return get_owner(&self.dav, hex, path, headers, head).await };
+        let same = |r: &Response| r.headers().get(header::ETAG).and_then(|v| v.to_str().ok()) == Some(format!("\"{cid}\"").as_str());
+        let kind = if e.size == 0 {
+            Kind::Other
+        } else {
+            let mut h = HeaderMap::new();
+            h.insert(header::RANGE, HeaderValue::from_str(&format!("bytes=0-{}", e.size.min(SNIFF_LEN) - 1)).unwrap_or(HeaderValue::from_static("bytes=0-0")));
+            let r = get_owner(&self.dav, hex, path, &h, false).await;
+            if !r.status().is_success() {
+                return r;
+            }
+            if !same(&r) {
+                return refuse(StatusCode::SERVICE_UNAVAILABLE, "Fichier en cours de modification : réessayez.");
+            }
+            match axum::body::to_bytes(r.into_body(), 64).await {
+                Ok(b) => sniff(&b),
+                Err(_) => return refuse(StatusCode::INTERNAL_SERVER_ERROR, "Fichier illisible."),
+            }
+        };
+        match kind {
+            Kind::Other => {
+                let r = get_owner(&self.dav, hex, path, headers, head).await;
+                if r.status().is_success() && !same(&r) {
+                    return refuse(StatusCode::SERVICE_UNAVAILABLE, "Fichier en cours de modification : réessayez.");
+                }
+                r
+            }
+            Kind::Refused => refuse(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Cette photo (HEIC, AVIF ou TIFF) garde des informations que la station ne sait pas retirer (lieu, appareil) : elle n'est pas servie publiquement. Publiez-la en JPEG."),
+            Kind::Clean => self.clean_photo(hex, path, e, cid, headers, head).await,
+        }
+    }
+
+    async fn clean_photo(&self, hex: &str, path: &str, e: &Entry, cid: &str, headers: &HeaderMap, head: bool) -> Response {
+        let etag = format!("\"{cid}-public\"");
+        if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|t| t.trim() == etag || t.trim() == "*")) {
+            return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+        }
+        if e.size > MAX_CLEAN {
+            return refuse(StatusCode::PAYLOAD_TOO_LARGE, "Photo trop lourde pour être servie publiquement sans ses métadonnées (64 Mo au plus).");
+        }
+        let cached = self.cleaned.lock().ok().and_then(|c| c.iter().find(|(k, _)| k == cid).map(|(_, b)| b.clone()));
+        let body = match cached {
+            Some(b) => b,
+            None => {
+                let r = get_owner(&self.dav, hex, path, &HeaderMap::new(), false).await;
+                let same = r.headers().get(header::ETAG).and_then(|v| v.to_str().ok()) == Some(format!("\"{cid}\"").as_str());
+                if !r.status().is_success() || !same {
+                    return refuse(StatusCode::SERVICE_UNAVAILABLE, "Fichier en cours de modification : réessayez.");
+                }
+                let limit = usize::try_from(e.size).unwrap_or(usize::MAX).saturating_add(1);
+                let raw = match axum::body::to_bytes(r.into_body(), limit).await {
+                    Ok(b) if b.len() as u64 == e.size => b,
+                    _ => return refuse(StatusCode::INTERNAL_SERVER_ERROR, "Photo illisible : elle n'est pas servie."),
+                };
+                let Ok(clean) = crate::public_clean::clean(&raw) else {
+                    return refuse(StatusCode::UNPROCESSABLE_ENTITY, "Photo abîmée : la station ne peut pas en retirer le lieu et l'appareil, elle n'est donc pas servie publiquement.");
+                };
+                let b = bytes::Bytes::from(clean);
+                if let Ok(mut c) = self.cleaned.lock() {
+                    c.push_back((cid.to_owned(), b.clone()));
+                    let mut total: usize = c.iter().map(|(_, b)| b.len()).sum();
+                    while total > CLEAN_CACHE {
+                        let Some((_, old)) = c.pop_front() else { break };
+                        total -= old.len();
+                    }
+                }
+                b
+            }
+        };
+        let size = body.len() as u64;
+        let range = match headers.get(header::RANGE).and_then(|v| v.to_str().ok()).map(|v| astro_dav::server::parse_range(v, size)) {
+            Some(Err(())) => return (StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, format!("bytes */{size}"))]).into_response(),
+            Some(Ok(r)) => r,
+            None => None,
+        };
+        let mime = e.mime.clone().filter(|m| m.starts_with("image/")).unwrap_or_else(|| vfs::guess_mime(path).to_owned());
+        let (status, part) = match range {
+            Some((s, end)) => (StatusCode::PARTIAL_CONTENT, body.slice(usize::try_from(s).unwrap_or(0)..usize::try_from(end + 1).unwrap_or(body.len()))),
+            None => (StatusCode::OK, body),
+        };
+        let mut r = Response::builder().status(status).header(header::CONTENT_TYPE, mime).header(header::ETAG, etag).header(header::ACCEPT_RANGES, "bytes").header(header::CONTENT_LENGTH, part.len());
+        if let Some((s, end)) = range {
+            r = r.header(header::CONTENT_RANGE, format!("bytes {s}-{end}/{size}"));
+        }
+        r.body(if head { axum::body::Body::empty() } else { axum::body::Body::from(part) }).unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR, "Erreur interne."))
     }
 
     /// Nom, adresses et état du site d'un compte (écran Mon compte).
@@ -378,6 +477,10 @@ async fn page<B: BlobStore>(site: &Site<B>, who: &str, rest: &str, headers: &Hea
             None => secure(not_found()),
         },
     }
+}
+
+fn refuse(status: StatusCode, why: &str) -> Response {
+    (status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], why.to_owned()).into_response()
 }
 
 fn not_found() -> Response {

@@ -435,7 +435,8 @@ fn destination<B: BlobStore>(st: &DavState<B>, headers: &HeaderMap) -> Result<St
 }
 
 /// Intervalle d'octets demandé : `Ok(None)` = servir tout, `Err(())` = insatisfaisable.
-pub(crate) fn parse_range(value: &str, size: u64) -> Result<Option<(u64, u64)>, ()> {
+#[allow(clippy::result_unit_err)]
+pub fn parse_range(value: &str, size: u64) -> Result<Option<(u64, u64)>, ()> {
     let Some(spec) = value.trim().strip_prefix("bytes=") else { return Ok(None) };
     if spec.contains(',') || size == 0 {
         return Ok(None); // plusieurs plages : on sert tout, ce que la RFC autorise

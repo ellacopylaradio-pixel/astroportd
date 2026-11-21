@@ -259,3 +259,93 @@ async fn page_views_are_counted_per_day_and_page_without_any_visitor_identity() 
     assert_eq!(cols, ["hex", "day", "path", "hits"]);
     assert_eq!(r.site.info(&r.hex, EMAIL).await["visits"]["today"], 2);
 }
+
+/// JPEG dont l'EXIF porte un numéro de série et un propriétaire, plus un XMP avec une position GPS.
+fn signed_photo() -> Vec<u8> {
+    let img = image::RgbImage::from_fn(32, 16, |x, y| image::Rgb([(x * 7) as u8, (y * 15) as u8, 60]));
+    let mut j = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut j, 90).encode_image(&img).unwrap();
+    let mut out = j[..2].to_vec();
+    for body in [&b"Exif\0\0II*\0\x08\0\0\0\0\0\0\0\0\0SN-SECRET-4242 Jean Proprietaire"[..], b"http://ns.adobe.com/xap/1.0/\0<x>GPSLatitude 43.6</x>"] {
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(body);
+    }
+    out.extend_from_slice(&j[2..]);
+    out
+}
+
+async fn get_with(r: &Rig, path: &str, method: &str, h: &[(header::HeaderName, &str)]) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let mut req = Request::builder().method(method).uri(path);
+    for (k, v) in h {
+        req = req.header(k, *v);
+    }
+    let resp = r.site.clone().router().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let (status, headers) = (resp.status(), resp.headers().clone());
+    (status, headers, axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap().to_vec())
+}
+
+fn leaks(d: &[u8]) -> bool {
+    [&b"SN-SECRET"[..], b"Proprietaire", b"GPSLatitude"].iter().any(|n| d.windows(n.len()).any(|w| w == *n))
+}
+
+#[tokio::test]
+async fn a_public_photo_leaves_without_its_position_nor_its_camera_and_the_original_is_untouched() {
+    let r = rig("clean").await;
+    let photo = signed_photo();
+    for (name, mime) in [("plage.jpg", "image/jpeg"), ("deguisee.txt", "text/plain")] {
+        ingest::replace(&r.dav, &r.hex, "/Public", name, Some(mime), Cursor::new(photo.clone())).await.unwrap();
+    }
+    let url = format!("/site/{}/plage.jpg", r.name);
+    let (s, h, body) = get_with(&r, &url, "GET", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!leaks(&body), "ni série, ni propriétaire, ni position");
+    assert_eq!(image::load_from_memory(&body).unwrap().width(), 32, "toujours une photo");
+    assert_eq!(h[header::CONTENT_LENGTH].to_str().unwrap(), body.len().to_string());
+    let etag = h[header::ETAG].to_str().unwrap().to_owned();
+    assert!(etag.ends_with("-public\""), "l'empreinte n'est pas celle de l'original : {etag}");
+    // Le nom et le type déclarés ne trompent pas le nettoyage : les octets décident.
+    assert!(!leaks(&get_with(&r, &format!("/site/{}/deguisee.txt", r.name), "GET", &[]).await.2));
+    // Range, HEAD, If-None-Match portent sur la copie nettoyée.
+    let (s, h, part) = get_with(&r, &url, "GET", &[(header::RANGE, "bytes=0-9")]).await;
+    assert_eq!((s, part.as_slice()), (StatusCode::PARTIAL_CONTENT, &body[..10]));
+    assert_eq!(h[header::CONTENT_RANGE].to_str().unwrap(), format!("bytes 0-9/{}", body.len()));
+    let (s, _, tail) = get_with(&r, &url, "GET", &[(header::RANGE, &format!("bytes={}-", body.len() - 5))]).await;
+    assert_eq!((s, tail.as_slice()), (StatusCode::PARTIAL_CONTENT, &body[body.len() - 5..]));
+    assert_eq!(get_with(&r, &url, "GET", &[(header::RANGE, "bytes=999999-")]).await.0, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(get_with(&r, &url, "GET", &[(header::IF_NONE_MATCH, &etag)]).await.0, StatusCode::NOT_MODIFIED);
+    let (s, h, b) = r.site.serve(&r.hex, "", "plage.jpg", &HeaderMap::new(), true).await.into_parts().pipe_head();
+    assert!(s == StatusCode::OK && h[header::CONTENT_LENGTH].to_str().unwrap() == body.len().to_string() && b, "HEAD : même longueur, sans corps");
+    // L'original, lui, reste complet dans l'uCloud du membre.
+    let own = axum::body::to_bytes(astro_dav::get_owner(&r.dav, &r.hex, "/Public/plage.jpg", &HeaderMap::new(), false).await.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(own.as_ref(), photo.as_slice());
+}
+
+trait PipeHead {
+    fn pipe_head(self) -> (StatusCode, HeaderMap, bool);
+}
+impl PipeHead for (axum::http::response::Parts, Body) {
+    fn pipe_head(self) -> (StatusCode, HeaderMap, bool) {
+        (self.0.status, self.0.headers, axum::body::HttpBody::size_hint(&self.1).exact() == Some(0))
+    }
+}
+
+#[tokio::test]
+async fn a_damaged_or_uncleanable_photo_is_refused_never_served_raw() {
+    let r = rig("hostile").await;
+    let photo = signed_photo();
+    let truncated = photo[..photo.len() - 40].to_vec();
+    let mut giant = vec![0xFF, 0xD8, 0xFF, 0xE1, 0xFF, 0xFF];
+    giant.extend_from_slice(b"Exif\0\0SN-SECRET-4242");
+    let mut heic = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec();
+    heic.extend_from_slice(b"Exif\0\0SN-SECRET-4242 GPSLatitude");
+    for (name, data, want) in [("coupee.jpg", truncated, StatusCode::UNPROCESSABLE_ENTITY), ("geant.jpg", giant, StatusCode::UNPROCESSABLE_ENTITY), ("iphone.heic", heic, StatusCode::UNSUPPORTED_MEDIA_TYPE)] {
+        ingest::replace(&r.dav, &r.hex, "/Public", name, Some("image/jpeg"), Cursor::new(data)).await.unwrap();
+        for range in ["", "bytes=0-"] {
+            let h: Vec<(header::HeaderName, &str)> = if range.is_empty() { vec![] } else { vec![(header::RANGE, range)] };
+            let (s, _, body) = get_with(&r, &format!("/site/{}/{name}", r.name), "GET", &h).await;
+            assert_eq!(s, want, "{name}");
+            assert!(!leaks(&body), "{name} : rien de l'original");
+        }
+    }
+}

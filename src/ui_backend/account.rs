@@ -122,7 +122,7 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
         // Vigie « vie privée » de /Public, en direct : l'alerte de l'accueil disparaît dès que le fichier est retiré.
         let privacy = crate::privacy_watch::check(&svc.db, &who.hex).await.map_err(db_err)?;
         Ok(json!({
-            "privacy": { "gps": privacy.gps.len(), "identity": privacy.identity.len(), "sensitive": privacy.sensitive.len() + privacy.papers.len(), "papers": privacy.papers.len() },
+            "privacy": { "unserved": privacy.unserved.len(), "sensitive": privacy.sensitive.len() + privacy.papers.len(), "papers": privacy.papers.len() },
             "disk": { "used_bytes": used, "files": files, "quota_bytes": quota, "unlimited": unlimited, "tier": format!("{:?}", account.tier) },
             "opex": opex, "capex": capex,
             "hosting": hosting,

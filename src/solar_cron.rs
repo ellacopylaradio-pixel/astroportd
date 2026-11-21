@@ -11,8 +11,9 @@
 //! 4. purge des réclamations anciennes (`claimed`, 7 jours), des événements Nostr expirés (NIP-40) et des liens d'invités expirés ;
 //! 5. balayage sémantique RÊVE ;
 //! 6. sauvegarde privée : envoi chez les amis des fichiers non partagés pas encore sauvegardés ;
-//!    puis contrôle d'intégrité et **vigie « vie privée »** de `/Public` (photos géolocalisées, fichiers sensibles :
-//!    le membre est prévenu, rien n'est modifié — `privacy_watch`) ;
+//!    puis contrôle d'intégrité et **vigie « vie privée »** de `/Public` (fichiers sensibles, papiers, photos HEIC non
+//!    servies ; les photos publiques partent déjà sans position ni appareil — `public_clean` : le membre est prévenu, rien
+//!    n'est modifié — `privacy_watch`) ;
 //! 7. clôture hebdomadaire de la régie (3×1/3) : toute semaine ISO terminée et pas encore close, soit le lundi
 //!    pour la semaine finie le dimanche, avec rattrapage jusqu'à 5 semaines si la station était éteinte ;
 //! 8. émission de l'événement de santé économique (kind 30850, `d = economic-health`).
@@ -349,15 +350,15 @@ impl<P: Publisher> Nightly<P> {
         if found.is_empty() {
             return Ok("rien de sensible dans les dossiers Public".into());
         }
-        let (mut gps, mut sensitive) = (0, 0);
+        let (mut unserved, mut sensitive) = (0, 0);
         for (owner, f) in &found {
-            gps += f.gps.len();
-            sensitive += f.sensitive.len();
+            unserved += f.unserved.len();
+            sensitive += f.sensitive.len() + f.papers.len();
             if let Some(bus) = &self.activity {
-                bus.publish_to(astro_core::Audience::Owner(owner.clone()), "privacy", "vigie 20h12", f.message(), Some(serde_json::json!({ "gps": f.gps, "identity": f.identity, "sensitive": f.sensitive, "papers": f.papers })));
+                bus.publish_to(astro_core::Audience::Owner(owner.clone()), "privacy", "vigie 20h12", f.message(), Some(serde_json::json!({ "unserved": f.unserved, "sensitive": f.sensitive, "papers": f.papers })));
             }
         }
-        Ok(format!("{} membre(s) prévenu(s) : {gps} photo(s) géolocalisée(s), {sensitive} fichier(s) sensible(s) dans Public (rien n'est modifié)", found.len()))
+        Ok(format!("{} membre(s) prévenu(s) : {sensitive} fichier(s) sensible(s), {unserved} photo(s) HEIC/AVIF/TIFF non servie(s) dans Public (rien n'est modifié)", found.len()))
     }
 
     /// Clôture les semaines ISO terminées et pas encore closes (rattrapage borné, jamais avant la première nuit).

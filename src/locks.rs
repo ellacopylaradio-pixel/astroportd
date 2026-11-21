@@ -69,7 +69,7 @@ impl Locks {
             .await
             .map_err(|e| e.to_string())?;
         let privacy = crate::privacy_watch::sweep(&self.db).await.map_err(|e| e.to_string())?;
-        let (gps, identity, sensitive) = privacy.iter().fold((0, 0, 0), |(g, i, s), (_, f)| (g + f.gps.len(), i + f.identity.len(), s + f.sensitive.len() + f.papers.len()));
+        let (unserved, sensitive) = privacy.iter().fold((0, 0), |(u, s), (_, f)| (u + f.unserved.len(), s + f.sensitive.len() + f.papers.len()));
         let mode = crate::station_admin::station_mode(&self.db).await;
         let f = &self.facts;
         Ok(json!({
@@ -86,7 +86,7 @@ impl Locks {
             },
             "people": { "hosted": hosted, "n1": n1, "n1_mutual": mutual, "n2": if fortress { 0 } else { n2 }, "n2_known": n2 },
             "faces": { "auto_off_members": auto_off },
-            "public": { "files": public, "gps": gps, "identity": identity, "sensitive": sensitive, "members": privacy.len() },
+            "public": { "files": public, "unserved": unserved, "sensitive": sensitive, "members": privacy.len() },
         }))
     }
 
