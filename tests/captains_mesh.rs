@@ -108,7 +108,7 @@ async fn following_a_captain_shows_only_what_his_station_opens_to_us_and_unfollo
     assert_eq!(names, ["bureau-vnc"], "Ollama est en liste vide : A ne le découvre même pas");
     assert!(caps.act(&json!({ "follow": hex(&CAP_A) })).await.is_err(), "se suivre soi-même");
     assert!(caps.act(&json!({ "follow": "zz" })).await.is_err());
-    // Ouvrir un accès n'est plus possible depuis cet écran (ni depuis le navigateur) : c'est la ligne de commande, `astroportd tunnel connect`,
+    // Ouvrir un accès ne passe pas par la section des Capitaines : c'est la section `route` (écran Réseau) ou `astroportd tunnel connect`,
     // qui parle au démon par son socket de contrôle et ouvre l'accès par les `Forwards`.
     let refused = caps.act(&json!({ "connect": { "peer": pb, "service": "bureau-vnc" } })).await.unwrap_err();
     assert!(refused.contains("astroportd tunnel connect"), "{refused}");

@@ -113,7 +113,7 @@ async fn route_picks_the_strongest_station_that_opens_the_service_to_us_and_conn
 
     let stations = Arc::new(Stations::new(dba.clone(), UP.into(), Some(pa.clone())));
     let forwards = Arc::new(Forwards::new(Some(na.handle.clone())));
-    let route = SwarmRoute::new(stations, Some(na.handle.clone()), forwards, None);
+    let route = Arc::new(SwarmRoute::new(stations, Some(na.handle.clone()), forwards, None));
 
     // Puissance : C. D, plus fort, ne vous ouvre pas ollama : il n'est pas même candidat.
     let (peer, report) = route.route("ollama", Mode::Power).await.unwrap();
@@ -147,6 +147,18 @@ async fn route_picks_the_strongest_station_that_opens_the_service_to_us_and_conn
     // Fermeture : par service, puis plus rien à fermer.
     assert_eq!(route.act(&json!({ "disconnect": { "service": "ollama" } })).await.unwrap()["closed"], 1);
     assert!(route.act(&json!({ "disconnect": { "service": "ollama" } })).await.is_err());
+
+    // La section d'administration (écran Réseau) passe par la même porte : vue, ouverture chez une station précise, fermeture.
+    let admin = route.clone().admin();
+    let v = admin("route".into(), None).await.unwrap();
+    assert!(by_open(&v, "b-lyon").is_none() && v["mesh"] == true, "{v}");
+    let r = admin("route".into(), Some(json!({ "connect": { "service": "ollama", "peer": pb } }))).await.unwrap();
+    assert_eq!(r["peer"], pb.as_str());
+    let v = admin("route".into(), None).await.unwrap();
+    assert_eq!(by_open(&v, "b-lyon").as_deref(), r["addr"].as_str(), "l'adresse locale apparaît dans la vue de l'écran");
+    assert_eq!(admin("route".into(), Some(json!({ "disconnect": { "service": "ollama", "peer": pb } }))).await.unwrap()["closed"], 1);
+    assert!(by_open(&admin("route".into(), None).await.unwrap(), "b-lyon").is_none());
+    assert!(admin("route".into(), Some(json!({ "connect": { "service": "../ssh", "peer": pb } }))).await.unwrap_err().contains("non pris en charge"), "nom de service hostile refusé");
 
     for d in dirs.into_iter().chain([da]) {
         let _ = std::fs::remove_dir_all(d);
@@ -201,4 +213,150 @@ async fn the_control_socket_serves_only_declared_sections_to_its_owner_and_refus
     assert!(control::serve(path.clone(), sections).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"precieux");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Port libre de la boucle locale (pris puis rendu).
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Envoie `ping` à `addr` : l'écho revient-il ?
+async fn echoes(addr: &str) -> bool {
+    let Ok(mut s) = tokio::net::TcpStream::connect(addr).await else { return false };
+    if s.write_all(b"ping").await.is_err() {
+        return false;
+    }
+    let mut back = [0u8; 4];
+    matches!(tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut back)).await, Ok(Ok(_))) && &back == b"ping"
+}
+
+/// Anti-cascade (l'`_is_native_process` de DRAGON) : A n'a pas d'Ollama, son Capitaine ouvre celui de B sur le port même que
+/// A expose. C ne doit ni voir d'`ollama` chez A, ni pouvoir y passer : A republierait l'Ollama de B (tunnel → tunnel).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_station_never_republishes_a_friends_service_it_opened_locally() {
+    use astroportd::forwards::{Forwards, LocalBinds};
+    use astroportd::tunnel_policy::{PolicyGate, ask_services};
+    let ((na, _), (nb, b_addr), (nc, _)) = (node(81).await, node(82).await, node(83).await);
+    na.handle.dial(b_addr).await.unwrap();
+    let a_addr: Multiaddr = format!("{}/p2p/{}", na.handle.listen_addrs().into_iter().find(|a| a.to_string().contains("/tcp/")).unwrap(), na.handle.peer_id()).parse().unwrap();
+    nc.handle.dial(a_addr).await.unwrap();
+    let (pa, pb) = (na.handle.peer_id().to_string(), nb.handle.peer_id().to_string());
+    let db_b = provider(&nb, "casc-b", "swarm").await;
+
+    // A : ollama attendu sur 127.0.0.1:P (rien n'y tourne), comfyui sur un port mort ; les deux ouverts à tout le réseau.
+    let da = tmp("casc-a");
+    let dba = Arc::new(Db::open(&da.join("u.db"), 2).unwrap());
+    let policy = TunnelPolicy::load(dba, false, None, ActivityBus::new()).await;
+    let binds = Arc::new(LocalBinds::default());
+    policy.watch_binds(binds.clone());
+    let (p, dead) = (free_port(), free_port());
+    let fixed = vec!["ollama".to_owned(), "comfyui".to_owned()];
+    for (name, port) in [("ollama", p), ("comfyui", dead)] {
+        let target = format!("127.0.0.1:{port}");
+        policy.note_target(name, &target);
+        let opts = astro_p2p::tunnel::ExposeOpts { gate: Some(Arc::new(PolicyGate::new(policy.clone()))), ..Default::default() };
+        std::mem::forget(astro_p2p::tunnel::expose(&na.handle, name, target, opts).unwrap());
+    }
+    policy.attach(&na.handle, &fixed);
+    for name in ["ollama", "comfyui"] {
+        policy.set(&json!({ "service": name, "mode": "swarm" }), &fixed, 0).await.unwrap();
+    }
+    assert!(policy.own_ports().contains(&p), "ports des services de la station connus");
+
+    // Le Capitaine de A ouvre l'Ollama de B sur P : l'accès fonctionne pour lui.
+    let forwards = Forwards::new(Some(na.handle.clone())).with_binds(binds.clone());
+    let addr = forwards.open_on("cap:b/ollama", &pb, "ollama", i64::MAX, 0, p).await.unwrap();
+    assert_eq!(addr.port(), p);
+    assert!(echoes(&addr.to_string()).await, "l'accès local de A mène bien à l'Ollama de B");
+    assert!(policy.relayed("ollama") && !policy.relayed("comfyui"));
+
+    // C : A ne lui annonce ni ollama (cascade) ni comfyui (cible morte)…
+    let seen = ask_services(&nc.handle, &pa).await.unwrap();
+    assert!(seen.is_empty(), "rien d'utilisable chez A : {seen:?}");
+    // … et un flux direct vers A/ollama est refusé (pas d'écho de B).
+    let c_fwd = astro_p2p::tunnel::forward(&nc.handle, "127.0.0.1:0".parse().unwrap(), na.handle.peer_id(), "ollama").await.unwrap();
+    assert!(!echoes(&c_fwd.local_addr.to_string()).await, "A ne sert pas l'Ollama de B à C");
+
+    // A referme l'accès et lance son propre Ollama sur P : celui-là est natif, il est annoncé et servi.
+    forwards.close("cap:b/ollama");
+    assert!(!policy.relayed("ollama"));
+    let mut native = None;
+    for _ in 0..40 {
+        if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", p)).await {
+            native = Some(l);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let l = native.unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let mut b = [0u8; 4];
+                if s.read_exact(&mut b).await.is_ok() {
+                    let _ = s.write_all(&b).await;
+                }
+            });
+        }
+    });
+    assert_eq!(ask_services(&nc.handle, &pa).await.unwrap(), vec!["ollama".to_owned()], "service natif vivant : annoncé ; comfyui toujours mort");
+    assert!(echoes(&c_fwd.local_addr.to_string()).await, "service natif servi à C");
+
+    for d in [db_b, da] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// Port de repli stable : même port à la réouverture, un autre pour un autre ami, repli déterministe si occupé ; le port
+/// habituel d'abord, sauf si c'est celui d'un service de la station.
+#[tokio::test(flavor = "multi_thread")]
+async fn local_access_ports_are_stable_per_service_and_friend() {
+    use astroportd::forwards::{STABLE_PORTS, stable_port};
+    let (na, _) = node(71).await;
+    let peer = |s: u8| astro_p2p::keypair_from_seed(&[s; 32]).unwrap().public().to_peer_id().to_string();
+    let (b, c) = (peer(72), peer(73));
+    let f = Forwards::new(Some(na.handle.clone()));
+
+    // SSH (pas de port habituel) : port de la plage, redonné à la réouverture.
+    let first = f.open_stable("cap:b/ssh", &b, "ssh", i64::MAX, 0, None).await.unwrap().port();
+    assert!(STABLE_PORTS.contains(&first), "{first}");
+    f.close("cap:b/ssh");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(f.open_stable("cap:b/ssh", &b, "ssh", i64::MAX, 0, None).await.unwrap().port(), first, "même port à la réouverture");
+    // Autre ami : autre port (déterministe).
+    let other = f.open_stable("cap:c/ssh", &c, "ssh", i64::MAX, 0, None).await.unwrap().port();
+    assert!(STABLE_PORTS.contains(&other) && other != first, "{other} / {first}");
+    assert_eq!(stable_port("ssh", &b, 0), first, "le port est celui du couple (service, ami), le même d'un démarrage à l'autre");
+
+    // Occupé : le port suivant de la suite déterministe. Puis la mémoire redonne ce port de repli.
+    let d = peer(74);
+    let busy = std::net::TcpListener::bind(("127.0.0.1", stable_port("ssh", &d, 0))).unwrap();
+    let got = f.open_stable("cap:d/ssh", &d, "ssh", i64::MAX, 0, None).await.unwrap().port();
+    let expected = (1..8).map(|k| stable_port("ssh", &d, k)).find(|p| *p != stable_port("ssh", &d, 0)).unwrap();
+    assert_eq!(got, expected, "repli déterministe");
+    drop(busy);
+    f.close("cap:d/ssh");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(f.open_stable("cap:d/ssh", &d, "ssh", i64::MAX, 0, None).await.unwrap().port(), got, "le dernier port obtenu est redonné");
+
+    // Port habituel libre : pris ; occupé : repli dans la plage.
+    let habitual = free_port();
+    assert_eq!(f.open_stable("cap:b/ollama", &b, "ollama", i64::MAX, 0, Some(habitual)).await.unwrap().port(), habitual);
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let hp = taken.local_addr().unwrap().port();
+    assert!(STABLE_PORTS.contains(&f.open_stable("cap:c/ollama", &c, "ollama", i64::MAX, 0, Some(hp)).await.unwrap().port()));
+
+    // Par la section `route` : le port habituel d'Ollama est évité quand la station attend elle-même Ollama sur 11434.
+    let da = tmp("stable");
+    let db = Arc::new(Db::open(&da.join("u.db"), 2).unwrap());
+    let policy = TunnelPolicy::load(db.clone(), false, None, ActivityBus::new()).await;
+    policy.note_target("ollama", "localhost:11434");
+    let stations = Arc::new(Stations::new(db, UP.into(), Some(na.handle.peer_id().to_string())));
+    let route = SwarmRoute::new(stations, Some(na.handle.clone()), Arc::new(f), None).with_policy(policy);
+    let e = peer(75);
+    let r = route.act(&json!({ "connect": { "service": "ollama", "peer": e, "hours": 1 } })).await.unwrap();
+    let port: u16 = r["addr"].as_str().unwrap().rsplit(':').next().unwrap().parse().unwrap();
+    assert!(port != 11434 && STABLE_PORTS.contains(&port), "{r}");
+    assert_eq!(port, stable_port("ollama", &e, 0));
+    let _ = std::fs::remove_dir_all(da);
 }

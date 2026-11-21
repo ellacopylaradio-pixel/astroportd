@@ -85,6 +85,7 @@ pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays
             // Chaque flux passe par la politique du Capitaine (voir l'écran Options › Tunnels) : rien n'est ouvert sans elle.
             let peers = (name == astroportd::tunnel_policy::AI_INDEX).then(|| ai_book.clone());
             let opts = ExposeOpts { gate: Some(Arc::new(PolicyGate::new(tunnel_policy.clone()))), peers, ..ExposeOpts::default() };
+            tunnel_policy.note_target(name, target);
             let mode = tunnel_policy.rule(name).mode;
             println!("P2P : {name} exposé, accès « {mode:?} » (réglable dans l'interface du Capitaine)");
             p2p_guards.push(Box::new(expose(&handle, name, target.to_owned(), opts)?));
@@ -97,6 +98,8 @@ pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays
             let (peer, name) = rest.split_once('/').ok_or("--p2p-forward attend bind=PeerID/nom")?;
             let fwd = forward(&handle, bind.parse()?, peer.parse::<PeerId>()?, name).await?;
             println!("P2P : {} → {name} de {peer}", fwd.local_addr);
+            // Inscrite pour l'anti-cascade : un service de cette station qui viserait cette écoute n'est pas republié.
+            p2p_guards.push(Box::new(tunnel_policy.hold_forward(fwd.local_addr)));
             p2p_guards.push(Box::new(fwd));
         }
         p2p_guards.push(Box::new(node));

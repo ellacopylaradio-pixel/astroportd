@@ -23,6 +23,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use crate::forwards::LocalBinds;
 
 use astro_core::{ActivityBus, Audience};
 use astro_db::Db;
@@ -145,7 +148,18 @@ pub struct TunnelPolicy {
     ai_default: Mutex<Mode>,
     /// Réponses à « quels services puis-je ouvrir chez toi ? » ([`SERVICES_PROTOCOL`]).
     answers: Mutex<Option<astro_p2p::ask::Answers>>,
+    /// Cibles des services offerts au démarrage (`--p2p-ollama`…), notées par [`TunnelPolicy::note_target`].
+    fixed_targets: Mutex<BTreeMap<String, String>>,
+    /// Écoutes locales qui mènent chez un ami ([`TunnelPolicy::watch_binds`]) : anti-cascade.
+    binds: Mutex<Option<Arc<LocalBinds>>>,
+    /// Dernier sondage de chaque cible : service → (instant, répond ?), gardé [`ALIVE_TTL`].
+    alive: Mutex<BTreeMap<String, (Instant, bool)>>,
 }
+
+/// Durée pendant laquelle le sondage d'une cible (répond-elle ?) est réutilisé.
+const ALIVE_TTL: Duration = Duration::from_secs(30);
+/// Délai du sondage d'une cible.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(600);
 
 /// Question d'un pair : « quels services puis-je ouvrir chez toi ? ». La réponse (`{"services":[…]}`) ne nomme que ceux
 /// que la politique lui ouvre maintenant : un pair ne découvre jamais ce qui ne lui est pas destiné.
@@ -193,7 +207,56 @@ impl TunnelPolicy {
             .filter(|(n, t)| valid_service(n) && check_target(t).is_ok())
             .take(MAX_SHARED)
             .collect();
-        Arc::new(Self { db, origin, ssh_dir, activity, rules: Mutex::new(rules), shared: Mutex::new(shared), retired: Mutex::default(), mesh: Mutex::new(None), live: Mutex::default(), fixed: Mutex::default(), ai_default: Mutex::new(Mode::Off), answers: Mutex::new(None) })
+        Arc::new(Self { db, origin, ssh_dir, activity, rules: Mutex::new(rules), shared: Mutex::new(shared), retired: Mutex::default(), mesh: Mutex::new(None), live: Mutex::default(), fixed: Mutex::default(), ai_default: Mutex::new(Mode::Off), answers: Mutex::new(None), fixed_targets: Mutex::default(), binds: Mutex::new(None), alive: Mutex::default() })
+    }
+
+    /// Note la cible d'un service offert au démarrage (`--p2p-ollama 127.0.0.1:11434`…) : elle sert à l'anti-cascade et au
+    /// sondage de [`TunnelPolicy::offered_to`].
+    pub fn note_target(&self, name: &str, target: &str) {
+        self.fixed_targets.lock().unwrap_or_else(PoisonError::into_inner).insert(name.to_owned(), target.to_owned());
+    }
+
+    /// Branche le registre des écoutes locales qui mènent chez un ami (accès à chaud, `--p2p-forward`).
+    pub fn watch_binds(&self, binds: Arc<LocalBinds>) {
+        *self.binds.lock().unwrap_or_else(PoisonError::into_inner) = Some(binds);
+    }
+
+    /// Inscrit une écoute `--p2p-forward` dans le registre branché (anti-cascade) tant que la garde vit.
+    pub fn hold_forward(&self, addr: SocketAddr) -> Option<crate::forwards::BindGuard> {
+        self.binds.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|b| b.hold(addr))
+    }
+
+    /// Adresse de la cible de `service` (`localhost:` lu `127.0.0.1:`), si elle est connue et lisible.
+    pub fn target_addr(&self, service: &str) -> Option<SocketAddr> {
+        let t = self.fixed_targets.lock().unwrap_or_else(PoisonError::into_inner).get(service).cloned().or_else(|| self.shared.lock().unwrap_or_else(PoisonError::into_inner).get(service).cloned())?;
+        let t = t.trim();
+        t.strip_prefix("localhost:").map_or_else(|| t.to_owned(), |port| format!("127.0.0.1:{port}")).parse().ok()
+    }
+
+    /// Ports de cette machine sur lesquels la station elle-même attend ses services : un accès vers un ami ne doit pas les
+    /// prendre (le service local, momentanément éteint, serait sinon remplacé par celui de l'ami).
+    pub fn own_ports(&self) -> Vec<u16> {
+        let names: Vec<String> = self.fixed_targets.lock().unwrap_or_else(PoisonError::into_inner).keys().cloned().chain(self.shared_targets().into_iter().map(|(n, _)| n)).collect();
+        names.iter().filter_map(|n| self.target_addr(n)).filter(|a| a.ip().is_loopback() || a.ip().is_unspecified()).map(|a| a.port()).collect()
+    }
+
+    /// La cible de `service` est-elle un accès ouvert chez un ami ? Alors le service n'est ni annoncé ni servi : la station
+    /// republierait le service de l'ami à ses propres amis (tunnel → tunnel), comme `_is_native_process` l'évitait dans DRAGON.
+    pub fn relayed(&self, service: &str) -> bool {
+        let Some(binds) = self.binds.lock().unwrap_or_else(PoisonError::into_inner).clone() else { return false };
+        self.target_addr(service).is_some_and(|t| binds.holds(t))
+    }
+
+    /// La cible de `service` accepte-t-elle une connexion TCP ? (DRAGON ne publiait que les processus vivants.) Sondage gardé
+    /// [`ALIVE_TTL`] ; cible inconnue : vrai (rien à sonder).
+    async fn alive(&self, service: &str) -> bool {
+        let Some(target) = self.target_addr(service) else { return true };
+        if let Some((_, ok)) = self.alive.lock().unwrap_or_else(PoisonError::into_inner).get(service).copied().filter(|(at, _)| at.elapsed() < ALIVE_TTL) {
+            return ok;
+        }
+        let ok = matches!(tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(target)).await, Ok(Ok(_)));
+        self.alive.lock().unwrap_or_else(PoisonError::into_inner).insert(service.to_owned(), (Instant::now(), ok));
+        ok
     }
 
     /// Services partagés à chaud, avec leur cible.
@@ -237,12 +300,13 @@ impl TunnelPolicy {
         }
     }
 
-    /// Services que `peer` peut ouvrir ici maintenant (offerts au démarrage ou partagés à chaud).
+    /// Services que `peer` peut ouvrir ici maintenant (offerts au démarrage ou partagés à chaud) : permis par la politique,
+    /// qui ne sont pas un accès vers un ami, et dont la cible répond.
     pub async fn offered_to(&self, peer: &str, at: i64) -> Vec<String> {
         let fixed = self.fixed.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let mut out = Vec::new();
         for name in self.services(&fixed) {
-            if self.permits(peer, &name, at).await {
+            if self.permits(peer, &name, at).await && self.alive(&name).await {
                 out.push(name);
             }
         }
@@ -400,7 +464,7 @@ impl TunnelPolicy {
 
     /// `peer` peut-il ouvrir `service` maintenant ?
     pub async fn permits(&self, peer: &str, service: &str, at: i64) -> bool {
-        if self.retired.lock().unwrap_or_else(PoisonError::into_inner).contains(service) {
+        if self.retired.lock().unwrap_or_else(PoisonError::into_inner).contains(service) || self.relayed(service) {
             return false;
         }
         match self.rule(service).mode {
@@ -623,6 +687,10 @@ impl StreamGate for PolicyGate {
     fn allow(&self, peer: PeerId, service: &str) -> GateFuture {
         let (policy, service, peer) = (self.policy.clone(), service.to_owned(), peer.to_string());
         Box::pin(async move {
+            if policy.relayed(&service) {
+                policy.audit(format!("{service} : flux refusé, sa cible est un accès ouvert chez un ami (pas de cascade)"));
+                return false;
+            }
             let ok = policy.permits(&peer, &service, now()).await;
             // Une session SSH est un événement : le Capitaine la voit, acceptée comme refusée.
             if service == "ssh" {

@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::beacon::Stations;
 use crate::forwards::Forwards;
-use crate::tunnel_policy::ask_services;
+use crate::tunnel_policy::{TunnelPolicy, ask_services};
 
 /// Stations interrogées au plus pour un choix (les plus puissantes d'abord).
 const MAX_ASKED: usize = 12;
@@ -43,6 +43,19 @@ pub struct SwarmRoute {
     forwards: Arc<Forwards>,
     /// Position de cette station donnée à `serve` (`--lat`, `--lon`), si l'annuaire ne la connaît pas encore.
     origin: Option<(f64, f64)>,
+    /// Politique des tunnels de cette station : ses propres ports de service ne sont jamais pris par un accès.
+    policy: Option<Arc<TunnelPolicy>>,
+}
+
+/// Port habituel du client local d'un service (s'il est libre, l'accès le prend : rien à reconfigurer).
+fn habitual_port(service: &str) -> Option<u16> {
+    match service {
+        "ollama" => Some(11434),
+        "comfyui" => Some(8188),
+        "open-webui" => Some(8080),
+        "jellyfin" => Some(8096),
+        _ => None,
+    }
 }
 
 /// Une station de l'annuaire, avant qu'on lui demande ses services.
@@ -54,7 +67,14 @@ struct Known {
 impl SwarmRoute {
     /// `handle` : le maillage (`None` : rien ne peut être demandé ni ouvert).
     pub fn new(stations: Arc<Stations>, handle: Option<P2pHandle>, forwards: Arc<Forwards>, origin: Option<(f64, f64)>) -> Self {
-        Self { stations, handle, forwards, origin }
+        Self { stations, handle, forwards, origin, policy: None }
+    }
+
+    /// Branche la politique des tunnels de la station (ses ports de service sont évités par les accès).
+    #[must_use]
+    pub fn with_policy(mut self, policy: Arc<TunnelPolicy>) -> Self {
+        self.policy = Some(policy);
+        self
     }
 
     /// Les autres stations de l'UPlanet (sans leurs services) et la position de celle-ci.
@@ -140,8 +160,17 @@ impl SwarmRoute {
         Ok(json!({ "mesh": self.handle.is_some(), "stations": rows }))
     }
 
+    /// Section d'administration (écran *Réseau › Services ouverts par la constellation* et `astroportd tunnel …` par `control.sock`) :
+    /// sans corps, la vue ; avec un corps, [`SwarmRoute::act`]. Une seule porte, donc une seule logique pour les deux.
+    pub fn admin(self: Arc<Self>) -> crate::ui_backend::AdminFn {
+        Arc::new(move |_section, body| {
+            let me = self.clone();
+            Box::pin(async move { me.act(&body.unwrap_or(Value::Null)).await })
+        })
+    }
+
     /// Actions : `{ route: { service, mode? } }`, `{ connect: { service, peer?, mode?, port?, hours? } }` (sans `peer` : la
-    /// station choisie par le routage), `{ disconnect: { service, peer? } }`. Sans action : la vue.
+    /// station choisie par le routage ; sans `port` : port stable), `{ disconnect: { service, peer? } }`. Sans action : la vue.
     pub async fn act(&self, b: &Value) -> Result<Value, String> {
         if let Some(r) = b.get("route").filter(|r| r.is_object()) {
             let service = r["service"].as_str().unwrap_or_default();
@@ -154,9 +183,11 @@ impl SwarmRoute {
             if !(1..=MAX_HOURS).contains(&hours) {
                 return Err(format!("durée : 1 à {MAX_HOURS} heures"));
             }
+            // Sans port : port stable (habituel s'il est libre et n'est pas celui d'un service de cette station, sinon
+            // déterministe pour le couple service × station amie, voir `forwards::STABLE_PORTS`). `port: 0` : au hasard.
             let port = match c["port"].as_u64() {
-                None => 0,
-                Some(p) => u16::try_from(p).map_err(|_| "port invalide".to_owned())?,
+                None => None,
+                Some(p) => Some(u16::try_from(p).map_err(|_| "port invalide".to_owned())?),
             };
             let (peer, report) = match c["peer"].as_str().filter(|p| !p.is_empty() && *p != "auto") {
                 Some(p) => (p.to_owned(), Value::Null),
@@ -166,7 +197,15 @@ impl SwarmRoute {
                 }
             };
             let at = now();
-            let addr = self.forwards.open_on(&local_id(&peer, service), &peer, service, at + hours * 3600, at, port).await?;
+            let id = local_id(&peer, service);
+            let addr = match port {
+                Some(p) => self.forwards.open_on(&id, &peer, service, at + hours * 3600, at, p).await?,
+                None => {
+                    let own = self.policy.as_ref().map(|p| p.own_ports()).unwrap_or_default();
+                    let habitual = habitual_port(service).filter(|p| !own.contains(p));
+                    self.forwards.open_stable(&id, &peer, service, at + hours * 3600, at, habitual).await?
+                }
+            };
             return Ok(json!({ "peer": peer, "service": service, "addr": addr.to_string(), "until": at + hours * 3600, "route": report }));
         }
         if let Some(c) = b.get("disconnect").filter(|c| c.is_object()) {

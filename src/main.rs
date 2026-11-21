@@ -359,7 +359,7 @@ enum P2pAction {
         /// PeerID de la station ; sans lui, la station choisie par le routage.
         #[arg(long)]
         peer: Option<String>,
-        /// Port local (défaut : choisi par le système).
+        /// Port local (défaut : port stable, voir `tunnel connect --port`).
         #[arg(long)]
         port: Option<u16>,
         /// Durée de l'accès, en heures (1 à 168).
@@ -495,7 +495,7 @@ enum TunnelAction {
         /// Mode de choix sans `--peer`.
         #[arg(long, default_value = "power")]
         mode: astro_p2p::routing::Mode,
-        /// Port local (défaut : choisi par le système ; 11434 pour qu'Ollama soit là où ses clients le cherchent).
+        /// Port local (défaut : port stable — habituel s'il est libre, Ollama 11434, sinon fixe pour ce service et cette station, plage 24000–24999 ; 0 : au hasard).
         #[arg(long)]
         port: Option<u16>,
         /// Durée de l'accès, en heures (1 à 168).

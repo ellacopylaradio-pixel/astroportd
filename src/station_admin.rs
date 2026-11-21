@@ -400,6 +400,8 @@ pub struct Admin {
     pub locks: Option<Arc<crate::locks::Locks>>,
     /// Lecture des documents (IA) : station, défaut des MULTIPASS, chacun, prêt aux amis.
     pub index: Option<Arc<crate::delegation::Delegation>>,
+    /// Services que les stations amies nous ouvrent : vue, ouverture et fermeture d'un accès local ([`crate::swarm_route`]).
+    pub route: Option<AdminFn>,
 }
 
 /// Un service local répond-il ? Une connexion TCP qui s'établit en 600 ms. Ne dit rien de ce qu'il y a derrière (un port
@@ -514,6 +516,10 @@ impl Admin {
                     ("captains", body) => match &me.captains {
                         Some(f) => f(section, body).await,
                         None => Err("écran des Capitaines non câblé sur cette station".to_owned()),
+                    },
+                    ("route", body) => match &me.route {
+                        Some(f) => f(section, body).await,
+                        None => Err("maillage P2P coupé : aucun service d'une station amie ne peut être ouvert".to_owned()),
                     },
                     ("assist", body) => match &me.assist {
                         Some(f) => f(section, body).await,

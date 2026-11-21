@@ -194,15 +194,15 @@ impl Captains {
         Ok(json!({ "mesh": self.handle.is_some(), "captains": rows }))
     }
 
-    /// Actions : `{ follow: <hex> }`, `{ unfollow: <hex> }`. Ouvrir un accès à un service d'un ami (SSH, VNC, Ollama…) se fait
-    /// **uniquement** par la ligne de commande : `astroportd tunnel connect`. Rend la vue.
+    /// Actions : `{ follow: <hex> }`, `{ unfollow: <hex> }`. Ouvrir un accès à un service d'un ami (SSH, VNC, Ollama…) passe par
+    /// [`crate::swarm_route::SwarmRoute`] (section `route` de l'écran Réseau, ou `astroportd tunnel connect`). Rend la vue.
     pub async fn act(&self, b: &Value) -> Result<Value, String> {
         if let Some(h) = b["follow"].as_str() {
             self.follow(h, true).await?;
         } else if let Some(h) = b["unfollow"].as_str() {
             self.follow(h, false).await?;
         } else {
-            return Err("action attendue : follow ou unfollow (les accès aux services : astroportd tunnel connect, en ligne de commande)".into());
+            return Err("action attendue : follow ou unfollow (les accès aux services : Réseau › Services ouverts par la constellation, ou astroportd tunnel connect)".into());
         }
         self.view().await
     }
