@@ -176,6 +176,18 @@ pub enum ChatOp {
     PushKey,
     /// Abonne (`on`) ou désabonne un navigateur `{ endpoint, on }`.
     Push(Value),
+    /// Réagit à un message `{ id, emoji }` (emoji vide : retirer).
+    React(Value),
+    /// Signale « en train d'écrire » à une conversation.
+    Typing(String),
+    /// Modifie un message envoyé `{ id, text }`.
+    Edit(Value),
+    /// Change un groupe `{ id, rename | add | remove | leave }`.
+    GroupUpdate(Value),
+    /// Préférences d'une conversation `{ peer, pinned?, archived?, muted? }`.
+    Prefs(Value),
+    /// Réglages du chat (lecture, ou changement `{ receipts }`).
+    Settings(Option<Value>),
     /// Signal d'appel visio `{ peer, type, call, sdp?, video?, missed? }`.
     Signal(Value),
 }

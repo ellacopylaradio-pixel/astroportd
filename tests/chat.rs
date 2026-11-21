@@ -515,3 +515,77 @@ async fn a_group_reaches_every_member_with_its_author_and_a_voice_reply_keeps_it
     assert_eq!((m["messages"][1]["reply_at"].as_u64(), m["messages"][1]["reply"].as_str()), (Some(4200), voice["id"].as_str()));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn reactions_edits_typing_group_changes_prefs_and_privacy() {
+    const CAROL: [u8; 32] = [0xC3; 32];
+    const DAN: [u8; 32] = [0xD4; 32];
+    let (dir, db, _) = rig("telegram", false).await;
+    for (k, e) in [(&CAROL, "carol@example.org"), (&DAN, "dan@example.org")] {
+        db.writer().execute("INSERT INTO identities(hex, role, email, hosted) VALUES (?1, 'multipass', ?2, 1)", vec![hex(k).into(), e.to_owned().into()]).await.unwrap();
+    }
+    let keys: Arc<dyn KeySource> = Arc::new(StaticKeySource::new().with(ALICE).with(BOB).with(CAROL).with(DAN));
+    let bus = ActivityBus::default();
+    let chat = Chat::new(db.clone(), keys, into_db(&db, false), into_db(&db, false), bus.clone());
+    let (a, b, c, d) = (hex(&ALICE), hex(&BOB), hex(&CAROL), hex(&DAN));
+    // Réaction, puis retrait.
+    let m = chat.send(&a, &b, "Photo du sommet !").await.unwrap();
+    chat.poll_once().await;
+    let id = m["id"].as_str().unwrap().to_owned();
+    chat.react(&b, &id, "❤️").await.unwrap();
+    assert!(chat.react(&b, &id, "trop long pour un emoji").await.is_err());
+    chat.poll_once().await;
+    let r = &chat.messages(&a, &b, None).await.unwrap()["messages"][0]["reactions"][0];
+    assert_eq!((r["emoji"].as_str(), r["n"].as_i64(), r["mine"].as_bool()), (Some("❤️"), Some(1), Some(false)));
+    chat.react(&b, &id, "").await.unwrap();
+    chat.poll_once().await;
+    assert!(chat.messages(&a, &b, None).await.unwrap()["messages"][0]["reactions"].as_array().unwrap().is_empty());
+    // Modification : seulement par l'auteur ; l'autre voit le nouveau texte, marqué modifié.
+    assert!(chat.edit(&b, &id, "piraté").await.is_err());
+    chat.edit(&a, &id, "Photo du sommet, à 2 300 m !").await.unwrap();
+    chat.poll_once().await;
+    let got = &chat.messages(&b, &a, None).await.unwrap()["messages"][0];
+    assert_eq!((got["text"].as_str(), got["edited"].as_bool()), (Some("Photo du sommet, à 2 300 m !"), Some(true)));
+    // « En train d'écrire » : un événement en direct, rien de rangé ; coupé quand le titulaire ne partage pas son activité.
+    let (_, mut rx) = bus.subscribe(u64::MAX);
+    chat.typing(&a, &b).await.unwrap();
+    chat.poll_once().await;
+    let mut seen = false;
+    while let Ok(ev) = rx.try_recv() {
+        seen |= ev.source == "chat:typing" && ev.message == a;
+    }
+    assert!(seen, "Bob voit qu'Alice écrit");
+    assert_eq!(chat.messages(&b, &a, None).await.unwrap()["messages"].as_array().unwrap().len(), 1);
+    chat.settings(&a, Some(&json!({ "receipts": false }))).await.unwrap();
+    assert_eq!(chat.typing(&a, &b).await.unwrap()["sent"], 0);
+    assert_eq!(chat.settings(&a, None).await.unwrap()["receipts"], false);
+    // Groupe : ajout, renommage, retrait, départ ; l'identifiant ne change pas.
+    let g = chat.create_group(&a, "Cordée", &[b.clone(), c.clone()]).await.unwrap()["id"].as_str().unwrap().to_owned();
+    chat.send(&a, &g, "Départ 6h").await.unwrap();
+    chat.poll_once().await;
+    chat.group_update(&a, &g, &json!({ "add": d })).await.unwrap();
+    chat.group_update(&b, &g, &json!({ "rename": "Cordée du Mont-Blanc" })).await.unwrap();
+    chat.poll_once().await;
+    chat.send(&d, &g, "Merci de m'avoir ajouté").await.unwrap();
+    chat.poll_once().await;
+    let conv = chat.conversations(&c).await.unwrap()["conversations"].as_array().unwrap().iter().find(|x| x["peer"] == g.as_str()).cloned().unwrap();
+    assert_eq!(conv["gname"], "Cordée du Mont-Blanc");
+    assert_eq!(chat.messages(&c, &g, None).await.unwrap()["messages"][1]["author"], d.as_str(), "le nouveau venu écrit dans le même groupe");
+    chat.group_update(&a, &g, &json!({ "remove": d })).await.unwrap();
+    chat.poll_once().await;
+    assert!(chat.messages(&d, &g, None).await.unwrap()["group"]["left"].as_bool().unwrap(), "Dan est retiré");
+    assert!(chat.send(&d, &g, "encore là ?").await.is_err());
+    chat.group_update(&c, &g, &json!({ "leave": true })).await.unwrap();
+    chat.poll_once().await;
+    assert_eq!(chat.messages(&a, &g, None).await.unwrap()["group"]["members"].as_array().unwrap().len(), 1, "il reste Bob avec Alice");
+    // Préférences : épinglée, sourdine (hors de la pastille).
+    chat.send(&b, &a, "Tu es là ?").await.unwrap();
+    chat.poll_once().await;
+    let before = chat.conversations(&a).await.unwrap()["unread"].as_i64().unwrap();
+    chat.prefs(&a, &b, &json!({ "pinned": true, "muted": true })).await.unwrap();
+    let list = chat.conversations(&a).await.unwrap();
+    let conv = list["conversations"].as_array().unwrap().iter().find(|x| x["peer"] == b.as_str()).cloned().unwrap();
+    assert_eq!((conv["pinned"].as_bool(), conv["muted"].as_bool(), conv["archived"].as_bool()), (Some(true), Some(true), Some(false)));
+    assert!(list["unread"].as_i64().unwrap() < before, "une conversation en sourdine ne compte pas dans la pastille");
+    let _ = std::fs::remove_dir_all(dir);
+}

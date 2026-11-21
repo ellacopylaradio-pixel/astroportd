@@ -28,6 +28,7 @@ GET /api/v1/chat anon=401 member=200
 GET /api/v1/chat/messages anon=401 member=400
 GET /api/v1/chat/preview anon=401 member=400
 GET /api/v1/chat/search anon=401 member=400
+GET /api/v1/chat/settings anon=401 member=200
 GET /api/v1/constellation anon=401 member=501
 GET /api/v1/constellation/ledger anon=401 member=501
 GET /api/v1/contacts anon=401 member=200
@@ -124,9 +125,15 @@ POST /api/v1/bro/say anon=401 member=422
 POST /api/v1/call/signal anon=401 member=400
 POST /api/v1/chat/clear anon=401 member=422
 POST /api/v1/chat/delete anon=401 member=422
+POST /api/v1/chat/edit anon=401 member=400
 POST /api/v1/chat/group anon=401 member=400
+POST /api/v1/chat/group/update anon=401 member=400
+POST /api/v1/chat/prefs anon=401 member=400
+POST /api/v1/chat/react anon=401 member=400
 POST /api/v1/chat/read anon=401 member=422
 POST /api/v1/chat/send anon=401 member=422
+POST /api/v1/chat/settings anon=401 member=200
+POST /api/v1/chat/typing anon=401 member=422
 POST /api/v1/constellation/charter/accept anon=401 member=403
 POST /api/v1/contacts/from-person anon=401 member=409
 POST /api/v1/contacts/link anon=401 member=422

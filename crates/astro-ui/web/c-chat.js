@@ -6,13 +6,15 @@
 //  - « ✏️ Nouveau message » (c-pick.js) : proches et fiches du carnet qui ont une clé Nostr, avec ce qui les rend joignables ;
 //  - la station écrit au membre (virements, alertes) : un fil à part, en cartes, sans réponse possible ;
 //  - groupes (NIP-17, plusieurs destinataires) : l'auteur de chaque message est nommé ; vocaux « du tac au tac » (c-voice.js) ;
-//  - aperçu riche des liens (rendu par la station), notifications (c-notify.js), balayage tactile (c-swipe.js).
+//  - aperçu riche des liens (rendu par la station), notifications (c-notify.js), balayage tactile (c-swipe.js) ;
+//  - réactions, modification, « écrit… », renvoi d'un message non remis ; conversations épinglées, en sourdine, archivées ;
+//    participants d'un groupe (c-group.js) ; accusés de lecture et « écrit… » qu'on peut ne pas partager.
 
 export default async function chat(root, K, query) {
   const { h, t, api } = K;
   for (const f of ['m-book.css', 'c-chat.css']) { const l = h('link', { rel: 'stylesheet', href: '/ui/' + f }); document.head.append(l); K.cleanup(() => l.remove()); }
   const [media, voice, gest] = await Promise.all(['c-media.js', 'c-voice.js', 'c-swipe.js'].map(f => K.mod(f)));
-  const s = { peer: null, label: '', station: false, group: null, convs: [], msgs: [], more: false, reply: null, voice: null, stranger: false };
+  const s = { peer: null, label: '', station: false, group: null, convs: [], msgs: [], more: false, reply: null, voice: null, stranger: false, edit: null, arch: false, receipts: true };
   const list = h('ul', { class: 'ab-list', role: 'listbox', 'aria-label': t('Conversations') }), found = h('ul', { class: 'ab-list ch-found', hidden: true });
   const thread = h('div', { class: 'ch-thread', role: 'log', 'aria-live': 'polite' });
   const detail = h('section', { class: 'ab-detail ch-detail' }), main = h('div', { class: 'ab' });
@@ -42,20 +44,44 @@ export default async function chat(root, K, query) {
   // Groupe : le nom de l'auteur d'un message.
   const who = hex => s.group?.members.find(x => x.hex === hex)?.label || (hex || '').slice(0, 8);
   async function loadList() {
-    try { const r = await api('/api/v1/chat'); s.convs = r.conversations.sort((a, b) => b.station - a.station); } catch (e) { list.replaceChildren(h('li', { class: 'err', role: 'alert' }, e.message)); return; }
-    const k = q.value.trim().toLowerCase(), shown = s.convs.filter(c => !k || (name(c) + ' ' + c.last).toLowerCase().includes(k));
+    try { const r = await api('/api/v1/chat'); s.convs = r.conversations.sort((a, b) => b.station - a.station || b.pinned - a.pinned); } catch (e) { list.replaceChildren(h('li', { class: 'err', role: 'alert' }, e.message)); return; }
+    // Les archives sont rangées à part (« 🗄️ Archives (n) » en bas de la liste).
+    const k = q.value.trim().toLowerCase(), arch = s.convs.filter(c => c.archived);
+    const shown = s.convs.filter(c => (k ? true : !!c.archived === s.arch) && (!k || (name(c) + ' ' + c.last).toLowerCase().includes(k)));
     list.replaceChildren(...shown.map(c => {
-      const li = h('li', { role: 'option', 'aria-selected': String(c.peer === s.peer), class: (c.peer === s.peer ? 'on' : '') + (c.station ? ' ch-pin' : '') },
+      const li = h('li', { role: 'option', 'aria-selected': String(c.peer === s.peer), class: (c.peer === s.peer ? 'on' : '') + (c.station || c.pinned ? ' ch-pin' : ''),
+        oncontextmenu: ev => { ev.preventDefault(); ev.stopPropagation(); convMenu(c, li); } },
         h('button', { type: 'button', class: 'ab-item', onclick: () => openConv(c.peer, name(c), c.station, false, null, c.group) },
           h('span', { class: 'ab-av' }, c.station ? '📡' : c.group ? '👥' : initial(c.label), dot(c.peer)),
-          h('span', { class: 'ab-name' }, h('strong', {}, name(c)), h('small', { class: 'muted' }, (c.mine ? t('Vous : ') : '') + c.last)),
-          h('span', { class: 'ch-meta' }, h('small', { class: 'muted' }, when(c.at)), c.unread ? h('span', { class: 'ch-badge', 'aria-label': t('{0} non lu(s)', c.unread) }, String(c.unread)) : null)));
-      // Balayage : vers la droite, marquer lu ; vers la gauche, effacer (après confirmation).
-      gest.swipe(li, { right: () => api('/api/v1/chat/read', { method: 'POST', body: { peer: c.peer } }).then(loadList, () => {}), left: () => clearPeer(c.peer, name(c)) });
+          h('span', { class: 'ab-name' }, h('strong', {}, c.pinned ? '📌 ' : '', name(c), c.muted ? h('span', { title: t('En sourdine') }, ' 🔕') : ''), h('small', { class: 'muted' }, (c.mine ? t('Vous : ') : '') + c.last)),
+          h('span', { class: 'ch-meta' }, h('small', { class: 'muted' }, when(c.at)), c.unread ? h('span', { class: 'ch-badge' + (c.muted ? ' ch-quiet' : ''), 'aria-label': t('{0} non lu(s)', c.unread) }, String(c.unread)) : null)));
+      // Appui long : le menu de la conversation. Balayage : vers la droite, marquer lu ; vers la gauche, archiver (annulable).
+      let press = 0;
+      li.onpointerdown = ev => { if (ev.pointerType === 'touch') press = setTimeout(() => convMenu(c, li), 500); };
+      li.onpointerup = li.onpointermove = li.onpointercancel = () => clearTimeout(press);
+      if (!c.station) gest.swipe(li, { right: () => api('/api/v1/chat/read', { method: 'POST', body: { peer: c.peer } }).then(loadList, () => {}), left: () => archive(c, !c.archived) });
       return li;
-    }));
-    if (!shown.length) list.replaceChildren(h('li', { class: 'muted ab-empty' }, k ? t('Aucune conversation ne correspond.') : t('Aucune conversation. Touchez ✏️ pour écrire à un proche.')));
-    K.chatUnread?.(s.convs.reduce((n, c) => n + c.unread, 0));
+    }), ...(k || (!arch.length && !s.arch) ? [] : [h('li', { class: 'ch-archrow' }, h('button', { type: 'button', class: 'ab-item', onclick: () => { s.arch = !s.arch; loadList(); } },
+      s.arch ? '← ' + t('Conversations') : '🗄️ ' + t('Archives ({0})', arch.length)))]));
+    if (!shown.length && !arch.length) list.replaceChildren(h('li', { class: 'muted ab-empty' }, k ? t('Aucune conversation ne correspond.') : t('Aucune conversation. Touchez ✏️ pour écrire à un proche.')));
+    K.chatUnread?.(s.convs.filter(c => !c.muted).reduce((n, c) => n + c.unread, 0));
+  }
+  const setPref = (peer, v) => api('/api/v1/chat/prefs', { method: 'POST', body: { peer, ...v } }).then(loadList, e => K.toast(e.message));
+  async function archive(c, on) {
+    await setPref(c.peer, { archived: on });
+    K.toast(on ? t('Conversation archivée') : t('Conversation désarchivée'), 1);
+  }
+  function convMenu(c, li) {
+    if (c.station) return;
+    closeMenu();
+    const item = (label, run) => h('button', { type: 'button', role: 'menuitem', onclick: ev => { ev.stopPropagation(); closeMenu(); run(); } }, label);
+    menuEl = h('div', { class: 'ch-menu', role: 'menu', onkeydown: ev => { if (ev.key === 'Escape') closeMenu(); } },
+      item(c.pinned ? '📌 ' + t('Désépingler') : '📌 ' + t('Épingler'), () => setPref(c.peer, { pinned: !c.pinned })),
+      item(c.muted ? '🔔 ' + t('Réactiver les notifications') : '🔕 ' + t('Mettre en sourdine'), () => setPref(c.peer, { muted: !c.muted })),
+      item(c.archived ? '🗄️ ' + t('Désarchiver') : '🗄️ ' + t('Archiver'), () => archive(c, !c.archived)),
+      c.unread ? item('✓ ' + t('Marquer comme lu'), () => api('/api/v1/chat/read', { method: 'POST', body: { peer: c.peer } }).then(loadList, () => {})) : null,
+      item('🗑️ ' + t('Effacer la conversation'), () => clearPeer(c.peer, name(c))));
+    li.append(menuEl); menuEl.querySelector('button').focus();
   }
   // Recherche : les conversations se filtrent en direct ; dès deux lettres, les messages qui contiennent le texte s'ajoutent.
   let timer = 0;
@@ -87,11 +113,22 @@ export default async function chat(root, K, query) {
   function menu(m, el) {
     closeMenu();
     const item = (label, run) => h('button', { type: 'button', role: 'menuitem', onclick: ev => { ev.stopPropagation(); closeMenu(); run(); } }, label);
+    const live = !s.station && !s.group?.left;
     menuEl = h('div', { class: 'ch-menu', role: 'menu', onkeydown: ev => { if (ev.key === 'Escape') { closeMenu(); el.focus(); } } },
-      s.station ? null : item('↩️ ' + t('Citer et répondre'), () => setReply(m)),
+      live ? h('div', { class: 'ch-emojis', role: 'group', 'aria-label': t('Réagir') }, ...EMOJIS.map(e => h('button', { type: 'button', 'aria-label': t('Réagir {0}', e), onclick: ev => { ev.stopPropagation(); closeMenu(); react(m, e); } }, e))) : null,
+      live ? item('↩️ ' + t('Citer et répondre'), () => setReply(m)) : null,
+      live && m.mine && !onlyFiles(m) && m.state !== 'failed' ? item('✏️ ' + t('Modifier'), () => setEdit(m)) : null,
+      live && m.mine && m.state === 'failed' ? item('🔁 ' + t('Renvoyer'), () => resend(m)) : null,
       item('📋 ' + t('Copier'), () => navigator.clipboard.writeText(m.text).then(() => K.toast(t('Copié'), 1), () => K.toast(t('Copie impossible')))),
       item('🗑️ ' + t('Supprimer pour moi'), () => remove(m)));
     el.append(menuEl); menuEl.querySelector('button').focus();
+  }
+  // Réactions : une par personne et par message ; toucher la sienne la retire.
+  const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+  const react = (m, e) => api('/api/v1/chat/react', { method: 'POST', body: { id: m.id, emoji: m.reactions?.some(r => r.mine && r.emoji === e) ? '' : e } }).then(() => refresh(false), err => K.toast(err.message));
+  // Renvoyer un message non remis : le même texte (et la même citation) repart, l'échec est effacé.
+  async function resend(m) {
+    try { await api('/api/v1/chat/send', { method: 'POST', body: { peer: s.peer, text: m.text, reply: m.reply, files: m.files } }); await api('/api/v1/chat/delete', { method: 'POST', body: { id: m.id } }); await refresh(true); loadList(); } catch (e) { K.toast(e.message); }
   }
   async function remove(m) {
     if (!confirm(t('Supprimer ce message ? Il disparaît pour vous seulement.'))) return;
@@ -113,13 +150,14 @@ export default async function chat(root, K, query) {
       onlyFiles(m) ? null : h('p', {}, ...(missed ? [t(m.text)] : linkify(m.text))),
       !s.station && URL_RE.test(m.text) ? media.preview(K, m.text.match(URL_RE)[0]) : null,
       missed ? h('p', {}, h('button', { type: 'button', class: 'ghost', onclick: callBack }, t('Rappeler'))) : null,
-      h('small', { class: 'muted' }, hour(m.at), tick),
+      m.reactions?.length ? h('div', { class: 'ch-reacts' }, ...m.reactions.map(r => h('button', { type: 'button', class: 'ch-react' + (r.mine ? ' mine' : ''), 'aria-pressed': String(r.mine), title: s.group ? r.by.map(who).join(', ') : '', onclick: ev => { ev.stopPropagation(); if (!s.station) react(m, r.emoji); } }, r.emoji, r.n > 1 ? ' ' + r.n : ''))) : null,
+      h('small', { class: 'muted' }, m.edited ? t('modifié') + ' · ' : '', hour(m.at), tick),
       h('button', { type: 'button', class: 'ch-more', 'aria-label': t('Actions sur le message'), 'aria-haspopup': 'menu', onclick: ev => { ev.stopPropagation(); menu(m, el); } }, '⋯'));
     // Appui long (écran tactile) : le menu, comme un clic droit.
     let press = 0;
     el.onpointerdown = ev => { if (ev.pointerType === 'touch') press = setTimeout(() => menu(m, el), 500); };
     el.onpointerup = el.onpointermove = el.onpointercancel = () => clearTimeout(press);
-    if (!s.station) gest.swipe(el, { right: () => setReply(m) });
+    if (!s.station) { gest.swipe(el, { right: () => setReply(m) }); el.ondblclick = ev => { if (!ev.target.closest('button,a,audio')) react(m, '❤️'); }; }
     out.push(el);
     return out;
   }
@@ -154,10 +192,21 @@ export default async function chat(root, K, query) {
 
   // Brouillon par conversation, gardé le temps de l'onglet (rechargement, coupure réseau) : jamais au-delà, c'est un message privé.
   const draft = { get: p => { try { return sessionStorage.getItem('draft:' + p) || ''; } catch { return ''; } }, set: (p, v) => { try { v ? sessionStorage.setItem('draft:' + p, v) : sessionStorage.removeItem('draft:' + p); } catch { /* stockage indisponible */ } } };
-  const box = h('textarea', { rows: 1, maxlength: 4000, placeholder: t('Écrire un message…'), 'aria-label': t('Message'), oninput: () => { s.peer && draft.set(s.peer, box.value); grow(); } });
+  // « En train d'écrire » : au plus un signal toutes les 4 s (rien si le membre ne partage pas son activité : le serveur le sait).
+  let typed = 0;
+  const typing = () => { if (!s.peer || s.station || s.edit || Date.now() - typed < 4000) return; typed = Date.now(); api('/api/v1/chat/typing', { method: 'POST', body: { peer: s.peer } }).catch(() => {}); };
+  const box = h('textarea', { rows: 1, maxlength: 4000, placeholder: t('Écrire un message…'), 'aria-label': t('Message'), oninput: () => { if (!s.edit) s.peer && draft.set(s.peer, box.value); grow(); if (box.value) typing(); } });
   const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
   const replyBar = h('div', { class: 'ch-replybar', hidden: true });
+  // Modifier un message : le texte revient dans la case, « Envoyer » le remplace chez tous.
+  function setEdit(m) {
+    setReply(null); s.edit = m; replyBar.hidden = !m;
+    if (!m) return;
+    replyBar.replaceChildren(h('span', {}, h('strong', {}, '✏️ ', t('Modifier le message')), ' ', m.text.slice(0, 120)), h('button', { type: 'button', class: 'ghost', 'aria-label': t('Annuler la modification'), onclick: () => { setEdit(null); box.value = ''; grow(); } }, '✕'));
+    box.value = m.text; grow(); box.focus();
+  }
   function setReply(m) {
+    if (m) s.edit = null;
     s.reply = m; replyBar.hidden = !m;
     if (!m || s.voice?.m !== m) s.voice = null;
     const at = s.voice ? ` · 🎤 ${voice.mmss(s.voice.at)}` : '';
@@ -178,7 +227,11 @@ export default async function chat(root, K, query) {
   async function send() {
     const text = box.value.trim(); if (!text || !s.peer) return;
     box.disabled = true;
-    try { await post({ text }); box.value = ''; draft.set(s.peer, ''); grow(); }
+    try {
+      if (s.edit) { await api('/api/v1/chat/edit', { method: 'POST', body: { id: s.edit.id, text } }); setEdit(null); await refresh(false); }
+      else await post({ text });
+      box.value = ''; draft.set(s.peer, ''); grow();
+    }
     catch (e) { K.toast(e.message); } finally { box.disabled = false; box.focus(); }
   }
   // Fichiers et messages vocaux : rangés dans /Chat, partagés avec l'ami, puis annoncés dans le fil (avec le texte en cours, s'il y en a).
@@ -192,7 +245,12 @@ export default async function chat(root, K, query) {
       await post({ text: box.value.trim() || out.map(caption).join('\n'), files: out }); box.value = ''; draft.set(peer, ''); grow();
     } catch (e) { K.toast(e.message); }
   }
-  box.onkeydown = ev => { if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); send(); } if (ev.key === 'Escape' && s.reply) setReply(null); };
+  box.onkeydown = ev => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); send(); }
+    if (ev.key === 'Escape') { if (s.edit) { setEdit(null); box.value = ''; grow(); } else if (s.reply) setReply(null); }
+    // Flèche haut dans une case vide : modifier son dernier message, comme dans Telegram.
+    if (ev.key === 'ArrowUp' && !box.value) { const m = [...s.msgs].reverse().find(x => x.mine && x.state !== 'failed' && !onlyFiles(x)); if (m) { ev.preventDefault(); setEdit(m); } }
+  };
   box.onpaste = ev => { const f = [...(ev.clipboardData?.files || [])]; if (f.length) { ev.preventDefault(); sendFiles(f); } };
   const pickFile = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => { sendFiles([...pickFile.files]); pickFile.value = ''; } });
   const tool = (icon, label, run) => h('button', { type: 'button', class: 'ghost ch-tool', title: label, 'aria-label': label, onclick: run }, icon);
@@ -222,8 +280,13 @@ export default async function chat(root, K, query) {
     const kebab = h('button', { type: 'button', class: 'ghost ch-kebab', title: t('Plus d\'actions'), 'aria-label': t('Plus d\'actions'), 'aria-haspopup': 'menu', onclick: ev => {
       ev.stopPropagation(); closeMenu();
       const item = (label, run) => h('button', { type: 'button', role: 'menuitem', onclick: e => { e.stopPropagation(); closeMenu(); run(); } }, label);
+      const c = s.convs.find(x => x.peer === s.peer) || { peer: s.peer };
       menuEl = h('div', { class: 'ch-menu', role: 'menu', onkeydown: e => { if (e.key === 'Escape') { closeMenu(); kebab.focus(); } } },
         s.station || group ? null : item('Ẑ ' + t('Envoyer des Ẑen à {0}', s.label), zen),
+        group && s.group && !s.group.left ? item('👥 ' + t('Participants et nom du groupe'), () => K.mod('c-group.js').then(m => m.default(K, detail, s.group, s.peer, () => openConv(s.peer, s.label, false, false, null, true)))) : null,
+        s.station ? null : item(c.pinned ? '📌 ' + t('Désépingler') : '📌 ' + t('Épingler'), () => setPref(s.peer, { pinned: !c.pinned })),
+        s.station ? null : item(c.muted ? '🔔 ' + t('Réactiver les notifications') : '🔕 ' + t('Mettre en sourdine'), () => setPref(s.peer, { muted: !c.muted })),
+        s.station ? null : item((s.receipts ? '👁 ' : '🙈 ') + t(s.receipts ? 'Ne plus montrer quand je lis ou j\'écris' : 'Montrer quand je lis ou j\'écris'), () => api('/api/v1/chat/settings', { method: 'POST', body: { receipts: !s.receipts } }).then(r => { s.receipts = r.receipts; K.toast(r.receipts ? t('Vos amis voient quand vous lisez et écrivez') : t('Vos amis ne voient plus quand vous lisez ou écrivez'), 1); }, e => K.toast(e.message))),
         item('🗑️ ' + t('Effacer la conversation'), clearConv));
       head.append(menuEl); menuEl.querySelector('button').focus();
     } }, '⋮');
@@ -232,23 +295,31 @@ export default async function chat(root, K, query) {
       s.station ? null : h('small', { class: 'muted ch-e2e' }, '🔒 ' + t('Chiffré de bout en bout')),
       s.station || group ? null : h('button', { type: 'button', class: 'ch-callbtn', title: t('Appeler en visio'), 'aria-label': t('Appeler {0} en visio', s.label), onclick: callBack }, '📹'),
       kebab);
-    const foot = s.station ? h('p', { class: 'muted ch-note' }, t('Votre station vous prévient ici (virements reçus, alertes). Elle ne lit pas les réponses.')) : composer;
-    detail.replaceChildren(head, thread, foot);
-    paintPres(); box.value = draft.get(peer); grow();
+    const note = h('p', { class: 'muted ch-note' }, t('Votre station vous prévient ici (virements reçus, alertes). Elle ne lit pas les réponses.'));
+    detail.replaceChildren(head, thread, s.station ? note : composer);
+    paintPres(); s.edit = null; box.value = draft.get(peer); grow();
+    s.subEl = sub;
     await refresh(true); await loadList();
     if (s.group) sub.textContent = s.group.members.map(x => x.label).join(', ');
+    // Groupe quitté (ou retiré) : l'historique reste lisible, la saisie laisse place à une phrase.
+    if (s.group?.left) composer.replaceWith(h('p', { class: 'muted ch-note' }, t('Vous ne faites plus partie de ce groupe : vous gardez l\'historique.')));
     if (at) jump(at); else if (!s.station && matchMedia('(pointer:fine)').matches) box.focus();
   }
   const hint = () => detail.replaceChildren(h('p', { class: 'muted ab-hint' }, t('Choisissez une conversation, ou touchez ✏️ pour écrire à un proche.')),
     ...(reachable ? [] : [h('p', { class: 'muted ab-hint' }, t('Vos amis ne voient pas quand vous êtes là pour un appel visio.'), ' ', h('a', { href: '#/account' }, t('Être joignable')))]));
   K.listen(ev => {
     if (ev.source === 'chat:msg') { loadList(); if (ev.message === s.peer) refresh(true); }
-    if (ev.source === 'chat:seen' && ev.message === s.peer) refresh(false);
+    if (ev.source === 'chat:seen') { if (ev.message === s.peer) refresh(false); loadList(); }
+    // « écrit… » pendant 6 s dans l'en-tête (le nom de l'auteur dans un groupe).
+    if (ev.source === 'chat:typing' && ev.message === s.peer) {
+      const el = s.group ? s.subEl : presText, label = s.group ? t('{0} écrit…', who(ev.data?.author)) : t('écrit…');
+      if (el) { el.dataset.was ??= el.textContent; el.textContent = label; el.classList.add('ch-typing'); clearTimeout(s.typingT); s.typingT = setTimeout(() => { el.textContent = el.dataset.was; delete el.dataset.was; el.classList.remove('ch-typing'); }, 6000); }
+    }
     if (ev.kind === 'presence' && ev.data?.hex) { pres[ev.data.hex] = ev.data.status; paintPres(); loadList(); }
   });
   // Retour par un balayage depuis le bord gauche du fil (téléphone).
   gest.swipe(detail, { right: () => { if (s.peer && matchMedia('(max-width:52rem)').matches) close(); }, edge: 32, threshold: 80 });
-  await Promise.all([loadList(), loadPres()]);
+  await Promise.all([loadList(), loadPres(), api('/api/v1/chat/settings').then(r => { s.receipts = r.receipts; }, () => {})]);
   const want = new URLSearchParams(query || '').get('peer');
   if (want) { const c = s.convs.find(x => x.peer === want); openConv(want, c ? name(c) : null, c?.station, false, null, c?.group); } else hint();
 }

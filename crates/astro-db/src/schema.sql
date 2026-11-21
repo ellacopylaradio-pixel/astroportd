@@ -249,6 +249,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   meta      TEXT,                         -- pièces jointes (JSON : nom, type, taille ; chemin uCloud côté expéditeur)
   seen      INTEGER NOT NULL DEFAULT 0,   -- message envoyé que l'autre a lu (accusé de lecture reçu)
   author    TEXT,                         -- conversation de groupe : qui a écrit (sinon `peer`, ou le titulaire si `mine`)
+  edited    INTEGER NOT NULL DEFAULT 0,   -- texte modifié par son auteur après l'envoi (balise `t` astro-edit)
   PRIMARY KEY (owner_hex, id)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS chat_by_peer ON chat_messages(owner_hex, peer, at);
@@ -261,6 +262,28 @@ CREATE TABLE IF NOT EXISTS chat_groups (
   name      TEXT,
   members   TEXT NOT NULL,             -- JSON : clés des participants, titulaire compris
   PRIMARY KEY (owner_hex, id)
+) STRICT, WITHOUT ROWID;
+
+-- Réactions aux messages du chat (NIP-25 kind 7 emballé en NIP-59) : une par auteur et par message. ÉTAT LOCAL, recréé en relisant
+-- les enveloppes.
+CREATE TABLE IF NOT EXISTS chat_reactions (
+  owner_hex TEXT NOT NULL,
+  msg_id    TEXT NOT NULL,
+  author    TEXT NOT NULL,
+  emoji     TEXT NOT NULL,
+  at        INTEGER NOT NULL,
+  PRIMARY KEY (owner_hex, msg_id, author)
+) STRICT, WITHOUT ROWID;
+
+-- Préférences du titulaire pour une conversation : épinglée, archivée, en sourdine (pas de notification). PRÉFÉRENCES LOCALES,
+-- jamais publiées.
+CREATE TABLE IF NOT EXISTS chat_prefs (
+  owner_hex TEXT NOT NULL,
+  peer      TEXT NOT NULL,
+  pinned    INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0,1)),
+  archived  INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+  muted     INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0,1)),
+  PRIMARY KEY (owner_hex, peer)
 ) STRICT, WITHOUT ROWID;
 
 -- Partages FaceCloud déjà effectués (un par photo et destinataire) : état LOCAL, évite les doublons au retraitement.

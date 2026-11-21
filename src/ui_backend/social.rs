@@ -140,6 +140,12 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
             }
             ChatOp::Preview(url) => chat.preview(&url).await,
             ChatOp::PushKey => chat.push_key().await,
+            ChatOp::React(b) => chat.react(o, b["id"].as_str().unwrap_or_default(), b["emoji"].as_str().unwrap_or_default()).await,
+            ChatOp::Typing(peer) => chat.typing(o, &peer).await,
+            ChatOp::Edit(b) => chat.edit(o, b["id"].as_str().unwrap_or_default(), b["text"].as_str().unwrap_or_default()).await,
+            ChatOp::GroupUpdate(b) => chat.group_update(o, b["id"].as_str().unwrap_or_default(), &b).await,
+            ChatOp::Prefs(b) => chat.prefs(o, b["peer"].as_str().unwrap_or_default(), &b).await,
+            ChatOp::Settings(b) => chat.settings(o, b.as_ref()).await,
             ChatOp::Push(b) => chat.push_subscribe(o, b["endpoint"].as_str().unwrap_or_default(), b["on"].as_bool().unwrap_or(true)).await,
             ChatOp::Signal(sig) => chat.signal(o, sig["peer"].as_str().unwrap_or_default(), &sig).await,
         };

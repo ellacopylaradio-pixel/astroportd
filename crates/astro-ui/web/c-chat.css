@@ -56,3 +56,9 @@ body:has(.ab.open .ch-compose) .fab{display:none}
 .ch-bell{min-width:44px}
 .ab.open .ch-detail{display:flex}
 .ch-head{position:relative}.ch-head .ch-menu{top:100%;right:.5rem}.ch-kebab{min-width:44px;min-height:44px;padding:0;font-size:1.3rem}
+.ch-detail{position:relative}.ab-list li{position:relative}.ch-quiet{background:var(--muted,#888)}
+.ch-archrow .ab-item{justify-content:center;color:var(--muted)}
+.ch-emojis{display:flex;gap:.1rem;padding:.2rem;border-bottom:1px solid var(--line)}.ch-emojis button{min-width:40px;min-height:40px;padding:0;font-size:1.3rem;border:0;background:transparent}
+.ch-reacts{display:flex;flex-wrap:wrap;gap:.25rem;margin:.25rem 0 .1rem}.ch-react{min-height:28px;padding:0 .45rem;border-radius:1rem;border:1px solid var(--line);background:var(--panel);color:var(--text,inherit);font-size:.85rem}
+.ch-react.mine{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 18%,var(--panel))}
+.ch-typing{color:var(--accent)!important;font-style:italic}

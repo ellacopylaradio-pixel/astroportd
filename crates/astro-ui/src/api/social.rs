@@ -115,6 +115,12 @@ pub(super) fn routes<B: SocialApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/chat/delete", post(chat_delete::<B>))
         .route("/api/v1/chat/search", get(chat_search::<B>))
         .route("/api/v1/chat/group", post(chat_group::<B>))
+        .route("/api/v1/chat/group/update", post(chat_group_update::<B>))
+        .route("/api/v1/chat/react", post(chat_react::<B>))
+        .route("/api/v1/chat/typing", post(chat_typing::<B>))
+        .route("/api/v1/chat/edit", post(chat_edit::<B>))
+        .route("/api/v1/chat/prefs", post(chat_prefs::<B>))
+        .route("/api/v1/chat/settings", get(chat_settings_get::<B>).post(chat_settings_set::<B>))
         .route("/api/v1/chat/preview", get(chat_preview::<B>))
         .route("/api/v1/push/key", get(push_key::<B>))
         .route("/api/v1/push/subscribe", post(push_subscribe::<B>))
@@ -347,6 +353,34 @@ async fn chat_group<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): 
 
 async fn chat_preview<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<ChatPreviewQuery>) -> Response {
     reply(st.backend.chat(&p, ChatOp::Preview(q.url.chars().take(2000).collect())).await)
+}
+
+async fn chat_react<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::React(b)).await)
+}
+
+async fn chat_typing<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<ChatPeerBody>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Typing(b.peer.chars().take(80).collect())).await)
+}
+
+async fn chat_edit<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Edit(b)).await)
+}
+
+async fn chat_group_update<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::GroupUpdate(b)).await)
+}
+
+async fn chat_prefs<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Prefs(b)).await)
+}
+
+async fn chat_settings_get<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Settings(None)).await)
+}
+
+async fn chat_settings_set<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Settings(Some(b))).await)
 }
 
 async fn push_key<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {

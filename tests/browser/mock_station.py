@@ -153,6 +153,9 @@ class H(BaseHTTPRequestHandler):
             c = STATE['chat']; unread = sum(1 for m in c if not m['mine'] and not STATE.get('chat_read'))
             return self.send(200, dict(unread=unread, plane='origin', conversations=[dict(peer='ab' * 32, label='Léa', last=c[-1]['text'], at=c[-1]['at'], mine=c[-1]['mine'], unread=unread, plane='origin', channels=[dict(plane='origin', peer='ab' * 32, unread=unread), dict(plane='zen1', peer='cd' * 32, unread=0)])] if c else []))
         if p == '/api/v1/chat/messages': return self.send(200, dict(peer='ab' * 32, messages=STATE['chat'], more=False))
+        if p == '/api/v1/chat/settings': return self.send(200, dict(receipts=STATE.get('receipts', True)))
+        if p == '/health': return self.send(200, dict(status='ok'))
+        if p == '/api/v1/me/footprint': return self.send(200, dict(disk=None))
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/faces/folders': return self.send(200, dict(folders=[dict(dir='/Images/2026/10', faces=12, todo=9), dict(dir='/Images/2026/09', faces=4, todo=0)]))
         if p == '/api/v1/faces/board':
@@ -256,6 +259,14 @@ class H(BaseHTTPRequestHandler):
             m = dict(id=str(len(STATE['chat'])), mine=True, at=1790000000 + len(STATE['chat']) * 60, text=body['text'], state='ok', seen=False, reply=body.get('reply'), quote=q and dict(text=q['text'], mine=q['mine']), files=body.get('files', []))
             STATE['chat'].append(m); return self.send(200, m)
         if p == '/api/v1/chat/read': STATE['chat_read'] = True; return self.send(200, dict(read=1))
+        if p == '/api/v1/chat/react':
+            m = next(x for x in STATE['chat'] if x['id'] == body['id']); m['reactions'] = [dict(emoji=body['emoji'], n=1, mine=True, by=['aa' * 32])] if body['emoji'] else []
+            return self.send(200, dict(id=body['id'], emoji=body['emoji']))
+        if p == '/api/v1/chat/edit':
+            m = next(x for x in STATE['chat'] if x['id'] == body['id']); m.update(text=body['text'], edited=True); return self.send(200, m)
+        if p == '/api/v1/chat/typing': return self.send(200, dict(sent=1))
+        if p == '/api/v1/chat/prefs': STATE.setdefault('prefs', []).append(body); return self.send(200, dict(peer=body['peer']))
+        if p == '/api/v1/chat/settings': STATE['receipts'] = body['receipts']; return self.send(200, dict(receipts=body['receipts']))
         if p == '/api/v1/chat/delete': STATE['chat'] = [m for m in STATE['chat'] if m['id'] != body['id']]; return self.send(200, dict(deleted=True))
         if p == '/api/v1/me/zen/recipients': return self.send(200, dict(recipients=[dict(to='cash', label='cash'), dict(to='ab' * 32, label='lea@example.org')], max_zen=10000))
         if p == '/api/v1/faces/delete-photos': return self.send(200, dict(deleted=len({f['path'] for f in STATE['faces'] if f['id'] in body['ids']}), missing=0, bytes=0))

@@ -416,7 +416,7 @@ mod tests {
         // Le chat : son propre budget (écran, pièces jointes et messages vocaux, choix du destinataire, styles, une langue).
         let (craw, cgz) = chat_bytes();
         eprintln!("chat : {craw} o bruts, {cgz} o en gzip");
-        assert!(craw > 0 && craw < 64 * 1024 && cgz < 24 * 1024, "chat : {craw} o bruts (budget 64 Ko), {cgz} o en gzip (budget 24 Ko)");
+        assert!(craw > 0 && craw < 96 * 1024 && cgz < 36 * 1024, "chat : {craw} o bruts (budget 96 Ko, 64 Ko avant les réactions, la modification, « écrit… », la gestion des groupes et les conversations épinglées, archivées, en sourdine), {cgz} o en gzip (budget 36 Ko, 24 Ko avant)");
         for (name, f) in module_files().chain(Assets::iter().filter(|p| p.starts_with("c-") && !p.starts_with("c-lang-")).filter_map(|p| Assets::get(&p).map(|f| (p.into_owned(), f)))).filter(|(p, _)| !p.starts_with("m-lang-")) {
             let gz = compressed(&name, Encoding::Gzip, &f.data).len();
             assert!(gz < 12 * 1024, "{name} : {gz} o en gzip, au-delà des 12 Ko par écran");

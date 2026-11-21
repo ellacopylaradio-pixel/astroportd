@@ -67,6 +67,30 @@ const RECEIPT_TTL: u64 = 7 * 86_400;
 const SEARCH_MAX: i64 = 50;
 /// Participants d'un groupe au plus, titulaire compris.
 pub const MAX_GROUP: usize = 20;
+/// « En train d'écrire » : rumeur de service, jamais rangée, dans une enveloppe qui expire vite.
+pub const TYPING_TAG: &str = "astro-typing";
+/// Modification d'un message envoyé (balise `e` : le message ; contenu : le nouveau texte).
+pub const EDIT_TAG: &str = "astro-edit";
+/// Changement d'un groupe (contenu JSON `{ name, members }`, balise `g` : le groupe).
+pub const GROUP_TAG: &str = "astro-group";
+const TYPING_TTL: u64 = 60;
+
+/// Conversation à laquelle appartient une rumeur reçue.
+struct Conv {
+    peer: String,
+    /// Groupe encore inconnu du titulaire : nom et participants à enregistrer.
+    new_group: Option<(Option<String>, Vec<String>)>,
+}
+
+fn has_t(rumor: &nip59::Rumor, v: &str) -> bool {
+    rumor.tags.iter().any(|t| t.first().map(String::as_str) == Some("t") && t.get(1).map(String::as_str) == Some(v))
+}
+
+/// Une réaction : un emoji court (8 caractères au plus), sans caractère de contrôle ; vide = retirer.
+fn emoji_of(s: &str) -> Option<String> {
+    let e = clean(s);
+    (e.chars().count() <= 8 && !e.contains(char::is_whitespace)).then_some(e)
+}
 
 /// Identifiant d'une conversation de groupe : empreinte des clés des participants (titulaire compris), triées. Chacun le
 /// recalcule de son côté à partir des balises `p` de la rumeur et de son auteur.
@@ -264,6 +288,9 @@ impl Chat {
             return Err(ChatError::Invalid(format!("message trop long (plus de {MAX_CHARS} caractères)")));
         }
         let group = self.group(owner, peer).await;
+        if group.as_ref().is_some_and(|(_, m)| !m.iter().any(|x| x == owner)) {
+            return Err(ChatError::Invalid("vous avez quitté ce groupe".into()));
+        }
         let peer = if group.is_some() { peer.to_owned() } else { self.channel(peer).await? };
         let peer = peer.as_str();
         let secret = self.keys.secret(owner).ok_or(ChatError::NoKey)?;
@@ -275,6 +302,9 @@ impl Chat {
         let mut tags: Vec<Vec<String>> = targets.iter().map(|t| vec!["p".into(), t.clone()]).collect();
         if let Some(name) = group.as_ref().and_then(|g| g.0.clone()) {
             tags.push(vec!["subject".into(), name]);
+        }
+        if group.is_some() {
+            tags.push(vec!["g".into(), peer.to_owned()]);
         }
         if let Some(r) = reply {
             tags.push(vec!["e".into(), r.to_owned(), String::new(), "reply".into()]);
@@ -479,7 +509,9 @@ impl Chat {
                             COALESCE((SELECT json_extract(f.fields, '$.name') FROM contact_cards f WHERE f.owner_hex = m.owner_hex AND json_extract(f.fields, '$.nostr') = m.peer LIMIT 1), \
                                      (SELECT json_extract(e.content, '$.name') FROM nostr_events e WHERE e.pubkey = m.peer AND e.kind = 0 ORDER BY e.created_at DESC LIMIT 1)), \
                             EXISTS (SELECT 1 FROM identities i WHERE i.hex = m.peer AND i.role = 'node'), \
-                            (SELECT COALESCE(g.name, '') || char(31) || json_array_length(g.members) FROM chat_groups g WHERE g.owner_hex = m.owner_hex AND g.id = m.peer) \
+                            (SELECT COALESCE(g.name, '') || char(31) || json_array_length(g.members) FROM chat_groups g WHERE g.owner_hex = m.owner_hex AND g.id = m.peer), \
+                            COALESCE((SELECT p.pinned || p.archived || p.muted FROM chat_prefs p WHERE p.owner_hex = m.owner_hex AND p.peer = m.peer), '000'), \
+                            (SELECT NOT EXISTS (SELECT 1 FROM json_each(g.members) WHERE value = m.owner_hex) FROM chat_groups g WHERE g.owner_hex = m.owner_hex AND g.id = m.peer) \
                      FROM chat_messages m WHERE m.owner_hex = ?1 \
                        AND m.at = (SELECT MAX(x.at) FROM chat_messages x WHERE x.owner_hex = m.owner_hex AND x.peer = m.peer) \
                      GROUP BY m.peer ORDER BY m.at DESC LIMIT 200",
@@ -491,7 +523,10 @@ impl Chat {
                         // Groupe : son nom, sinon « Groupe (n) » côté interface.
                         let group: Option<String> = r.get(7)?;
                         let (gname, gsize) = group.as_deref().and_then(|g| g.split_once('\u{1f}')).map_or((None, 0), |(n, k)| ((!n.is_empty()).then(|| n.to_owned()), k.parse::<i64>().unwrap_or(0)));
-                        Ok(json!({ "group": group.is_some(), "size": gsize, "gname": gname, "peer": peer, "last": r.get::<_, String>(1)?.chars().take(120).collect::<String>(), "at": r.get::<_, i64>(2)?, "mine": r.get::<_, i64>(3)? == 1, "unread": r.get::<_, i64>(4)?,
+                        let prefs: String = r.get(8)?;
+                        let flag = |i: usize| prefs.as_bytes().get(i) == Some(&b'1');
+                        Ok(json!({ "group": group.is_some(), "size": gsize, "gname": gname, "left": r.get::<_, Option<bool>>(9)?.unwrap_or(false),
+                                   "pinned": flag(0), "archived": flag(1), "muted": flag(2), "peer": peer, "last": r.get::<_, String>(1)?.chars().take(120).collect::<String>(), "at": r.get::<_, i64>(2)?, "mine": r.get::<_, i64>(3)? == 1, "unread": r.get::<_, i64>(4)?,
                                    "station": r.get::<_, bool>(6)?, "label": label.filter(|l| !l.trim().is_empty()).unwrap_or_else(|| peer.chars().take(8).collect()) }))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -500,7 +535,8 @@ impl Chat {
             .await
             .map_err(db_err)?;
         let rows = self.by_person(owner, rows).await;
-        let unread: i64 = rows.iter().filter_map(|r| r["unread"].as_i64()).sum();
+        // La pastille ne compte pas les conversations en sourdine.
+        let unread: i64 = rows.iter().filter(|r| r["muted"] != json!(true)).filter_map(|r| r["unread"].as_i64()).sum();
         Ok(json!({ "conversations": rows, "unread": unread, "plane": self.people.as_ref().map(|p| p.plane()) }))
     }
 
@@ -569,7 +605,7 @@ impl Chat {
             .readers()
             .read(move |c| {
                 let mut stmt = c.prepare(
-                    "SELECT m.id, m.mine, m.at, m.text, m.state, m.reply, m.meta, m.seen, q.text, q.mine, m.author FROM chat_messages m \
+                    "SELECT m.id, m.mine, m.at, m.text, m.state, m.reply, m.meta, m.seen, q.text, q.mine, m.author, m.edited FROM chat_messages m \
                      LEFT JOIN chat_messages q ON q.owner_hex = m.owner_hex AND q.id = m.reply \
                      WHERE m.owner_hex = ?1 AND m.peer IN (SELECT value FROM json_each(?2)) AND m.at < ?3 ORDER BY m.at DESC, m.n DESC LIMIT ?4",
                 )?;
@@ -580,7 +616,7 @@ impl Chat {
                         let quote: Option<String> = r.get(8)?;
                         Ok((
                             json!({ "id": r.get::<_, String>(0)?, "mine": r.get::<_, i64>(1)? == 1, "at": r.get::<_, i64>(2)?, "text": r.get::<_, String>(3)?, "state": r.get::<_, String>(4)?,
-                                    "reply": r.get::<_, Option<String>>(5)?, "seen": r.get::<_, i64>(7)? == 1, "author": r.get::<_, Option<String>>(10)?,
+                                    "reply": r.get::<_, Option<String>>(5)?, "seen": r.get::<_, i64>(7)? == 1, "author": r.get::<_, Option<String>>(10)?, "edited": r.get::<_, i64>(11)? == 1,
                                     "quote": quote.map(|t| json!({ "text": t.chars().take(160).collect::<String>(), "mine": r.get::<_, Option<i64>>(9).ok().flatten() == Some(1) })) }),
                             r.get::<_, Option<String>>(6)?,
                         ))
@@ -598,6 +634,10 @@ impl Chat {
                         }
                     }
                     m["files"] = json!(files);
+                    // Réactions : par emoji, combien, et si le titulaire en est.
+                    let mut st = c.prepare_cached("SELECT emoji, COUNT(*), MAX(author = ?1), group_concat(author) FROM chat_reactions WHERE owner_hex = ?1 AND msg_id = ?2 GROUP BY emoji ORDER BY MIN(at)")?;
+                    let id = m["id"].as_str().unwrap_or_default().to_owned();
+                    m["reactions"] = json!(st.query_map(rusqlite::params![o, id], |r| Ok(json!({ "emoji": r.get::<_, String>(0)?, "n": r.get::<_, i64>(1)?, "mine": r.get::<_, i64>(2)? == 1, "by": r.get::<_, String>(3)?.split(',').map(str::to_owned).collect::<Vec<_>>() })))?.collect::<Result<Vec<_>, _>>()?);
                     out.push(m);
                 }
                 Ok(out)
@@ -614,7 +654,7 @@ impl Chat {
                 for h in list.iter().filter(|h| *h != owner) {
                     out.push(json!({ "hex": h, "label": self.label(owner, h).await }));
                 }
-                json!({ "name": name, "members": out })
+                json!({ "name": name, "members": out, "left": !list.iter().any(|h| h == owner) })
             }
             None => Value::Null,
         };
@@ -646,8 +686,10 @@ impl Chat {
             })
             .await
             .map_err(db_err)?;
-        for (p, at) in latest {
-            self.send_receipt(owner, &p, at).await;
+        if self.shares_activity(owner).await {
+            for (p, at) in latest {
+                self.send_receipt(owner, &p, at).await;
+            }
         }
         Ok(json!({ "read": n }))
     }
@@ -899,8 +941,29 @@ impl Chat {
             }
             return 0;
         }
+        let (typing, edit, regroup, reaction) = (has_t(&rumor, TYPING_TAG), has_t(&rumor, EDIT_TAG), has_t(&rumor, GROUP_TAG), rumor.kind == kind::REACTION);
+        let special = typing || edit || regroup || reaction;
         // Les messages de service (sauvegarde chez un ami, assistance) voyagent aussi en kind 14 : pas dans la conversation.
-        if rumor.kind != kind::CHAT || rumor.is_station_protocol() {
+        if !special && (rumor.kind != kind::CHAT || rumor.is_station_protocol()) {
+            return 0;
+        }
+        let Some(conv) = self.conversation_of(owner, &sender, &rumor).await else { return 0 };
+        if typing {
+            if sender != owner {
+                self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:typing", conv.peer, Some(json!({ "author": sender })));
+            }
+            return 0;
+        }
+        if reaction {
+            self.reaction_in(owner, &sender, &conv.peer, &rumor).await;
+            return 0;
+        }
+        if edit {
+            self.edit_in(owner, &sender, &conv.peer, &rumor).await;
+            return 0;
+        }
+        if regroup {
+            self.group_in(owner, &sender, &conv, &rumor).await;
             return 0;
         }
         let text = clean(&rumor.content);
@@ -909,42 +972,13 @@ impl Chat {
         }
         let Ok(id) = rumor.id() else { return 0 };
         let at = i64::try_from(rumor.created_at).unwrap_or(0).min(now());
-        // Plusieurs `p` : conversation de groupe (NIP-17), identifiée par l'empreinte des participants, auteur compris.
-        let mut members: Vec<String> = rumor.tags.iter().filter(|t| t.first().map(String::as_str) == Some("p")).filter_map(|t| t.get(1)).filter(|p| is_hex64(p)).cloned().collect();
-        members.push(sender.clone());
-        members.sort_unstable();
-        members.dedup();
-        let group = if members.len() > 2 {
-            if !members.iter().any(|m| m == owner) || members.len() > MAX_GROUP {
+        if let Some((name, members)) = &conv.new_group {
+            if self.save_group(owner, &conv.peer, name.as_deref(), members).await.is_err() {
                 return 0;
             }
-            let gid = group_id(&members);
-            // Un groupe déjà connu accepte tous ses participants ; un nouveau groupe, seulement s'il vient d'un proche.
-            if sender != owner && self.group(owner, &gid).await.is_none() && !self.follows(owner, &sender).await {
-                return 0;
-            }
-            let name = rumor.tag_value("subject").map(|n| clean(n).chars().take(80).collect::<String>()).filter(|n| !n.is_empty());
-            if self.save_group(owner, &gid, name.as_deref(), &members).await.is_err() {
-                return 0;
-            }
-            Some(gid)
-        } else {
-            None
-        };
-        // Copie de soi (envoyée depuis une autre station du même compte) : le correspondant est le destinataire de la rumeur.
-        let (peer, mine) = if let Some(gid) = &group {
-            (gid.clone(), sender == owner)
-        } else if sender == owner {
-            match rumor.tag_value("p") {
-                Some(p) if is_hex64(p) && p != owner => (p.to_owned(), true),
-                _ => return 0,
-            }
-        } else {
-            if !self.follows(owner, &sender).await {
-                return 0;
-            }
-            (sender.clone(), false)
-        };
+        }
+        let group = conv.new_group.is_some() || self.group(owner, &conv.peer).await.is_some();
+        let (peer, mine) = (conv.peer, sender == owner);
         let reply = rumor.tags.iter().find(|t| t.first().map(String::as_str) == Some("e")).and_then(|t| t.get(1)).filter(|e| is_hex64(e)).map(String::as_str);
         let reply_at = reply.and(rumor.tag_value("offset").and_then(|v| v.parse::<u64>().ok()));
         let files: Vec<Value> = rumor
@@ -954,13 +988,13 @@ impl Chat {
             .take(MAX_FILES)
             .filter_map(|t| file_of(&json!({ "name": t.get(1), "mime": t.get(2), "size": t.get(3).and_then(|s| s.parse::<u64>().ok()) })))
             .collect();
-        let author = (group.is_some() && !mine).then_some(sender.as_str());
+        let author = (group && !mine).then_some(sender.as_str());
         match self.store_row(owner, &peer, Row { id: &id, mine, at, text: &text, state: "ok", read: mine, reply, reply_at, files: &files, author }).await {
             Ok(true) => {
                 if !mine {
-                    self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:msg", peer, None);
-                    // Réveil des navigateurs fermés (sans contenu), hors du chemin de réception.
-                    if let Some(p) = &self.push {
+                    self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:msg", peer.clone(), None);
+                    // Réveil des navigateurs fermés (sans contenu), hors du chemin de réception ; pas pour une conversation en sourdine.
+                    if let (Some(p), false) = (&self.push, self.muted(owner, &peer).await) {
                         let (p, o) = (p.clone(), owner.to_owned());
                         tokio::spawn(async move {
                             p.notify(&o).await;
@@ -975,6 +1009,323 @@ impl Chat {
                 0
             }
         }
+    }
+
+    /// Conversation d'une rumeur reçue, ou `None` si elle est refusée. Groupe : balise `g` (identifiant stable, même quand les
+    /// participants changent) ou plusieurs `p` ; un groupe connu n'accepte que ses participants, un nouveau ne vient que d'un
+    /// proche. 1 à 1 : l'expéditeur suivi, ou, pour la copie de soi, le destinataire.
+    async fn conversation_of(&self, owner: &str, sender: &str, rumor: &nip59::Rumor) -> Option<Conv> {
+        let mut members: Vec<String> = rumor.tags.iter().filter(|t| t.first().map(String::as_str) == Some("p")).filter_map(|t| t.get(1)).filter(|p| is_hex64(p)).cloned().collect();
+        members.push(sender.to_owned());
+        members.sort_unstable();
+        members.dedup();
+        let g = rumor.tag_value("g").filter(|g| is_hex64(g)).map(str::to_owned);
+        if g.is_some() || members.len() > 2 {
+            if !members.iter().any(|m| m == owner) || members.len() > MAX_GROUP + 1 {
+                return None;
+            }
+            let gid = g.unwrap_or_else(|| group_id(&members));
+            return match self.group(owner, &gid).await {
+                Some((_, known)) => (sender == owner || known.iter().any(|m| m == sender)).then_some(Conv { peer: gid, new_group: None }),
+                None => {
+                    if sender != owner && !self.follows(owner, sender).await {
+                        return None;
+                    }
+                    let name = rumor.tag_value("subject").map(|n| clean(n).chars().take(80).collect::<String>()).filter(|n| !n.is_empty());
+                    Some(Conv { peer: gid, new_group: Some((name, members)) })
+                }
+            };
+        }
+        if sender == owner {
+            return rumor.tag_value("p").filter(|p| is_hex64(p) && *p != owner).map(|p| Conv { peer: p.to_owned(), new_group: None });
+        }
+        self.follows(owner, sender).await.then(|| Conv { peer: sender.to_owned(), new_group: None })
+    }
+
+    /// Réaction reçue (kind 7) : une par auteur et par message de cette conversation ; vide, elle est retirée.
+    async fn reaction_in(&self, owner: &str, sender: &str, peer: &str, rumor: &nip59::Rumor) {
+        let (Some(msg), Some(emoji)) = (rumor.tag_value("e").filter(|e| is_hex64(e)), emoji_of(&rumor.content)) else { return };
+        if self.put_reaction(owner, peer, msg, sender, &emoji).await {
+            self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", peer.to_owned(), None);
+        }
+    }
+
+    async fn put_reaction(&self, owner: &str, peer: &str, msg: &str, author: &str, emoji: &str) -> bool {
+        let (o, p, m, a, e, at) = (owner.to_owned(), peer.to_owned(), msg.to_owned(), author.to_owned(), emoji.to_owned(), now());
+        self.db
+            .writer()
+            .transaction(move |tx| {
+                let exists: Option<i64> = tx.query_row("SELECT 1 FROM chat_messages WHERE owner_hex = ?1 AND id = ?2 AND peer = ?3", rusqlite::params![o, m, p], |r| r.get(0)).optional()?;
+                if exists.is_none() {
+                    return Ok(false);
+                }
+                if e.is_empty() {
+                    tx.execute("DELETE FROM chat_reactions WHERE owner_hex = ?1 AND msg_id = ?2 AND author = ?3", rusqlite::params![o, m, a])?;
+                } else {
+                    tx.execute("INSERT OR REPLACE INTO chat_reactions(owner_hex, msg_id, author, emoji, at) VALUES (?1, ?2, ?3, ?4, ?5)", rusqlite::params![o, m, a, e, at])?;
+                }
+                Ok(true)
+            })
+            .await
+            .unwrap_or(false)
+    }
+
+    /// Modification reçue : seul l'auteur d'un message peut le modifier.
+    async fn edit_in(&self, owner: &str, sender: &str, peer: &str, rumor: &nip59::Rumor) {
+        let Some(msg) = rumor.tag_value("e").filter(|e| is_hex64(e)) else { return };
+        let text = clean(&rumor.content);
+        if text.is_empty() || text.chars().count() > MAX_CHARS {
+            return;
+        }
+        let r = self
+            .db
+            .writer()
+            .execute(
+                "UPDATE chat_messages SET text = ?4, edited = 1 WHERE owner_hex = ?1 AND id = ?2 AND peer = ?3 \
+                 AND ((mine = 1 AND ?5 = ?1) OR (mine = 0 AND COALESCE(author, peer) = ?5))",
+                vec![owner.to_owned().into(), msg.to_owned().into(), peer.to_owned().into(), text.into(), sender.to_owned().into()],
+            )
+            .await;
+        if r.is_ok_and(|r| r.changes > 0) {
+            self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", peer.to_owned(), None);
+        }
+    }
+
+    /// Changement de groupe reçu, appliqué à la liste que le titulaire connaît (deux changements simultanés ne s'écrasent pas) :
+    /// `{ op: rename | add | remove | leave, who?, name?, members }`. `members` (la liste vue par l'auteur) ne sert qu'au
+    /// titulaire qui découvre le groupe — le nouveau venu.
+    async fn group_in(&self, owner: &str, sender: &str, conv: &Conv, rumor: &nip59::Rumor) {
+        let Ok(v) = serde_json::from_str::<Value>(&rumor.content) else { return };
+        let full: Vec<String> = v["members"].as_array().map(|a| a.iter().filter_map(Value::as_str).filter(|h| is_hex64(h)).map(str::to_owned).collect()).unwrap_or_default();
+        let (mut name, mut members) = match (&conv.new_group, self.group(owner, &conv.peer).await) {
+            (None, Some((n, m))) => (n, m),
+            _ => (conv.new_group.as_ref().and_then(|g| g.0.clone()), full),
+        };
+        let who = v["who"].as_str().filter(|h| is_hex64(h));
+        match v["op"].as_str() {
+            Some("rename") => name = v["name"].as_str().map(|n| clean(n).chars().take(80).collect::<String>()).filter(|n| !n.is_empty()),
+            Some("add") => {
+                if let Some(h) = who.filter(|h| !members.iter().any(|m| m == *h)) {
+                    members.push(h.to_owned());
+                }
+            }
+            Some("remove") => {
+                if let Some(h) = who {
+                    members.retain(|m| m != h);
+                }
+            }
+            Some("leave") => members.retain(|m| m != sender),
+            _ => return,
+        }
+        members.sort_unstable();
+        members.dedup();
+        if members.len() > MAX_GROUP {
+            return;
+        }
+        if self.set_group(owner, &conv.peer, name.as_deref(), &members).await.is_ok() {
+            self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", conv.peer.clone(), None);
+        }
+    }
+
+    async fn set_group(&self, owner: &str, id: &str, name: Option<&str>, members: &[String]) -> Result<(), ChatError> {
+        self.db
+            .writer()
+            .execute(
+                "INSERT INTO chat_groups(owner_hex, id, name, members) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(owner_hex, id) DO UPDATE SET name = COALESCE(excluded.name, chat_groups.name), members = excluded.members",
+                vec![owner.to_owned().into(), id.to_owned().into(), name.map(str::to_owned).into(), serde_json::to_string(members).unwrap_or_default().into()],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn muted(&self, owner: &str, peer: &str) -> bool {
+        let (o, p) = (owner.to_owned(), peer.to_owned());
+        self.db.readers().read(move |c| Ok(c.query_row("SELECT muted FROM chat_prefs WHERE owner_hex = ?1 AND peer = ?2", [&o, &p], |r| r.get::<_, i64>(0)).optional()?)).await.ok().flatten() == Some(1)
+    }
+
+    /// Accusés de lecture et « en train d'écrire » partagés par le titulaire (oui par défaut).
+    async fn shares_activity(&self, owner: &str) -> bool {
+        let o = owner.to_owned();
+        self.db.readers().read(move |c| Ok(c.query_row("SELECT value FROM kv WHERE scope = 'chat_privacy' AND key = ?1", [&o], |r| r.get::<_, String>(0)).optional()?)).await.ok().flatten().as_deref() != Some("off")
+    }
+
+    /// Emballe une rumeur pour la conversation `peer` (chaque participant d'un groupe, balise `g` comprise) et la remet ; `extra`
+    /// reçoit aussi la rumeur (participant ajouté), `ttl` la fait expirer, `copy` en garde une copie pour les autres stations du
+    /// titulaire. Rend le nombre de remises réussies.
+    #[allow(clippy::too_many_arguments)]
+    async fn emit(&self, owner: &str, peer: &str, k: u32, extra_tags: Vec<Vec<String>>, content: String, ttl: Option<u64>, copy: bool, extra: &[String]) -> Result<usize, ChatError> {
+        let group = self.group(owner, peer).await;
+        let mut targets: Vec<String> = match &group {
+            Some((_, m)) => m.iter().chain(extra).filter(|x| *x != owner).cloned().collect(),
+            None => vec![self.channel(peer).await?],
+        };
+        targets.sort_unstable();
+        targets.dedup();
+        let secret = self.keys.secret(owner).ok_or(ChatError::NoKey)?;
+        let created = u64::try_from(now()).unwrap_or(0);
+        let mut tags: Vec<Vec<String>> = targets.iter().map(|t| vec!["p".into(), t.clone()]).collect();
+        if group.is_some() {
+            tags.push(vec!["g".into(), peer.to_owned()]);
+        }
+        tags.extend(extra_tags);
+        let rumor = nip59::Rumor { pubkey: owner.to_owned(), created_at: created, kind: k, tags, content };
+        let wrap = |to: &str| match ttl {
+            Some(t) => nip59::gift_wrap_expiring(&secret, to, &rumor, created, created + t),
+            None => nip59::gift_wrap(&secret, to, &rumor, created),
+        };
+        let mut ok = 0;
+        for t in &targets {
+            let w = wrap(t).map_err(|e| ChatError::Invalid(e.to_string()))?;
+            if (self.deliver)(t.clone(), w).await.is_ok() {
+                ok += 1;
+            }
+        }
+        if copy {
+            let w = wrap(owner).map_err(|e| ChatError::Invalid(e.to_string()))?;
+            let _ = (self.publish_local)(owner.to_owned(), w).await;
+        }
+        Ok(ok)
+    }
+
+    /// Conversation d'un message du titulaire.
+    async fn peer_of(&self, owner: &str, id: &str) -> Result<(String, bool), ChatError> {
+        let (o, i) = (owner.to_owned(), id.to_owned());
+        self.db
+            .readers()
+            .read(move |c| Ok(c.query_row("SELECT peer, mine FROM chat_messages WHERE owner_hex = ?1 AND id = ?2", [&o, &i], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? == 1))).optional()?))
+            .await
+            .map_err(db_err)?
+            .ok_or_else(|| ChatError::Invalid("message inconnu".into()))
+    }
+
+    /// Réagit à un message (`emoji` vide : retire sa réaction).
+    pub async fn react(&self, owner: &str, id: &str, emoji: &str) -> Result<Value, ChatError> {
+        if !is_hex64(id) {
+            return Err(ChatError::Invalid("message invalide".into()));
+        }
+        let emoji = emoji_of(emoji).ok_or_else(|| ChatError::Invalid("réaction : un emoji".into()))?;
+        let (peer, _) = self.peer_of(owner, id).await?;
+        if self.group(owner, &peer).await.is_some_and(|(_, m)| !m.iter().any(|x| x == owner)) {
+            return Err(ChatError::Invalid("vous avez quitté ce groupe".into()));
+        }
+        self.put_reaction(owner, &peer, id, owner, &emoji).await;
+        self.emit(owner, &peer, kind::REACTION, vec![vec!["e".into(), id.to_owned()], vec!["k".into(), kind::CHAT.to_string()]], emoji.clone(), None, true, &[]).await?;
+        self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", peer.clone(), None);
+        Ok(json!({ "id": id, "emoji": emoji }))
+    }
+
+    /// Signale « en train d'écrire » à la conversation (rien si le titulaire ne partage pas son activité).
+    pub async fn typing(&self, owner: &str, peer: &str) -> Result<Value, ChatError> {
+        if !is_hex64(peer) || peer == owner {
+            return Err(ChatError::Invalid("destinataire invalide".into()));
+        }
+        if !self.shares_activity(owner).await {
+            return Ok(json!({ "sent": 0 }));
+        }
+        let n = self.emit(owner, peer, kind::CHAT, vec![vec!["t".into(), TYPING_TAG.into()]], String::new(), Some(TYPING_TTL), false, &[]).await?;
+        Ok(json!({ "sent": n }))
+    }
+
+    /// Modifie un message envoyé par le titulaire.
+    pub async fn edit(&self, owner: &str, id: &str, text: &str) -> Result<Value, ChatError> {
+        if !is_hex64(id) {
+            return Err(ChatError::Invalid("message invalide".into()));
+        }
+        let text = clean(text);
+        if text.is_empty() || text.chars().count() > MAX_CHARS {
+            return Err(ChatError::Invalid(format!("texte de 1 à {MAX_CHARS} caractères")));
+        }
+        let (peer, mine) = self.peer_of(owner, id).await?;
+        if !mine {
+            return Err(ChatError::Invalid("on ne modifie que ses propres messages".into()));
+        }
+        self.db.writer().execute("UPDATE chat_messages SET text = ?3, edited = 1 WHERE owner_hex = ?1 AND id = ?2", vec![owner.to_owned().into(), id.to_owned().into(), text.clone().into()]).await.map_err(db_err)?;
+        self.emit(owner, &peer, kind::CHAT, vec![vec!["t".into(), EDIT_TAG.into()], vec!["e".into(), id.to_owned()]], text.clone(), None, true, &[]).await?;
+        self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", peer, None);
+        Ok(json!({ "id": id, "text": text, "edited": true }))
+    }
+
+    /// Change un groupe : `{ rename }`, `{ add }`, `{ remove }` ou `{ leave: true }`. Tous les participants (anciens et nouveaux)
+    /// sont prévenus ; un participant retiré, ou qui part, garde l'historique sans pouvoir écrire.
+    pub async fn group_update(&self, owner: &str, id: &str, op: &Value) -> Result<Value, ChatError> {
+        let (name, mut members) = self.group(owner, id).await.ok_or_else(|| ChatError::Invalid("groupe inconnu".into()))?;
+        if !members.iter().any(|m| m == owner) {
+            return Err(ChatError::Invalid("vous avez quitté ce groupe".into()));
+        }
+        let mut name = name;
+        let mut extra = Vec::new();
+        let delta;
+        if let Some(n) = op["rename"].as_str() {
+            let n: String = clean(n).chars().take(80).collect();
+            name = (!n.is_empty()).then_some(n);
+            delta = json!({ "op": "rename", "name": name });
+        } else if let Some(h) = op["add"].as_str() {
+            delta = json!({ "op": "add", "who": h });
+            if !is_hex64(h) || members.len() >= MAX_GROUP {
+                return Err(ChatError::Invalid(format!("{MAX_GROUP} participants au plus")));
+            }
+            if !members.iter().any(|m| m == h) {
+                members.push(h.to_owned());
+                extra.push(h.to_owned());
+            }
+        } else if let Some(h) = op["remove"].as_str() {
+            if h == owner {
+                return Err(ChatError::Invalid("pour partir, quittez le groupe".into()));
+            }
+            members.retain(|m| m != h);
+            delta = json!({ "op": "remove", "who": h });
+        } else if op["leave"].as_bool() == Some(true) {
+            members.retain(|m| m != owner);
+            delta = json!({ "op": "leave" });
+        } else {
+            return Err(ChatError::Invalid("changement de groupe inconnu".into()));
+        }
+        members.sort_unstable();
+        let mut delta = delta;
+        delta["members"] = json!(members);
+        let content = delta.to_string();
+        let mut tags = vec![vec!["t".into(), GROUP_TAG.into()]];
+        if let Some(n) = &name {
+            tags.push(vec!["subject".into(), n.clone()]);
+        }
+        // Avant l'enregistrement : la rumeur part vers les anciens participants (le retiré l'apprend) et les nouveaux.
+        self.emit(owner, id, kind::CHAT, tags, content, None, true, &extra).await?;
+        self.set_group(owner, id, name.as_deref(), &members).await?;
+        self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", id.to_owned(), None);
+        Ok(json!({ "id": id, "name": name, "members": members }))
+    }
+
+    /// Épingler, archiver, mettre en sourdine une conversation (champs `pinned`, `archived`, `muted` présents seulement).
+    pub async fn prefs(&self, owner: &str, peer: &str, v: &Value) -> Result<Value, ChatError> {
+        if !is_hex64(peer) {
+            return Err(ChatError::Invalid("conversation invalide".into()));
+        }
+        let get = |k: &str| v[k].as_bool().map(i64::from);
+        let (o, p, pin, arc, mute) = (owner.to_owned(), peer.to_owned(), get("pinned"), get("archived"), get("muted"));
+        self.db
+            .writer()
+            .execute(
+                "INSERT INTO chat_prefs(owner_hex, peer, pinned, archived, muted) VALUES (?1, ?2, COALESCE(?3, 0), COALESCE(?4, 0), COALESCE(?5, 0)) \
+                 ON CONFLICT(owner_hex, peer) DO UPDATE SET pinned = COALESCE(?3, pinned), archived = COALESCE(?4, archived), muted = COALESCE(?5, muted)",
+                vec![o.into(), p.into(), pin.into(), arc.into(), mute.into()],
+            )
+            .await
+            .map_err(db_err)?;
+        self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", peer.to_owned(), None);
+        Ok(json!({ "peer": peer }))
+    }
+
+    /// Réglages du chat du titulaire : `receipts` (accusés de lecture et « en train d'écrire »). `set` les change.
+    pub async fn settings(&self, owner: &str, set: Option<&Value>) -> Result<Value, ChatError> {
+        if let Some(on) = set.and_then(|v| v["receipts"].as_bool()) {
+            self.db
+                .writer()
+                .execute("INSERT OR REPLACE INTO kv(scope, key, value, updated_at) VALUES ('chat_privacy', ?1, ?2, ?3)", vec![owner.to_owned().into(), (if on { "on" } else { "off" }).to_owned().into(), now().into()])
+                .await
+                .map_err(db_err)?;
+        }
+        Ok(json!({ "receipts": self.shares_activity(owner).await }))
     }
 
     /// Boucle de réception jusqu'à l'arrêt. Une enveloppe NIP-59 acceptée par le relai réveille la lecture **tout de suite** :

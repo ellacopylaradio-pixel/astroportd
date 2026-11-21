@@ -402,15 +402,24 @@ with sync_playwright() as pw:
     check('Oui, avec plaisir !' in page.inner_text('.ch-thread'), "le lien depuis une fiche ouvre directement la conversation")
     # Menu d'un message (clic droit) : citer et répondre ; la réponse part avec la citation ; coche « remis » ; Ẑen vers un proche d'ici.
     page.click('.ch-msg.theirs', button='right'); page.wait_for_selector('.ch-menu')
-    check([b.inner_text() for b in page.query_selector_all('.ch-menu button')] == ['↩️ Citer et répondre', '📋 Copier', '🗑️ Supprimer pour moi'], 'clic droit : Répondre, Copier, Supprimer pour moi')
+    check([b.inner_text() for b in page.query_selector_all('.ch-menu [role=menuitem]')] == ['↩️ Citer et répondre', '📋 Copier', '🗑️ Supprimer pour moi'] and len(page.query_selector_all('.ch-emojis button')) == 6, 'clic droit : six réactions, puis Répondre, Copier, Supprimer pour moi')
     page.click('.ch-menu button:has-text("Citer et répondre")'); page.wait_for_selector('.ch-replybar:not([hidden])')
     page.fill('.ch-form textarea', 'Je te le confirme'); page.press('.ch-form textarea', 'Enter'); page.wait_for_selector('.ch-quote'); page.wait_for_timeout(200)
     sent = [b for p_, b in STATE['posts'] if p_ == '/api/v1/chat/send']
     check(sent[-1].get('reply') == 'a' and 'Salut, tu viens samedi ?' in page.inner_text('.ch-quote') and page.is_hidden('.ch-replybar'), 'la réponse part avec le message cité, le montre au-dessus, et le bandeau de réponse se ferme')
     check(page.query_selector('.ch-msg.mine .ch-tick') is not None, 'ses messages portent la coche « remis »')
     page.click('.ch-kebab'); page.wait_for_selector('.ch-head .ch-menu')
-    check([x.inner_text() for x in page.query_selector_all('.ch-head .ch-menu button')] == ['Ẑ Envoyer des Ẑen à Léa', '🗑️ Effacer la conversation'], 'menu ⋮ : payer et effacer, en toutes lettres')
+    items = [x.inner_text() for x in page.query_selector_all('.ch-head .ch-menu button')]
+    check(items[0] == 'Ẑ Envoyer des Ẑen à Léa' and '📌 Épingler' in items and '🔕 Mettre en sourdine' in items and items[-1] == '🗑️ Effacer la conversation', 'menu ⋮ : payer, épingler, sourdine, confidentialité, effacer, en toutes lettres : ' + str(items))
     page.keyboard.press('Escape')
+    # Réaction depuis le menu d'un message, puis modification de son propre message.
+    page.click('.ch-msg.theirs', button='right'); page.wait_for_selector('.ch-emojis')
+    page.click('.ch-emojis button:has-text("👍")'); page.wait_for_selector('.ch-react'); page.wait_for_timeout(200)
+    check('👍' in page.inner_text('.ch-msg.theirs .ch-reacts'), 'une réaction apparaît sous le message')
+    page.click('.ch-msg.mine >> nth=-1', button='right'); page.wait_for_selector('.ch-menu button:has-text("Modifier")')
+    page.click('.ch-menu button:has-text("Modifier")'); page.wait_for_selector('.ch-replybar:not([hidden])')
+    page.fill('.ch-form textarea', 'Je te le confirme, à samedi'); page.press('.ch-form textarea', 'Enter'); page.wait_for_timeout(300)
+    check('à samedi' in page.inner_text('.ch-thread') and 'modifié' in page.inner_text('.ch-thread'), 'un message modifié porte la mention « modifié »')
     page.click('.ch-new'); page.wait_for_selector('.ch-pick li button'); page.wait_for_timeout(200)
     check('Léa' in page.inner_text('.ch-pick') and 'Vous vous suivez' in page.inner_text('.ch-pick'), '« Nouveau message » : les proches, avec ce qui les rend joignables')
     page.keyboard.press('Escape')
