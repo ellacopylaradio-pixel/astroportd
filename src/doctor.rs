@@ -33,6 +33,22 @@ pub struct DoctorArgs {
     json: bool,
 }
 
+/// Sans `--db`, `--lat`, `--lon` : la base de la station (`<station>/uplanet.db`, si elle existe) et la position
+/// de son `station.conf` (à côté de la base), pour qu'un simple `astroportd doctor` examine tout.
+fn station_defaults(a: &mut DoctorArgs, station: Option<&std::path::Path>) {
+    if a.db.is_none() {
+        a.db = station.map(|s| s.join("uplanet.db")).filter(|p| p.is_file());
+    }
+    if a.lat.is_none() || a.lon.is_none() {
+        let Some(conf) = a.db.as_ref().and_then(|d| d.parent()).or(station).map(|d| d.join("station.conf")) else { return };
+        let kv = crate::init::read_conf(&conf);
+        let num = |k: &str| kv.iter().find(|(key, _)| key == k).and_then(|(_, v)| v.parse::<f64>().ok());
+        if let (Some(la), Some(lo)) = (num("lat"), num("lon")) {
+            (a.lat, a.lon) = (Some(la), Some(lo));
+        }
+    }
+}
+
 /// Gravité d'une vérification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -318,7 +334,9 @@ fn search_checks(db: Option<&Path>, conn: Option<&Connection>, out: &mut Vec<Che
 }
 
 /// Exécute le diagnostic.
-pub fn run(a: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(mut a: DoctorArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let station = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".zen/astroportd"));
+    station_defaults(&mut a, station.as_deref());
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
     let layout = match &a.game_dir {
         Some(dir) => Layout::new(dir),
@@ -393,6 +411,29 @@ mod tests {
 
     const NOW: i64 = 1_800_000_000;
     const DAY: i64 = 86_400;
+
+    #[test]
+    fn sans_option_la_base_et_la_position_de_la_station_sont_reprises() {
+        let dir = std::env::temp_dir().join(format!("doctor-defaults-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let blank = || DoctorArgs { db: None, game_dir: None, lat: None, lon: None, json: false };
+
+        let mut a = blank();
+        station_defaults(&mut a, Some(&dir));
+        assert!(a.db.is_none() && a.lat.is_none(), "rien à reprendre : rien d'inventé");
+
+        std::fs::write(dir.join("uplanet.db"), b"").unwrap();
+        std::fs::write(dir.join("station.conf"), "# commentaire\nlat = 43.6046\nlon = -1.4451\n").unwrap();
+        let mut a = blank();
+        station_defaults(&mut a, Some(&dir));
+        assert_eq!(a.db.as_deref(), Some(dir.join("uplanet.db").as_path()));
+        assert_eq!((a.lat, a.lon), (Some(43.6046), Some(-1.4451)));
+
+        let mut a = DoctorArgs { lat: Some(1.0), lon: Some(2.0), ..blank() };
+        station_defaults(&mut a, Some(&dir));
+        assert_eq!((a.lat, a.lon), (Some(1.0), Some(2.0)), "les options données l'emportent");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn certificates_are_judged_against_the_renewal_window() {

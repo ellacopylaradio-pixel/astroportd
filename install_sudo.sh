@@ -14,6 +14,7 @@
 #      référence aux fichiers du disque : aucune place en plus), service systemd sous l'utilisateur. Un kubo déjà installé (par
 #      Astroport.ONE, par exemple) est gardé tel quel : seul le filestore est activé. Jamais en ẐEN (--no-kubo) ;
 #   3. « linger » : le service utilisateur d'astroportd démarre avec la machine, sans session ouverte.
+#   4. plafond du journal systemd (SystemMaxUse=500M), s'il n'y en a aucun.
 #
 # Il ne touche jamais au pare-feu, aux ports, ni à astroportd lui-même.
 
@@ -27,7 +28,7 @@ KUBO_SHA512_arm64="717a1fbe34312068e3c63e96f2e95404ee3f49b07a16a4ddcce23e0d08a55
 # présent sur la machine, c'est lui qui est lu).
 ORIGIN_SWARM_KEY=$'/key/swarm/psk/1.0.0/\n/base16/\n0000000000000000000000000000000000000000000000000000000000000000'
 ORIGIN_BOOTSTRAP=(
-  /ip4/149.102.158.67/tcp/4001/p2p/12D3KooWM6jEPqDEgnjmTjnB4vCBkGoQp7rtS5m9mpikSHoDD581
+  /ip4/149.102.158.67/tcp/4101/p2p/12D3KooWMbbWfSd8vq4eUKkhpnLh3ZMzgTghnH1fJ7bxfqmyNCkv
   /dnsaddr/ipfs.sagittarius.copylaradio.com/p2p/12D3KooWAvWWWtscBjFwybk8WSr2tmiwDtvNzJEh8vwyFntbpxPX
   /dnsaddr/ipfs.guenoel.fr/p2p/12D3KooWJRBjm6RHfse7oTMkSsvBk7XNKTTWQozoDZAFLSPRKPXt
 )
@@ -260,6 +261,19 @@ elif loginctl show-user "$TARGET" -p Linger 2>/dev/null | grep -q '=yes'; then
   say "  ✔ déjà réglé : le service d'astroportd démarre sans session ouverte"
 else
   run loginctl enable-linger "$TARGET" && say "  ✔ réglé : le service d'astroportd démarrera avec la machine"
+fi
+
+# --- 4. Plafond du journal systemd (sinon jusqu'à 10 % du disque ; « astroportd doctor » le vérifie) --------------
+JOURNAL_CONF=/etc/systemd/journald.conf.d/astroportd.conf
+if [ -d /etc/systemd ] && ! grep -rqs '^[[:space:]]*SystemMaxUse=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/; then
+  say ""
+  say "▶ Journal systemd"
+  if [ "$DRY" = 1 ]; then say "  \$ printf '[Journal]\\nSystemMaxUse=500M\\n' > ${JOURNAL_CONF} && systemctl restart systemd-journald"
+  elif mkdir -p "${JOURNAL_CONF%/*}" && printf '[Journal]\nSystemMaxUse=500M\n' > "$JOURNAL_CONF" && systemctl restart systemd-journald; then
+    say "  ✔ plafonné à 500 Mo (${JOURNAL_CONF})"
+  else
+    warn "plafond du journal non posé : ${JOURNAL_CONF}"
+  fi
 fi
 
 say ""

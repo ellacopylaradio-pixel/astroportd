@@ -812,7 +812,7 @@ if [ "$ORT_PENDING" = 1 ]; then
 fi
 
 # --- Ports déjà occupés (cause fréquente de « Address already in use ») ------------------------------------------
-if command -v ss >/dev/null 2>&1; then
+if [ "$UPDATE" = 0 ] && command -v ss >/dev/null 2>&1; then   # une station en place a déjà réglé ses ports
   busy=""; for p in 8090 80 443; do ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$" && busy="${busy} ${p}"; done
   if [ -n "$busy" ]; then
     warn "Ports déjà utilisés sur cette machine :${busy} (IPFS, Nginx Proxy Manager…)."
@@ -841,7 +841,11 @@ if [ "$UPDATE" = 1 ]; then
       fi ;;
     absent)
       if pgrep -x "$BIN" >/dev/null 2>&1; then warn "${BIN} tourne hors systemd : arrêtez-le et relancez votre commande « ${BIN} serve … » pour passer à la nouvelle version."
-      else say "  Démarrer : systemctl --user start ${BIN} (ou votre commande « ${BIN} serve … »)"; fi ;;
+      else
+        # Pas d'unité : « systemctl --user start » échouerait. Linger seul ne suffit pas à démarrer avec la machine.
+        say "  Aucun service installé : relancez votre commande « ${BIN} serve … »,"
+        say "  ou faites-en un service qui démarre avec la machine : ${BIN} init --systemd (la station existante est reprise)"
+      fi ;;
     *) say "  Le service est arrêté : systemctl --user start ${BIN}" ;;
   esac
   say ""
