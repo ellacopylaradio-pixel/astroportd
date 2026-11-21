@@ -35,6 +35,9 @@ export function news({ faces, shares, backup, fp }) {
 
 export default async function home(root, K) {
   const { h, t } = K, soft = p => K.api(p).catch(() => null);
+  // Bêta : créée une fois, gardée d'un rafraîchissement à l'autre (un retour en cours de saisie n'est jamais effacé).
+  const beta = h('section', { class: 'card bt-card' });
+  K.mod('m-beta.js').then(m => beta.replaceChildren(...m.card(K)), () => { beta.hidden = true; });
   const draw = async () => {
     const health = await fetch('/health').then(r => r.json()).catch(() => null);
     const [me, dash, faces, friends, backup, fp, devices, shares] = await Promise.all([K.api('/api/v1/me'), K.api('/api/v1/dashboard'), soft('/api/v1/faces'), soft('/api/v1/friends'), soft('/api/v1/backup'), soft('/api/v1/me/footprint'), soft('/api/v1/devices'), soft('/api/v1/faces/pending-shares')]);
@@ -55,7 +58,8 @@ export default async function home(root, K) {
         me.ai ? tile('🤖', 'Mon assistant', t('BRO vous répond'), '#/bro') : tile('📱', 'Mon smartphone', nDevices ? t('{0} appareil(s) synchronisé(s)', nDevices) : t('Quitter Google et Apple : photos, contacts, agenda'), '#/account?tab=appareils')),
       s.left ? h('section', { class: 'card' }, h('h2', {}, t('Bien démarrer'), h('small', { class: 'muted' }, ` · ${s.list.length - s.left}/${s.list.length}`)),
         h('progress', { max: s.list.length, value: s.list.length - s.left, 'aria-label': t('Étapes terminées') }),
-        h('ul', { class: 'hm-steps' }, s.list.map(x => h('li', { class: x.done ? 'done' : '' }, h('span', { 'aria-hidden': 'true' }, x.done ? '✅' : '⬜'), h('div', {}, x.done ? h('span', {}, t(x.title)) : h('a', { href: x.href }, h('strong', {}, t(x.title))), x.done ? null : h('p', { class: 'muted' }, t(x.why))))))) : null
+        h('ul', { class: 'hm-steps' }, s.list.map(x => h('li', { class: x.done ? 'done' : '' }, h('span', { 'aria-hidden': 'true' }, x.done ? '✅' : '⬜'), h('div', {}, x.done ? h('span', {}, t(x.title)) : h('a', { href: x.href }, h('strong', {}, t(x.title))), x.done ? null : h('p', { class: 'muted' }, t(x.why))))))) : null,
+      beta
     ].filter(Boolean));
   };
   const link = h('link', { rel: 'stylesheet', href: '/ui/m-home.css' }); document.head.append(link); K.cleanup(() => link.remove());

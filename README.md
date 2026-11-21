@@ -6,6 +6,11 @@
 
 **Votre cloud, vos photos, vos amis et votre économie coopérative, sur une machine qui est à vous.**
 
+> 🧪 **astroportd est en bêta.** Il s'améliore chaque semaine, avec ceux qui l'utilisent, et **chacun peut participer à le rendre
+> meilleur** : signalez un souci ou proposez une idée depuis l'accueil de l'application (« 🐞 Signaler un souci », « 💡 Proposer une
+> idée »), ouvrez un [ticket](https://github.com/papiche/astroportd/issues), ou proposez une modification (voir
+> [docs/DEVELOPPER.md](docs/DEVELOPPER.md)). Gardez une sauvegarde de ce qui vous est précieux.
+
 astroportd est une **station personnelle** : un seul programme, du Raspberry Pi au serveur GPU. Il garde vos fichiers
 **chiffrés**, retrouve les visages dans vos photos et les partage avec vos amis, vous fait **sauvegarder par vos
 proches**, et tient une **comptabilité coopérative en Ẑen** adossée à la monnaie libre Ğ1. Sans plateforme, sans

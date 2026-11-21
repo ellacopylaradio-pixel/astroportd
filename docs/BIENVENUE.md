@@ -32,6 +32,7 @@ C'est le code de votre compte, comme celui d'une carte bancaire. Ne le donnez à
 
 - **Depuis le navigateur** : onglet **Fichiers**, déposez vos photos.
 - **Depuis le téléphone, sans rien faire ensuite** : dans **Moi › Mes appareils**, créez le jeton de votre téléphone. Sur Android, installez DAVx⁵ ; sur iPhone, ajoutez un compte dans les réglages du système. Photos, contacts et agenda se synchronisent alors avec la station.
+- **Pas à pas, pour Android, iPhone et ordinateur** : [Brancher mes appareils](APPAREILS.md).
 
 ## 5. Vos proches
 

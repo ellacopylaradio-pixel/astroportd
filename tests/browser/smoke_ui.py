@@ -181,7 +181,10 @@ with sync_playwright() as pw:
     # L'API donne `/dav` : l'écran montre (et copie) l'adresse complète, et le bouton de remplacement n'effraie pas sans raison.
     page.click('#ac-t-appareils'); page.wait_for_timeout(100)
     main_text = page.inner_text('main')
-    check(f'http://127.0.0.1:{port}/dav' in main_text and 'celui de la station, jamais remplacé' in main_text, "l'adresse WebDAV est complète et le jeton principal est présenté sans bouton menaçant")
+    check(f'http://127.0.0.1:{port}/dav' in main_text, "l'adresse WebDAV est complète")
+    # Le jeton principal se montre sans être remplacé (il est dérivé du secret de la station).
+    page.click('button:text-is("👁 Afficher")'); page.wait_for_selector('input.ac-token')
+    check(page.input_value('input.ac-token') == 'jeton', 'le jeton principal s\'affiche sans être remplacé')
     check(not page.locator('button:text-is("Remplacer le jeton principal")').is_visible(), 'le remplacement du jeton principal est replié')
     page.click('summary:text-is("Remplacer le jeton principal")'); page.click('button:text-is("Remplacer le jeton principal")'); page.click('button:text-is("Confirmer ?")')  # clic armé (plus de boîte bloquante) : le second clic confirme
     page.wait_for_selector('text=NOUVEAU-JETON'); page.wait_for_timeout(100)

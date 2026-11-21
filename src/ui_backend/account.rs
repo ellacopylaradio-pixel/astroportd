@@ -119,11 +119,38 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
             })
             .await
             .map_err(db_err)?;
+        // Répartition de l'espace par nature de fichier, privé (uCloud) et public (/Public + images publiées), pour le camembert.
+        let by_kind = {
+            let owner = who.hex.clone();
+            svc.db
+                .readers()
+                .read(move |c| {
+                    let mut st = c.prepare(
+                        "SELECT CASE WHEN mime LIKE 'image/%' THEN 'photo' WHEN mime LIKE 'video/%' THEN 'video' WHEN mime LIKE 'audio/%' THEN 'music' \
+                                WHEN mime LIKE 'text/%' OR mime = 'application/pdf' OR mime LIKE 'application/vnd.%' OR mime LIKE 'application/msword%' THEN 'doc' ELSE 'other' END, \
+                                CASE WHEN path = '/Public' OR path LIKE '/Public/%' THEN 1 ELSE 0 END, COALESCE(SUM(size), 0) \
+                         FROM ucloud_entries WHERE owner_hex = ?1 AND type = 'file' GROUP BY 1, 2",
+                    )?;
+                    let mut out = json!({ "ucloud": {}, "public": {} });
+                    for row in st.query_map([&owner], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
+                        let (k, public, n) = row?;
+                        out[if public == 1 { "public" } else { "ucloud" }][k] = json!(n);
+                    }
+                    let pics: i64 = c.query_row("SELECT COALESCE(SUM(size), 0) FROM public_blobs WHERE owner = ?1", [&owner], |r| r.get(0))?;
+                    if pics > 0 {
+                        let prev = out["public"]["photo"].as_i64().unwrap_or(0);
+                        out["public"]["photo"] = json!(prev + pics);
+                    }
+                    Ok(out)
+                })
+                .await
+                .map_err(db_err)?
+        };
         // Vigie « vie privée » de /Public, en direct : l'alerte de l'accueil disparaît dès que le fichier est retiré.
         let privacy = crate::privacy_watch::check(&svc.db, &who.hex).await.map_err(db_err)?;
         Ok(json!({
             "privacy": { "unserved": privacy.unserved.len(), "sensitive": privacy.sensitive.len() + privacy.papers.len(), "papers": privacy.papers.len() },
-            "disk": { "used_bytes": used, "files": files, "quota_bytes": quota, "unlimited": unlimited, "tier": format!("{:?}", account.tier) },
+            "disk": { "used_bytes": used, "files": files, "quota_bytes": quota, "unlimited": unlimited, "tier": format!("{:?}", account.tier), "by_kind": by_kind },
             "opex": opex, "capex": capex,
             "hosting": hosting,
         }))
@@ -206,6 +233,142 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
     async fn account_unlock(&self, ip: Option<std::net::IpAddr>, email: String, pass: String) -> Result<Value, ApiError> {
         self.account_service()?.unlock(ip, &email, &pass).await.map_err(account_error)
     }
+    async fn blog(&self, who: &Principal, op: &'static str, body: Value) -> Result<Value, ApiError> {
+        let site = self.site.as_ref().ok_or_else(|| ApiError::unavailable("site public non activé sur cette station"))?;
+        match op {
+            "publish" => {
+                // Public d'un article : tout le monde (défaut), mes amis réciproques, ou un groupe du chat. Réservé = NIP-70 `["-"]` et un
+                // `p` par destinataire : le relai ne le livre qu'à eux (et à l'auteur), le site public ne le montre jamais.
+                let mut body = body;
+                let audience = body["audience"].as_str().unwrap_or("public").to_owned();
+                if audience != "public" && body["kind"] == 30_023 {
+                    let to: Vec<String> = if audience == "friends" {
+                        crate::public_blog::reciprocal(&self.services.db, &who.hex).await
+                    } else if let Some(id) = audience.strip_prefix("group:") {
+                        let (h, id) = (who.hex.clone(), id.to_owned());
+                        let members: Option<String> = self.services.db.readers().read(move |c| Ok(rusqlite::OptionalExtension::optional(c.query_row("SELECT members FROM chat_groups WHERE owner_hex = ?1 AND id = ?2", [&h, &id], |r| r.get(0)))?)).await.map_err(db_err)?;
+                        serde_json::from_str(&members.ok_or_else(|| ApiError::bad_request("groupe inconnu"))?).unwrap_or_default()
+                    } else {
+                        return Err(ApiError::bad_request("public : public, friends ou group:<id>"));
+                    };
+                    let to: Vec<String> = to.into_iter().filter(|k| k != &who.hex && k.len() == 64).take(400).collect();
+                    if to.is_empty() {
+                        return Err(ApiError::bad_request("personne à qui réserver cet article : aucun ami réciproque ou groupe vide"));
+                    }
+                    let tags = body["tags"].as_array_mut().ok_or_else(|| ApiError::bad_request("tags attendus"))?;
+                    tags.retain(|t| !matches!(t[0].as_str(), Some("-" | "p" | "audience")));
+                    tags.push(json!(["-"]));
+                    tags.push(json!(["audience", audience]));
+                    tags.extend(to.into_iter().map(|k| json!(["p", k])));
+                }
+                let v = self.account_service()?.publish_post(&who.hex, &body).await.map_err(account_error)?;
+                Ok(json!({ "event": v }))
+            }
+            "friends" => {
+                // Chez mes amis : leurs articles publics et ceux qu'ils m'ont réservés, du plus récent au plus ancien.
+                let friends = crate::public_blog::reciprocal(&self.services.db, &who.hex).await;
+                if friends.is_empty() {
+                    return Ok(json!({ "posts": [] }));
+                }
+                let me = who.hex.clone();
+                type Row = (String, String, String, String, i64, Option<String>, Option<String>);
+                let rows: Vec<Row> = self
+                    .services
+                    .db
+                    .readers()
+                    .read(move |c| {
+                        let marks = vec!["?"; friends.len()].join(",");
+                        let sql = format!(
+                            "SELECT e.pubkey, e.content, e.tags, e.d_tag, e.created_at, \
+                                    (SELECT p.content FROM nostr_events p WHERE p.pubkey = e.pubkey AND p.kind = 0 ORDER BY p.created_at DESC LIMIT 1), \
+                                    (SELECT i.email FROM identities i WHERE i.hex = e.pubkey) \
+                             FROM nostr_events e WHERE e.kind = 30023 AND e.d_tag IS NOT NULL AND e.pubkey IN ({marks}) \
+                               AND (instr(e.tags, '[\"-\"]') = 0 OR EXISTS (SELECT 1 FROM nostr_tags t WHERE t.event_id = e.seq AND t.name = 'p' AND t.value = ?)) \
+                             ORDER BY e.created_at DESC LIMIT 60"
+                        );
+                        let mut st = c.prepare(&sql)?;
+                        let params = friends.iter().cloned().chain(std::iter::once(me));
+                        let rows = st.query_map(rusqlite::params_from_iter(params), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?.collect::<Result<Vec<_>, _>>()?;
+                        Ok(rows)
+                    })
+                    .await
+                    .map_err(db_err)?;
+                let now = now_secs();
+                let posts: Vec<Value> = rows
+                    .into_iter()
+                    .filter_map(|(author, content, tags, d, created, profile, email)| {
+                        let reserved = tags.contains("[\"-\"]");
+                        let a = crate::public_blog::parse_article(&content, &tags, d, created);
+                        if a.published > now {
+                            return None;
+                        }
+                        let p: Value = profile.and_then(|c| serde_json::from_str(&c).ok()).unwrap_or(Value::Null);
+                        let name = p["display_name"].as_str().or_else(|| p["name"].as_str()).filter(|s| !s.trim().is_empty()).map_or_else(|| format!("{}…", &author[..8.min(author.len())]), str::to_owned);
+                        Some(json!({ "author": author, "name": name, "picture": p["picture"], "site": email.map(|e| format!("/site/{}/", crate::public_site::name_of(&e))),
+                            "d": a.slug, "title": a.title, "summary": a.summary, "image": a.image, "tags": a.tags, "published_at": a.published, "reserved": reserved,
+                            "minutes": crate::public_blog::reading_minutes(&a.content), "html": crate::public_blog::markdown(&a.content) }))
+                    })
+                    .collect();
+                Ok(json!({ "posts": posts }))
+            }
+            "preview" => {
+                let md = body["markdown"].as_str().unwrap_or_default();
+                if md.len() > 256 * 1024 {
+                    return Err(ApiError::bad_request("texte trop long (256 Ko au plus)"));
+                }
+                Ok(json!({ "html": crate::public_blog::markdown(md), "minutes": crate::public_blog::reading_minutes(md) }))
+            }
+            "image" => {
+                use base64::Engine as _;
+                let data = body["data"].as_str().unwrap_or_default();
+                let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| ApiError::bad_request("image : base64 attendu"))?;
+                let rel = site.save_image(&who.hex, body["name"].as_str().unwrap_or("image"), bytes).await.map_err(ApiError::bad_request)?;
+                let name = crate::public_site::name_of(who.email.as_deref().unwrap_or_default());
+                Ok(json!({ "path": format!("/site/{name}/{rel}"), "rel": rel }))
+            }
+            "settings" => {
+                site.set_theme(&who.hex, body["theme"].as_str().unwrap_or_default()).await.map_err(ApiError::bad_request)?;
+                Ok(json!({ "theme": body["theme"] }))
+            }
+            _ => {
+                // Mes articles et brouillons (un brouillon plus récent qu'un article du même identifiant est sa version en cours).
+                let h = who.hex.clone();
+                let rows: Vec<(i64, String, String, String, i64)> = self
+                    .services
+                    .db
+                    .readers()
+                    .read(move |c| {
+                        let mut st = c.prepare("SELECT kind, content, tags, d_tag, created_at FROM nostr_events WHERE pubkey = ?1 AND kind IN (30023, 30024) AND d_tag IS NOT NULL ORDER BY created_at DESC LIMIT 500")?;
+                        let rows = st.query_map([&h], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<Vec<_>, _>>()?;
+                        Ok(rows)
+                    })
+                    .await
+                    .map_err(db_err)?;
+                let now = now_secs();
+                let posts: Vec<Value> = rows
+                    .into_iter()
+                    .map(|(kind, content, tags, d, created)| {
+                        let a = crate::public_blog::parse_article(&content, &tags, d, created);
+                        json!({ "draft": kind == 30_024, "audience": serde_json::from_str::<Vec<Vec<String>>>(&tags).ok().and_then(|t| t.into_iter().find(|x| x.first().map(String::as_str) == Some("audience")).and_then(|x| x.get(1).cloned())).unwrap_or_else(|| "public".into()), "d": a.slug, "title": a.title, "summary": a.summary, "image": a.image, "tags": a.tags, "published_at": a.published, "updated_at": created, "scheduled": kind == 30_023 && a.published > now, "content": a.content })
+                    })
+                    .collect();
+                let name = crate::public_site::name_of(who.email.as_deref().unwrap_or_default());
+                let h = who.hex.clone();
+                let groups: Vec<Value> = self
+                    .services
+                    .db
+                    .readers()
+                    .read(move |c| {
+                        let mut st = c.prepare("SELECT id, name, members FROM chat_groups WHERE owner_hex = ?1 ORDER BY name LIMIT 100")?;
+                        let rows = st.query_map([&h], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+                        Ok(rows.into_iter().map(|(id, name, m)| json!({ "id": id, "name": name, "members": serde_json::from_str::<Vec<String>>(&m).map_or(0, |v| v.len()) })).collect())
+                    })
+                    .await
+                    .map_err(db_err)?;
+                Ok(json!({ "posts": posts, "groups": groups, "theme": site.theme(&who.hex).await, "site": format!("/site/{name}/"), "hex": who.hex }))
+            }
+        }
+    }
     async fn account_sign(&self, who: &Principal, event: Value) -> Result<Value, ApiError> {
         self.account_service()?.sign(&who.hex, &event).await.map_err(account_error)
     }
@@ -256,6 +419,11 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
             self.services.activity.publish_to(astro_core::Audience::Captain, "system", "register", format!("{email} : {} Ğ1 reversés au portefeuille primal (CASH-BACK) avant l'éjection", Amount(cashback)), None);
         }
         Ok(json!({ "ejected": email, "cashback_g1_cents": cashback }))
+    }
+    async fn account_token_show(&self, who: &Principal) -> Result<Value, ApiError> {
+        let v = self.account_service()?.show_token(&who.hex).await.map_err(account_error)?;
+        self.services.activity.publish_to(astro_core::Audience::Owner(who.hex.clone()), "system", "ui:token", "jeton de connexion affiché dans Mon compte".to_owned(), None);
+        Ok(v)
     }
     async fn account_token_rotate(&self, who: &Principal) -> Result<Value, ApiError> {
         let v = self.account_service()?.rotate_token(&who.hex).await.map_err(account_error)?;

@@ -186,6 +186,11 @@ pub struct Policy {
     pub rules: BTreeMap<u32, KindRule>,
 }
 
+/// Événement protégé (NIP-70) : porte le tag `["-"]`.
+pub fn is_protected(e: &Event) -> bool {
+    e.tags.iter().any(|t| t.len() == 1 && t[0] == "-")
+}
+
 impl Default for Policy {
     fn default() -> Self {
         Self {
@@ -202,7 +207,7 @@ impl Default for Policy {
             ]
             .into_iter()
             .collect(),
-            addressed_kinds: [kind::DM_LEGACY, kind::GIFT_WRAP].into_iter().collect(),
+            addressed_kinds: [kind::DM_LEGACY, kind::GIFT_WRAP, 30_024].into_iter().collect(), // 30024 : brouillons d'article (NIP-23), à leur seul auteur
             friend_kinds: [kind::VIDEO, kind::VIDEO_SHORT, kind::VIDEO_SET].into_iter().collect(),
             rules: BTreeMap::new(),
         }
@@ -273,6 +278,10 @@ impl Policy {
 
     /// L'événement peut-il être livré à cette connexion ?
     pub fn can_read(&self, e: &Event, auth: &AuthState, circle: &dyn CircleProvider) -> bool {
+        // Article réservé (NIP-23 + NIP-70 `["-"]`) : son auteur et ses destinataires `p` (amis ou membres d'un groupe), jamais le public.
+        if e.kind == 30_023 && is_protected(e) {
+            return auth.contains(&e.pubkey) || p_tags(e).any(|p| auth.contains(p));
+        }
         match self.rule(e.kind).read {
             ReadRule::Deny => false,
             ReadRule::Public => true,
@@ -433,6 +442,21 @@ mod tests {
         assert!(!p.can_read(&app, &AuthState::default(), &c));
         assert!(!p.can_read(&app, &auth(&[9]), &c));
         assert!(p.can_read(&app, &auth(&[2]), &c));
+    }
+
+    #[test]
+    fn a_reserved_article_is_read_by_its_author_and_recipients_only_and_drafts_by_their_author() {
+        let p = Policy::default();
+        let c = circle();
+        let to = |n: u8| vec!["p".to_owned(), key(n)];
+        let public = ev(1, 30_023, vec![vec!["d".into(), "a".into()]]);
+        let reserved = ev(1, 30_023, vec![vec!["d".into(), "b".into()], vec!["-".into()], to(2)]);
+        assert!(p.can_read(&public, &AuthState::default(), &c), "un article public reste public");
+        assert!(!p.can_read(&reserved, &AuthState::default(), &c), "un article réservé ne sort jamais en public");
+        assert!(!p.can_read(&reserved, &auth(&[3]), &c), "pas même pour le cercle s'il n'est pas destinataire");
+        assert!(p.can_read(&reserved, &auth(&[2]), &c) && p.can_read(&reserved, &auth(&[1]), &c), "destinataire et auteur");
+        let draft = ev(2, 30_024, vec![vec!["d".into(), "x".into()]]);
+        assert!(p.can_read(&draft, &auth(&[2]), &c) && !p.can_read(&draft, &auth(&[3]), &c), "un brouillon n'est lu que par son auteur");
     }
 
     #[test]

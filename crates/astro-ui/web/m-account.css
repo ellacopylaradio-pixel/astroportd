@@ -33,3 +33,41 @@
 .rd-lender { display: flex; align-items: center; justify-content: space-between; gap: .6rem; min-height: 48px; padding: .3rem .7rem; border: 1px solid var(--line); border-radius: var(--r); }
 .rd-lender span { display: flex; flex-direction: column; }
 .rd-lender small { color: var(--muted); }
+/* En-tête de carte avec bulle d'aide « ? » : l'explication ne s'ouvre qu'à la demande (details natif). */
+.ac-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; position: relative; }
+.ac-head h2 { margin: 0; }
+.ac-head + * { margin-top: .6rem; }
+.tip { display: inline-block; }
+.tip > summary { list-style: none; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%; border: 1px solid var(--line); color: var(--muted); font-weight: 700; font-size: .85rem; cursor: pointer; position: relative; }
+.tip > summary::-webkit-details-marker { display: none; }
+.tip > summary::after { content: ''; position: absolute; inset: -.75rem; } /* zone de toucher ≥ 48 px */
+.tip > summary:hover, .tip[open] > summary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+.tip > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tip-body { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; margin-top: .4rem; padding: .7rem .9rem; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 8px 24px var(--sh); font-weight: 400; font-size: .92rem; }
+.tip-body p { margin: 0 0 .4rem; } .tip-body p:last-child { margin: 0; }
+/* Jeton affiché : lisible, sélectionnable d'un geste. */
+.ac-token { font-family: ui-monospace, monospace; width: min(100%, 22rem); }
+/* Sens des échanges d'un appareil : ⬆ envoi, ⬇ lecture, ⇅ les deux. */
+.ac-way { display: inline-grid; place-items: center; width: 2.2rem; height: 2.2rem; border-radius: 50%; font-size: 1.1rem; font-weight: 700; flex: none; margin-right: .6rem; background: var(--bg); }
+.ac-way-write { color: var(--accent); } .ac-way-read { color: var(--ok); } .ac-way-readwrite { color: var(--warn); }
+/* Mon espace : deux anneaux (privé, public) et une légende commune. */
+.ac-donuts { display: flex; flex-wrap: wrap; gap: 1.2rem; justify-content: center; margin: .6rem 0; }
+.ac-donut { margin: 0; text-align: center; }
+.ac-ring { width: 8.5rem; height: 8.5rem; transform: rotate(0deg); }
+.ac-ring circle { fill: none; stroke-width: 5.5; }
+.ac-ring .ac-ring-bg { stroke: var(--line); }
+.ac-meter { width: 100%; height: .6rem; }
+.ac-legend { list-style: none; padding: 0; margin: .4rem 0; display: flex; flex-wrap: wrap; gap: .3rem 1rem; justify-content: center; }
+.ac-legend i { display: inline-block; width: .8rem; height: .8rem; border-radius: 50%; margin-right: .35rem; vertical-align: -.05rem; }
+.ac-k-photo { stroke: #3b82f6; background: #3b82f6; } .ac-k-video { stroke: #a855f7; background: #a855f7; }
+.ac-k-music { stroke: #f59e0b; background: #f59e0b; } .ac-k-doc { stroke: #10b981; background: #10b981; }
+.ac-k-other { stroke: #94a3b8; background: #94a3b8; }
+/* Bien démarrer : trois étapes, chacune une rangée au pouce. */
+.ac-steps { list-style: none; padding: 0; margin: .6rem 0; display: grid; gap: .5rem; }
+.ac-steps li { display: flex; align-items: center; gap: .8rem; min-height: 56px; padding: .5rem .8rem; border: 1px solid var(--line); border-radius: var(--r); }
+.ac-steps li.done { opacity: .65; }
+.ac-steps .t { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.ac-step-ico { display: grid; place-items: center; width: 2.4rem; height: 2.4rem; border-radius: 50%; background: var(--bg); font-size: 1.2rem; flex: none; }
+.ac-steps li.done .ac-step-ico { color: var(--ok); font-weight: 700; }
+.ac-steps a.button { flex: none; min-height: 44px; display: inline-grid; place-items: center; padding: 0 1rem; border-radius: var(--r); background: var(--accent); color: var(--on-accent); text-decoration: none; font-weight: 600; }
+.row:has(> .ac-way) { display: flex; align-items: center; gap: .2rem; flex-wrap: wrap; } .row:has(> .ac-way) > .t { flex: 1; min-width: 10rem; }

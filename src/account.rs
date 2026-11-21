@@ -335,6 +335,27 @@ impl AccountService {
         serde_json::to_value(&event).map_err(internal)
     }
 
+    /// Signe **et publie** un événement du blog du compte : note (1), article (30023), brouillon (30024) ou suppression (5) de ses
+    /// propres publications. Les autres kinds passent par [`Self::sign`] et le client. Un article doit avoir son identifiant (`d`).
+    pub async fn publish_post(&self, hex: &str, ev: &Value) -> Result<Value, AccountError> {
+        let kind = ev["kind"].as_u64().unwrap_or(0);
+        if !matches!(kind, 1 | 5 | 30_023 | 30_024) {
+            return Err(AccountError::Invalid("publication : note, article, brouillon ou suppression seulement".into()));
+        }
+        let tags: Vec<Vec<String>> = serde_json::from_value(ev["tags"].clone()).unwrap_or_default();
+        if kind >= 30_000 && !tags.iter().any(|t| t.first().map(String::as_str) == Some("d") && t.get(1).is_some_and(|d| !d.is_empty() && d.len() <= 120 && !d.contains('/'))) {
+            return Err(AccountError::Invalid("article : identifiant (d) de 1 à 120 caractères, sans « / »".into()));
+        }
+        // Une suppression ne vise que ses propres articles (adresse `kind:<soi>:d`).
+        if kind == 5 && tags.iter().any(|t| t.first().map(String::as_str) == Some("a") && t.get(1).is_some_and(|a| a.split(':').nth(1) != Some(hex))) {
+            return Err(AccountError::Invalid("suppression : seulement vos propres articles".into()));
+        }
+        let v = self.sign(hex, ev).await?;
+        let event: astro_nostr_proto::Event = serde_json::from_value(v.clone()).map_err(internal)?;
+        (self.publish)(event).await.map_err(|e| AccountError::Internal(format!("publication : {e}")))?;
+        Ok(v)
+    }
+
     /// Reçoit l'image `kind` (`picture` ou `banner`) du compte : `data` en base64 (le navigateur l'a déjà réduite), relue et réencodée ici,
     /// rangée par la station, puis le profil (kind 0) est republié avec son adresse publique. `origin` : adresse de la station vue
     /// par le navigateur, si la station n'en connaît pas d'autre.
@@ -428,6 +449,15 @@ impl AccountService {
             }
         }
         self.view(hex).await
+    }
+
+    /// Montre le jeton WebDAV en vigueur sans le changer (il est dérivé du secret de la station : rien n'est stocké en clair).
+    /// Les jetons d'appareil n'atteignent jamais l'API : seul le compte lui-même peut le demander. Chaque affichage est tracé.
+    pub async fn show_token(&self, hex: &str) -> Result<Value, AccountError> {
+        let (_, email, ..) = self.row(hex).await?;
+        let token = astro_dav::auth::account_token(&self.db, &self.station_secret, hex).await;
+        self.audit("audit.token", json!({ "by": hex, "for": hex, "shown": true })).await;
+        Ok(json!({ "login": email.unwrap_or_else(|| hex.to_owned()), "token": token }))
     }
 
     /// Change le jeton WebDAV : l'ancien cesse de fonctionner tout de suite ; le nouveau n'est montré qu'ici.

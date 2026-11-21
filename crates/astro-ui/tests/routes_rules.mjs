@@ -47,7 +47,7 @@ assert.equal(resolve('/constellation', cap, 'station').tab, 'eco');
 assert.equal(resolve('/constellation', cap, 'me').tab, 'me');
 assert.equal(parentOf(resolve('/constellation', mem)).path, '/money');
 assert.equal(resolve('/constellation', mem, 'station').space, 'me');
-assert.deepEqual(segments(resolve('/library', mem)).map(s => s.path), ['/cloud', '/library', '/media']);
+assert.deepEqual(segments(resolve('/library', mem)).map(s => s.path), ['/cloud', '/library', '/media', '/favoris']);
 assert.equal(resolve('/media', mem).tab, 'files', 'la médiathèque est un sous-onglet de Fichiers');
 assert.deepEqual(segments(resolve('/constellation', cap, 'station')).map(s => s.path), ['/constellation', '/coop']);
 assert.deepEqual(segments(resolve('/cockpit', cap)), []);

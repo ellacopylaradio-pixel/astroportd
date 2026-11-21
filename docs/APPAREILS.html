@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Brancher mes appareils — astroportd</title>
+<style>
+:root{--bg:#ffffff;--ink:#1b1f2a;--mut:#454c61;--pan:#f1f4fb;--line:#c3c9dc;--acc:#2a46c8;--accink:#ffffff;--code:#10131c;--codeink:#e8ebf4;--note:#e7efff;--warn:#fff0e0;--warnb:#8f3b06;--ok:#14663a}
+@media (prefers-color-scheme:dark){:root{--bg:#12151f;--ink:#eef0f8;--mut:#bcc3da;--pan:#1b2030;--line:#3a4260;--acc:#9bb0ff;--accink:#10131c;--code:#0a0c13;--codeink:#e8ebf4;--note:#1d2744;--warn:#3a2414;--warnb:#ffb98a;--ok:#7fdca6}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:1.0625rem/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--acc);text-underline-offset:3px}a:focus-visible,summary:focus-visible,button:focus-visible{outline:3px solid var(--acc);outline-offset:3px;border-radius:4px}
+.skip{position:absolute;left:16px;top:-60px;background:var(--acc);color:var(--accink);padding:10px 14px;border-radius:8px;z-index:9;text-decoration:none}.skip:focus{top:12px}
+header.top,main,footer{max-width:68rem;margin:0 auto;padding:0 16px}
+header.top{padding-top:28px;padding-bottom:8px}
+h1{font-size:clamp(1.7rem,5vw,2.6rem);line-height:1.15;margin:.2em 0}
+.lead{font-size:1.2rem;color:var(--mut);max-width:46rem}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 12px;font-size:.9rem;color:var(--mut)}
+nav.toc{background:var(--pan);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:22px 0}
+nav.toc h2{font-size:1rem;margin:0 0 6px}nav.toc ol{margin:0;padding-left:1.3em;columns:2 16rem}nav.toc li{margin:2px 0}
+section{margin:44px 0;padding-top:8px;border-top:1px solid var(--line)}
+h2{font-size:clamp(1.35rem,3.6vw,1.8rem);line-height:1.25;margin:.6em 0 .4em}
+.num{display:inline-grid;place-items:center;min-width:2.1rem;height:2.1rem;padding:0 .5rem;border-radius:999px;background:var(--acc);color:var(--accink);font-weight:700;font-size:1.05rem;margin-right:.35em;vertical-align:.08em}
+h3{font-size:1.05rem;margin:0 0 .5em;color:var(--acc)}
+figure{margin:18px auto;max-width:34rem}figure svg{display:block;max-width:100%;height:auto}figcaption{font-size:.92rem;color:var(--mut);text-align:center;margin-top:6px}
+.cols{display:grid;gap:16px;grid-template-columns:1fr;margin-top:14px}
+@media (min-width:56rem){.cols{grid-template-columns:1fr 1fr}}
+.col{background:var(--pan);border:1px solid var(--line);border-radius:14px;padding:14px 16px;min-width:0}
+.col>*:last-child{margin-bottom:0}
+.col ul,.col ol{padding-left:1.25em}
+.div,.code{position:relative}
+pre{margin:.6em 0;background:var(--code);color:var(--codeink);border-radius:10px;padding:12px 5.2rem 12px 14px;overflow-x:auto;font-size:.92rem;line-height:1.5;-webkit-overflow-scrolling:touch}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
+p code,li code{background:rgba(127,127,160,.18);padding:1px 6px;border-radius:5px;overflow-wrap:anywhere}
+.copy{position:absolute;top:10px;right:8px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:3px 10px;font:inherit;font-size:.82rem;cursor:pointer}
+.box{border-radius:10px;padding:10px 14px;margin:.8em 0;border:1px solid var(--line)}
+.box .lbl{font-weight:700;margin-right:.4em}
+.note{background:var(--note)}.warn{background:var(--warn);border-color:var(--warnb)}.warn .lbl{color:var(--warnb)}
+
+.ill{--ink:#1b1f2a;--mut:#454c61;--pan:#eef1f9;--pan2:#e2e8f8;--line:#6b7390;--acc:#2a46c8;--ok:#14663a;--warn:#8f3b06;--bg:#ffffff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){.ill{--ink:#eef0f8;--mut:#bcc3da;--pan:#1c2133;--pan2:#262d47;--line:#8790ad;--acc:#9bb0ff;--ok:#7fdca6;--warn:#ffb98a;--bg:#12151f}}
+.ill .bg{fill:var(--bg)}.ill .pan{fill:var(--pan);stroke:var(--line);stroke-width:1.5}.ill .pan2{fill:var(--pan2);stroke:var(--acc);stroke-width:2}
+.ill .okp{fill:var(--pan);stroke:var(--ok);stroke-width:2.5}.ill .wnp{fill:var(--pan);stroke:var(--warn);stroke-width:2.5}
+.ill .t{fill:var(--ink);font-size:17px;font-weight:700}.ill .s{fill:var(--mut);font-size:14.5px}.ill .a{fill:var(--acc);font-size:15px;font-weight:700}
+.ill .g{fill:var(--ok);font-size:15px;font-weight:700}.ill .w{fill:var(--warn);font-size:15px;font-weight:700}
+.ill .ln{stroke:var(--line);stroke-width:2;fill:none}.ill .ar{stroke:var(--acc);stroke-width:2.5;fill:none}.ill .ds{stroke:var(--acc);stroke-width:2.5;fill:none;stroke-dasharray:7 6}
+.ill .hd{fill:var(--acc)}.ill .m{text-anchor:middle}
+
+footer{padding:28px 16px 48px;color:var(--mut);border-top:1px solid var(--line);margin-top:44px;font-size:.95rem}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{.copy,.skip{display:none}.col{break-inside:avoid}}
+.tw{overflow-x:auto}table{border-collapse:collapse;margin:.8em 0;font-size:.95rem}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--pan)}
+a{overflow-wrap:anywhere}
+@media (min-width:56rem){.cols.one{grid-template-columns:1fr}}
+figure img{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px}
+.crumbs{margin:0 0 10px;font-size:.95rem}
+.lead2{color:var(--mut);max-width:46rem;margin-top:0}
+nav.toc h3{font-size:1rem;margin:12px 0 4px}nav.toc h3 a{color:var(--ink);text-decoration:none}nav.toc h3 a:hover{text-decoration:underline}
+nav.toc ol{list-style:none;padding-left:0;margin:0 0 4px}
+section.part{border-top:3px solid var(--acc);margin-top:64px;padding-top:18px}
+section.part h2{font-size:clamp(1.6rem,4.4vw,2.2rem);margin-bottom:.2em}
+section.part .pn{display:block;font-size:1rem;font-weight:700;color:var(--acc);letter-spacing:0}
+section.part p{color:var(--mut);font-size:1.1rem;max-width:46rem}
+details.tech{border:1px dashed var(--line);border-radius:10px;padding:2px 14px;margin:12px 0;background:transparent}
+details.tech summary{cursor:pointer;padding:8px 0;font-weight:600;color:var(--mut);min-height:44px;display:flex;align-items:center}
+details.tech[open]{padding-bottom:10px}
+details.tech[open] summary{color:var(--acc)}
+</style>
+<style>.pg{max-width:60rem;margin:0 auto;padding:1rem 16px 3rem}</style>
+</head>
+<body>
+<main class="pg">
+<p class="back"><a href="index.html">Accueil</a> · <a href="guide.html">Guide du Capitaine</a></p>
+<h1>Brancher mes appareils</h1>
+<p>Trois gestes, une seule fois, et votre station travaille pour vous : vos <strong>contacts</strong> nourrissent la reconnaissance des visages, vos <strong>photos</strong> arrivent toutes seules, vos <strong>fichiers</strong> s'ouvrent comme un disque.</p>
+<p>Tout se trouve dans <strong>Moi › Mes appareils</strong> :</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Ce qu'on vous demande</th>
+<th>Où le trouver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Adresse</strong> du serveur</td>
+<td><code>https://&lt;votre station&gt;/dav</code> (bouton « Copier »)</td>
+</tr>
+<tr>
+<td><strong>Identifiant</strong></td>
+<td>votre adresse (ex. <code>lea@qo-op.com</code>)</td>
+</tr>
+<tr>
+<td><strong>Mot de passe</strong></td>
+<td>le <strong>jeton principal</strong> (bouton « Afficher ») ou un <strong>jeton d'appareil</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>Le sens des échanges est montré par trois signes :</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Signe</th>
+<th>Sens</th>
+<th>Pour quoi faire</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>⬆ <strong>Envoi</strong></td>
+<td>l'appareil envoie à la station</td>
+<td>sauvegarde automatique des photos d'un téléphone</td>
+</tr>
+<tr>
+<td>⬇ <strong>Lecture</strong></td>
+<td>la station donne à l'appareil</td>
+<td>une tablette ou un cadre photo qui affiche un album</td>
+</tr>
+<tr>
+<td>⇅ <strong>Les deux</strong></td>
+<td>synchronisation</td>
+<td>contacts, agenda, dossier de travail sur l'ordinateur</td>
+</tr>
+</tbody>
+</table></div>
+<div class="box note"><p><span class="lbl">Jeton principal ou jeton d'appareil ?</span> Le jeton principal ouvre tout votre uCloud, contacts et agenda compris : gardez-le pour vos propres appareils. Un jeton d'appareil ne voit qu'un dossier et se révoque d'un geste : idéal pour l'envoi des photos d'un téléphone, ou pour un appareil prêté.</p></div>
+<hr />
+<h2>Avant tout · Je viens de Google ou d'Apple 🚚</h2>
+<p><strong>Fichiers › Déménager</strong> (ou « Bien démarrer » dans <strong>Moi</strong>) : choisissez toutes les parties de votre archive Google Takeout (takeout.google.com : Google Photos, Contacts, Agenda, Drive, en « .zip ») ou de votre export iCloud (privacy.apple.com). Photos avec leurs dates, lieux et albums, contacts, agenda et documents arrivent chiffrés ; ce que vous avez déjà n'est pas renvoyé. Faites-le de préférence sur un ordinateur, page ouverte : vous pouvez interrompre et reprendre.</p>
+<h2>Étape 1 · Mes contacts ⇅</h2>
+<p>Vos fiches de contact servent de base à la reconnaissance : quand la station reconnaît un visage, elle le range dans la fiche de la personne.</p>
+<h3>Le plus simple : importer un fichier une fois</h3>
+<ol>
+<li><strong>Exportez</strong> vos contacts en un fichier <code>.vcf</code> :
+<ul>
+<li><strong>Android</strong> : application <em>Contacts</em> › menu ☰ › <em>Gérer les contacts</em> › <em>Exporter</em> › <em>Exporter vers un fichier .vcf</em>.</li>
+<li><strong>iPhone</strong> (iOS 16 ou plus) : application <em>Contacts</em> › <em>Listes</em> › appui long sur <em>Tous les contacts</em> › <em>Exporter</em>.</li>
+<li><strong>Google</strong> : contacts.google.com › <em>Exporter</em> › <em>vCard (pour les contacts iOS)</em>.</li>
+<li><strong>Ordinateur</strong> : Thunderbird, Outlook ou Contacts (macOS) savent tous exporter en vCard.</li>
+</ul>
+</li>
+<li>Dans la station : <strong>Proches › Importer un .vcf</strong>. Les doublons sont ignorés.</li>
+</ol>
+<h3>Mieux : synchroniser en continu</h3>
+<ul>
+<li><strong>Android</strong> : installez <strong>DAVx⁵</strong> (F-Droid ou Play Store) › <em>＋</em> › <em>Connexion avec une URL et un nom d'utilisateur</em> › adresse, identifiant, <strong>jeton principal</strong>. Cochez le carnet <em>contacts</em> (et l'agenda). Vos contacts vont et viennent entre le téléphone et la station.</li>
+<li><strong>iPhone</strong> : <em>Réglages › Contacts › Comptes › Ajouter un compte › Autre › Ajouter un compte CardDAV</em>. Serveur : le nom de la station seul (ex. <code>qo-op.com</code>) ; utilisateur : votre identifiant ; mot de passe : le jeton principal. Pour l'agenda, même chemin avec <em>Ajouter un compte CalDAV</em>.</li>
+<li><strong>Ordinateur</strong> : Thunderbird › <em>Nouveau carnet d'adresses CardDAV</em> › adresse de la station.</li>
+</ul>
+<h2>Étape 2 · Mes photos ⬆</h2>
+<p>Créez d'abord un <strong>jeton d'appareil</strong> dans <strong>Moi › Mes appareils</strong> : nom « Téléphone de Léa », dossier <code>/Photos/Téléphone de Léa</code>, droits <strong>⬆ Envoi seul</strong>. Copiez-le : il n'est montré qu'une fois.</p>
+<ul>
+<li><strong>Android</strong> : <strong>FolderSync</strong> ou <strong>PhotoSync</strong> › nouveau compte <em>WebDAV</em> (adresse, identifiant, jeton d'appareil) › synchronisation <em>vers le serveur</em> du dossier <code>DCIM/Camera</code>, programmée chaque nuit ou à chaque photo.</li>
+<li><strong>iPhone</strong> : <strong>PhotoSync</strong> › <em>Réglages › Configurer › WebDAV</em> (mêmes informations) › <em>Transfert automatique</em> : chaque nouvelle photo part vers la station.</li>
+<li>Les photos arrivent chiffrées. La station y cherche les visages et, si la recherche est activée, le texte et le contenu de l'image.</li>
+</ul>
+<h2>Étape 3 · Mes fichiers comme un disque ⇅</h2>
+<ul>
+<li><strong>Windows</strong> : <em>Explorateur › Ce PC › Ajouter un emplacement réseau</em> › adresse <code>https://&lt;votre station&gt;/dav</code> › identifiant et jeton principal.</li>
+<li><strong>macOS</strong> : <em>Finder › Aller › Se connecter au serveur</em> (⌘K) › <code>https://&lt;votre station&gt;/dav</code>. Voir aussi <a href="MACOS.html">le guide macOS</a>.</li>
+<li><strong>Linux</strong> : gestionnaire de fichiers › <em>Autres emplacements</em> › <code>davs://&lt;votre station&gt;/dav</code>.</li>
+<li><strong>Android</strong> : DAVx⁵ ajoute aussi le uCloud dans l'application <em>Fichiers</em> (onglet <em>Montages WebDAV</em>).</li>
+<li><strong>iPhone</strong> : l'application <em>Fichiers</em> ne sait pas monter WebDAV ; utilisez <strong>Documents</strong> (Readdle) ou <strong>FE File Explorer</strong>, qui s'y ajoutent ensuite comme emplacement.</li>
+</ul>
+<p>Le dossier <strong>Public</strong> est votre site : ce que vous y déposez est lisible par tous.</p>
+<h2>Bonus · Publier depuis « Partager » ✍️</h2>
+<p>Ajoutez la station à l'écran d'accueil (menu du navigateur › <em>Ajouter à l'écran d'accueil</em> ou <em>Installer l'application</em>). Ensuite, depuis la galerie, le navigateur ou n'importe quelle application : <strong>Partager › Astroport</strong>. Vous choisissez alors : <strong>🔒 Ranger en privé</strong> (un lien devient un favori de <strong>Fichiers › Favoris</strong>, les photos et textes vont dans le dossier de votre choix, chiffrés) ou <strong>📰 Publier sur mon blog</strong> (une note). Rien ne part sans votre geste.</p>
+<ul>
+<li><strong>Android</strong> (Chrome, Edge, Samsung Internet) : fonctionne dès l'installation.</li>
+<li><strong>iPhone</strong> : Safari ne propose pas encore les applications web dans « Partager » ; copiez le lien ou ajoutez la photo depuis <strong>Mon blog › 📷 Images</strong>.</li>
+</ul>
+<h2>Si ça ne marche pas</h2>
+<ul>
+<li><strong>« Identifiant ou mot de passe refusé »</strong> : recopiez le jeton avec le bouton « Copier » ; s'il a été remplacé, l'ancien ne marche plus.</li>
+<li><strong>Le jeton d'appareil ne voit pas mes contacts</strong> : normal, il ne voit que son dossier. Les contacts et l'agenda demandent le jeton principal.</li>
+<li><strong>Rien n'arrive</strong> : regardez dans <strong>Moi › Mes appareils</strong> la date du « dernier envoi » de l'appareil.</li>
+<li>Toujours bloqué ? Votre Capitaine est là pour ça.</li>
+</ul>
+
+<p class="back"><a href="index.html">Accueil</a> · <a href="guide.html">Guide du Capitaine</a></p>
+</main>
+</body>
+</html>

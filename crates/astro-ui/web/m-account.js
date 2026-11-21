@@ -1,6 +1,7 @@
 'use strict';
 // Mon compte : identité, profil, langue, accès WebDAV (changement du jeton) et export des clés. La station détient les
 // clés de ses comptes : modifier le profil, c'est lui faire signer un nouveau kind 0 ; l'export est une action délibérée.
+const GUIDE = 'https://papiche.github.io/astroportd/APPAREILS.html';
 const LANG = { fr: 'Français', en: 'English', es: 'Español' }, ROLE = { multipass: 'MULTIPASS', zencard: 'ZenCard', captain: 'Capitaine', node: 'Nœud', love: 'LOVE' };
 
 export default async function account(root, K) {
@@ -10,6 +11,9 @@ export default async function account(root, K) {
   const a = await api('');
   const copy = (text, what) => h('button', { class: 'ghost', type: 'button', onclick: () => navigator.clipboard?.writeText(text).then(() => K.toast(t('{0} copié', what), 1), e => K.toast(e.message)) }, 'Copier');
   const code = v => h('code', {}, v || '—');
+  // Bulle d'aide « ? » : l'explication ne s'affiche qu'à la demande (details natif : clavier, lecteur d'écran, sans script).
+  const tip = (...texts) => h('details', { class: 'tip' }, h('summary', { 'aria-label': t('Aide'), title: t('Aide') }, '?'), h('div', { class: 'tip-body' }, texts.map(x => h('p', {}, x))));
+  const head = (title, ...texts) => h('div', { class: 'ac-head' }, h('h2', {}, title), texts.length ? tip(...texts) : null);
 
   // ── Identité ──
   const idCard = h('section', { class: 'card' }, h('h2', {}, 'Identité'), h('dl', { class: 'stack' },
@@ -66,35 +70,28 @@ export default async function account(root, K) {
     ev.target.disabled = true;
     try { await api('/profile', patch); K.toast(t('Profil enregistré'), 1); if (langChanged) K.setLang(f.lang.value); else account(root, K); } catch (e) { K.toast(e.message); ev.target.disabled = false; }
   } }, 'Enregistrer');
-  const profile = h('section', { class: 'card' }, h('h2', {}, 'Profil'),
-    h('p', { class: 'muted' }, 'Publié sur votre relai : vos Proches le voient.'),
+  const profile = h('section', { class: 'card' }, head('Profil', 'Publié sur votre relai : vos Proches le voient.'),
     h('label', { for: 'ac-name' }, 'Nom affiché'), f.name, h('label', { for: 'ac-about' }, 'Présentation'), f.about, h('label', { for: 'ac-pic' }, 'Image (https)'), f.picture, imageTools('picture', f.picture), h('label', { for: 'ac-ban' }, t('Bandeau (https) : fond de vos Ğ1Billets et de votre profil')), f.banner, imageTools('banner', f.banner),
     h('label', { for: 'ac-lang' }, 'Langue de l\'interface'), f.lang, h('p', {}, save));
 
 
   // ── Mon site public : le dossier /Public de l'uCloud, servi en clair à tous (modèle : déplacer un fichier dans /Public le publie) ──
-  const sitebox = site && h('section', { class: 'card' }, h('h2', {}, t('Mon site public')),
-    h('p', { class: 'muted' }, t('Tout ce que vous mettez dans le dossier Public de votre uCloud est public : lisible par tout le monde, sans mot de passe. Déplacez-y un fichier pour le publier, sortez-le pour le retirer. Vous pouvez y construire un site (pages HTML, images, CSS) avec votre client WebDAV.')),
+  const sitebox = site && h('section', { class: 'card' }, head(t('Mon site public'), t('Tout ce que vous mettez dans le dossier Public de votre uCloud est public : lisible par tout le monde, sans mot de passe. Déplacez-y un fichier pour le publier, sortez-le pour le retirer. Vous pouvez y construire un site (pages HTML, images, CSS) avec votre client WebDAV.'), t('Vos fichiers restent chiffrés sur la station : elle ne les déchiffre que pour ce dossier. Les scripts d’une page tournent isolés de la station. Les visites sont comptées par jour et par page, sans garder aucune adresse ni identité de visiteur.')),
     h('dl', { class: 'stack' },
       h('dt', {}, t('Adresse de votre site')), h('dd', {}, h('a', { href: site.path_url, target: '_blank', rel: 'noopener' }, location.origin + site.path_url), ' ', copy(location.origin + site.path_url, t('Adresse'))),
       site.host_url ? [h('dt', {}, t('Adresse par nom (DNS)')), h('dd', {}, h('a', { href: site.host_url, target: '_blank', rel: 'noopener' }, site.host_url), ' ', copy(site.host_url, t('Adresse')))] : null,
-      h('dt', {}, t('Page d’accueil')), h('dd', {}, site.has_index ? t('index.html de votre dossier Public') : t('page par défaut (votre profil et la liste des fichiers)')),
+      h('dt', {}, t('Page d’accueil')), h('dd', {}, site.has_index ? t('index.html de votre dossier Public') : t('votre blog : articles, notes et fichiers')),
       h('dt', {}, t('Fichiers publiés')), h('dd', {}, String(site.files)),
       site.visits ? [h('dt', {}, t('Visites')), h('dd', {}, `${t('aujourd’hui')} ${site.visits.today} · 7 ${t('jours')} ${site.visits.week} · 90 ${t('jours')} ${site.visits.days90}`,
         site.visits.top.length ? h('ul', { class: 'muted' }, site.visits.top.map(x => h('li', {}, `${x.path} : ${x.hits}`))) : null)] : null,
       h('dt', {}, 'WebDAV'), h('dd', {}, code(a.dav.url), ' ', t('dossier'), ' ', code('/Public'))),
-    site.has_index ? null : h('p', {}, h('button', { type: 'button', onclick: async ev => { ev.target.disabled = true; try { await K.api('/api/v1/account/site/example', { method: 'POST', body: {} }); K.toast(t('Site d’exemple créé dans Public'), 1); account(root, K); } catch (e) { K.toast(e.message); ev.target.disabled = false; } } }, t('Créer un site d’exemple'))),
-    h('details', {}, h('summary', {}, t('Exemple de page (index.html)')), h('pre', {}, '<!doctype html>\n<html lang="fr">\n<head>\n  <meta charset="utf-8">\n  <title>Ma page</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>Bonjour</h1>\n  <p><a href="photos/vacances.jpg">Mes vacances</a></p>\n</body>\n</html>')),
-    h('p', { class: 'muted' }, t('Vos fichiers restent chiffrés sur la station : elle ne les déchiffre que pour ce dossier. Les scripts d’une page tournent isolés de la station. Les visites sont comptées par jour et par page, sans garder aucune adresse ni identité de visiteur.')));
+    h('p', {}, h('a', { class: 'btn', href: '#/write' }, '✍️ ' + t('Écrire sur mon blog'))));
 
   // ── Mes images publiques : avatar, bandeau et images envoyées depuis un client Nostr. Publiques et en clair, elles entament le quota. ──
   const pics = h('section', { class: 'card', hidden: true }, h('h2', {}, t('Mes images publiques')));
   const picsList = () => K.api('/api/v1/account/images').then(r => {
     pics.hidden = false;
-    pics.replaceChildren(h('h2', {}, t('Mes images publiques')),
-      h('p', { class: 'muted' }, t('Votre photo de profil, votre bandeau et les images que vous avez mises dans vos publications. Tout le monde peut les voir.')),
-      h('p', {}, r.quota ? t('Espace utilisé : {0} sur {1}.', K.bytes(r.used), K.bytes(r.quota)) : t('Espace utilisé : {0} (sans limite).', K.bytes(r.used))),
-      h('p', { class: 'muted' }, t('Retirer une image libère de la place, mais elle disparaît aussi des publications où elle apparaît.')),
+    pics.replaceChildren(head(t('Mes images publiques'), t('Votre photo de profil, votre bandeau et les images que vous avez mises dans vos publications. Tout le monde peut les voir.'), t('Retirer une image libère de la place, mais elle disparaît aussi des publications où elle apparaît.')),
       r.images.length ? h('div', { class: 'ac-grid' }, r.images.map(im => h('figure', { class: 'ac-img' },
         h('img', { src: `/ipfs/${im.cid}`, alt: '', loading: 'lazy' }),
         h('figcaption', { class: 'muted' }, K.bytes(im.size), ' · ', K.when(im.added_at), im.in_use ? [h('br'), im.in_use === 'banner' ? t('Utilisée comme bandeau') : t('Utilisée comme photo de profil')] : null),
@@ -105,8 +102,7 @@ export default async function account(root, K) {
   picsList();
 
   // ── Intelligence artificielle : un Ollama ou une clé d'API déclarés ici font apparaître BRO ──
-  const ai = h('section', { class: 'card' }, h('h2', {}, t('Intelligence artificielle')),
-    h('p', { class: 'muted' }, t('BRO n\'apparaît dans le menu que si vous déclarez ici un Ollama ou une clé d\'API. La clé est chiffrée pour vous seul : elle n\'est jamais réaffichée.')));
+  const ai = h('section', { class: 'card' }, head(t('Intelligence artificielle'), t('BRO n\'apparaît dans le menu que si vous déclarez ici un Ollama ou une clé d\'API. La clé est chiffrée pour vous seul : elle n\'est jamais réaffichée.')));
   K.api('/api/v1/me/ai').then(p => {
     const url = h('input', { id: 'ai-url', value: p.ollama_url || '', placeholder: 'http://127.0.0.1:11434', 'aria-label': t('Adresse d\'Ollama'), maxlength: 256, autocomplete: 'off' });
     const prov = h('select', { id: 'ai-prov', 'aria-label': t('Fournisseur d\'API') }, [['', t('Aucun')], ['anthropic', 'Anthropic (Claude)'], ['gemini', 'Google Gemini']].map(([v, l]) => h('option', { value: v, selected: (p.provider || '') === v }, l)));
@@ -123,7 +119,7 @@ export default async function account(root, K) {
   K.mod('m-reading.js').then(m => m.default(reading, K), e => reading.append(h('p', { class: 'err', role: 'alert' }, e.message)));
 
   // ── Visio : être joignable (mes amis réciproques voient si je suis là ou en appel) et notifications d'appel sur cet appareil ──
-  const visio = h('section', { class: 'card' }, h('h2', {}, t('Visio')));
+  const visio = h('section', { class: 'card' }, head(t('Visio'), t('Seuls vos amis réciproques voient si vous êtes en ligne ou en appel, et seulement quand une page Astroport est ouverte. Rien n\'est gardé.')));
   K.api('/api/v1/presence').then(p => {
     const box = h('input', { type: 'checkbox', id: 'vi-reach', checked: p.reachable, onchange: async () => {
       box.disabled = true;
@@ -136,10 +132,9 @@ export default async function account(root, K) {
     } });
     const N = window.Notification;
     const notif = !N ? null : N.permission === 'granted' ? h('p', { class: 'muted' }, t('Notifications d\'appel : activées sur cet appareil.'))
-      : N.permission === 'denied' ? h('p', { class: 'muted' }, t('Notifications d\'appel bloquées sur cet appareil : autorisez-les dans le navigateur pour être prévenu quand l\'onglet est en arrière-plan.'))
+      : N.permission === 'denied' ? h('div', { class: 'ac-head muted' }, h('span', {}, t('Notifications d\'appel bloquées')), tip(t('Notifications d\'appel bloquées sur cet appareil : autorisez-les dans le navigateur pour être prévenu quand l\'onglet est en arrière-plan.')))
       : h('p', {}, h('button', { type: 'button', class: 'ghost', onclick: async ev => { await N.requestPermission().catch(() => {}); ev.target.replaceWith(h('span', { class: 'muted' }, N.permission === 'granted' ? t('Notifications d\'appel activées') : t('Notifications refusées'))); } }, t('Être prévenu des appels sur cet appareil')));
-    visio.append(h('p', {}, h('label', { for: 'vi-reach' }, box, ' ', t('Être joignable en visio'))),
-      h('p', { class: 'muted' }, t('Seuls vos amis réciproques voient si vous êtes en ligne ou en appel, et seulement quand une page Astroport est ouverte. Rien n\'est gardé.')), notif);
+    visio.append(h('p', {}, h('label', { for: 'vi-reach' }, box, ' ', t('Être joignable en visio'))), notif);
   }, () => { visio.hidden = true; });
 
   // ── Mes autres comptes : l'annonce (publique, sur demande) que mes comptes d'autres espaces de la station sont les miens ──
@@ -148,7 +143,8 @@ export default async function account(root, K) {
   K.api('/api/v1/me/links').then(r => {
     if (!r.siblings.length) return;
     planes.hidden = false;
-    planes.append(h('p', { class: 'muted' }, t('Vous avez d\'autres comptes sur cette station. L\'annoncer permet à vos amis de vous écrire depuis le compte qu\'ils utilisent : le lien est public, signé par vos deux comptes.')),
+    planes.firstChild.replaceWith(head(t('Mes autres comptes'), t('Vous avez d\'autres comptes sur cette station. L\'annoncer permet à vos amis de vous écrire depuis le compte qu\'ils utilisent : le lien est public, signé par vos deux comptes.')));
+    planes.append(
       h('p', {}, K.sure(t('Annoncer mes autres comptes'), async ev => {
         ev.target.disabled = true;
         try { const a = await K.api('/api/v1/me/links', { method: 'POST', body: {} }); K.toast(t('{0} lien(s) annoncé(s)', a.linked.length), 1); } catch (e) { K.toast(e.message); } finally { ev.target.disabled = false; }
@@ -169,11 +165,20 @@ export default async function account(root, K) {
     } catch (e) { K.toast(e.message); }
     ev.target.disabled = false;
   }, t('Changer le jeton ? L\'ancien cesse de fonctionner tout de suite : téléphone, DAVx⁵ et autres clients WebDAV devront être reconfigurés.'));
-  const dav = h('section', { class: 'card' }, h('h2', {}, 'Accès WebDAV'),
-    h('p', { class: 'muted' }, 'Pour monter vos fichiers (uCloud) sur un ordinateur ou un téléphone.'),
-    h('dl', {}, h('dt', {}, 'Adresse'), h('dd', {}, code(davUrl), ' ', copy(davUrl, 'adresse')), h('dt', {}, 'Identifiant'), h('dd', {}, code(a.dav.login)), h('dt', {}, 'Jeton principal'), h('dd', {}, a.token_generation ? t('remplacé {0} fois', a.token_generation) : t('celui de la station, jamais remplacé'))),
+  // Le jeton principal est dérivé du secret de la station : on peut le réafficher sans le changer (route tracée).
+  const tokenBox = h('dd', {}, h('button', { type: 'button', class: 'ghost', onclick: async ev => {
+    ev.target.disabled = true;
+    try {
+      const r = await api('/token/show', {});
+      const inp = h('input', { value: r.token, readOnly: true, 'aria-label': t('Jeton principal'), class: 'ac-token', onfocus: () => inp.select() });
+      tokenBox.replaceChildren(inp, ' ', copy(r.token, 'jeton'), ' ', h('button', { type: 'button', class: 'ghost', onclick: () => account(root, K) }, t('Masquer')));
+    } catch (e) { K.toast(e.message); ev.target.disabled = false; }
+  } }, '👁 ' + t('Afficher')), ' ', a.token_generation ? h('small', { class: 'muted' }, t('remplacé {0} fois', a.token_generation)) : null);
+  const dav = h('section', { class: 'card' }, head('Accès WebDAV', 'Pour monter vos fichiers (uCloud) sur un ordinateur ou un téléphone.', t('Le jeton principal ouvre tout votre uCloud, contacts et agenda compris : gardez-le pour vos propres appareils.')),
+    h('dl', {}, h('dt', {}, 'Adresse'), h('dd', {}, code(davUrl), ' ', copy(davUrl, 'adresse')), h('dt', {}, 'Identifiant'), h('dd', {}, code(a.dav.login), ' ', copy(a.dav.login, t('Identifiant'))), h('dt', {}, t('Jeton principal')), tokenBox),
+    h('p', {}, h('a', { href: GUIDE, target: '_blank', rel: 'noopener' }, '📖 ' + t('Guide pas à pas : Android, iPhone, ordinateur'))),
     h('details', { class: 'fold' }, h('summary', {}, 'Remplacer le jeton principal'),
-      h('p', { class: 'muted' }, 'À faire seulement si vous pensez qu\'il a fuité : l\'ancien cesse de fonctionner tout de suite, et les clients WebDAV branchés avec lui (ordinateur, DAVx⁵…) devront être reconfigurés. Pour brancher un téléphone, créez plutôt un jeton d\'appareil (carte « Appareils »).'),
+      h('div', { class: 'ac-head' }, h('span', { class: 'muted' }, t('Seulement s’il a fuité.')), tip('À faire seulement si vous pensez qu\'il a fuité : l\'ancien cesse de fonctionner tout de suite, et les clients WebDAV branchés avec lui (ordinateur, DAVx⁵…) devront être reconfigurés. Pour brancher un téléphone, créez plutôt un jeton d\'appareil (carte « Appareils »).')),
       h('p', {}, rotate)), shown);
 
   // ── Export des clés ──
@@ -190,18 +195,19 @@ export default async function account(root, K) {
     ok.checked = false;
   } }, 'Exporter mes clés');
   ok.onchange = () => { exp.disabled = !ok.checked; };
-  const keys = h('section', { class: 'card' }, h('h2', {}, 'Clés'),
-    h('p', { class: 'muted' }, 'Votre station garde vos clés. Vous pouvez les récupérer pour reprendre le contrôle de votre identité ailleurs (3 exports par heure ; chaque export est tracé).'),
+  const keys = h('section', { class: 'card' }, head('Clés', 'Votre station garde vos clés. Vous pouvez les récupérer pour reprendre le contrôle de votre identité ailleurs (3 exports par heure ; chaque export est tracé).'),
     h('p', {}, ok, h('label', { for: 'ac-ok' }, ' Je comprends que quiconque possède ces clés possède mon compte.')), h('p', {}, exp), out);
 
   // ── Appareils : un jeton WebDAV par téléphone ou ordinateur, confiné à un dossier ──
-  const devices = h('section', { class: 'card' }, h('h2', {}, 'Appareils'),
-    h('p', { class: 'muted' }, 'Un jeton par appareil : son envoi WebDAV arrive dans le dossier de votre choix, et il ne voit ni ne touche rien d\'autre. Révocable à tout moment.'));
+  const devices = h('section', { class: 'card' }, head('Appareils', 'Un jeton par appareil : son envoi WebDAV arrive dans le dossier de votre choix, et il ne voit ni ne touche rien d\'autre. Révocable à tout moment.'));
+  let nDevices = 0;
   try {
-    const MODES = { write: 'Envoi seul', readwrite: 'Lecture et écriture', read: 'Lecture seule' };
+    // Le sens des échanges en un signe : ⬆ l'appareil envoie, ⬇ il lit, ⇅ les deux.
+    const MODES = { write: 'Envoi seul', readwrite: 'Lecture et écriture', read: 'Lecture seule' }, SIGN = { write: '⬆', readwrite: '⇅', read: '⬇' };
+    const way = m => h('span', { class: 'ac-way ac-way-' + m, title: t(MODES[m]), 'aria-hidden': 'true' }, SIGN[m]);
     const shownToken = h('div');
     const label = h('input', { id: 'dv-label', placeholder: 'Mon téléphone', maxlength: 60 }), root = h('input', { id: 'dv-root', placeholder: '/Photos/Mon téléphone' });
-    const mode = h('select', { id: 'dv-mode' }, Object.entries(MODES).map(([v, n]) => h('option', { value: v }, t(n))));
+    const mode = h('select', { id: 'dv-mode' }, Object.entries(MODES).map(([v, n]) => h('option', { value: v }, SIGN[v] + ' ' + t(n))));
     const add = h('button', { type: 'button', onclick: async ev => {
       ev.target.disabled = true;
       try {
@@ -209,15 +215,15 @@ export default async function account(root, K) {
         const inp = h('input', { value: r.token, readOnly: true, 'aria-label': 'Jeton', onfocus: () => inp.select() });
         shownToken.replaceChildren(h('div', { class: 'card wide' }, h('h3', {}, t('Appareil « {0} » ajouté', r.label)),
           h('p', { class: 'warn', role: 'note' }, r.note),
-          h('dl', {}, h('dt', {}, 'Serveur'), h('dd', {}, code(davUrl), ' ', copy(davUrl, 'adresse')), h('dt', {}, 'Identifiant'), h('dd', {}, code(a.dav.login)), h('dt', {}, 'Mot de passe (jeton)'), h('dd', {}, inp, ' ', copy(r.token, 'jeton')), h('dt', {}, 'Dossier du uCloud'), h('dd', {}, code(r.root), ' · ', t(MODES[r.mode])))));
+          h('dl', {}, h('dt', {}, 'Serveur'), h('dd', {}, code(davUrl), ' ', copy(davUrl, 'adresse')), h('dt', {}, 'Identifiant'), h('dd', {}, code(a.dav.login)), h('dt', {}, 'Mot de passe (jeton)'), h('dd', {}, inp, ' ', copy(r.token, 'jeton')), h('dt', {}, 'Dossier du uCloud'), h('dd', {}, code(r.root), ' · ', SIGN[r.mode], ' ', t(MODES[r.mode])))));
         K.toast(t('Appareil ajouté'), 1); label.value = ''; root.value = '';
         refresh();
       } catch (e) { K.toast(e.message); } finally { ev.target.disabled = false; }
     } }, 'Ajouter cet appareil');
     const rows = h('div');
     const refresh = async () => {
-      const l = await K.api('/api/v1/devices');
-      rows.replaceChildren(...(l.devices.length ? l.devices.map(d => h('div', { class: 'row' },
+      const l = await K.api('/api/v1/devices'); nDevices = l.devices.length;
+      rows.replaceChildren(...(l.devices.length ? l.devices.map(d => h('div', { class: 'row' }, way(d.mode),
         h('div', { class: 't' }, h('b', {}, d.label), h('span', { class: 'muted' }, ` · ${t(MODES[d.mode])} · `), code(d.root), h('br'), h('span', { class: 'muted' }, d.last_used ? t('Dernier envoi : {0}', K.when(d.last_used)) : t('Jamais utilisé'))),
         K.sure('Révoquer', async ev => { ev.target.disabled = true; try { await K.api('/api/v1/devices/revoke', { method: 'POST', body: { id: d.id } }); K.toast(t('Appareil révoqué'), 1); } catch (e) { K.toast(e.message); } refresh(); }, t('Révoquer « {0} » ? Son jeton cesse de fonctionner tout de suite ; ce qu\'il a déposé reste dans votre uCloud.', d.label))))
         : [h('p', { class: 'muted' }, 'Aucun appareil : le jeton principal ci-dessus ouvre tout votre uCloud.')]));
@@ -233,7 +239,7 @@ export default async function account(root, K) {
   try {
     const b = bk = await K.api('/api/v1/backup'), post = (path, body) => K.api(path, { method: 'POST', body }).then(() => account(root, K), e => K.toast(e.message));
     const mine = b.mine, friend = h('select', { id: 'bk-friend', 'aria-label': 'Ami qui héberge' }, b.friends.map(f => h('option', { value: f.hex, selected: mine && f.hex === mine.host }, f.label)));
-    backup.append(h('p', { class: 'muted' }, 'Vos fichiers et contacts non partagés sont copiés, déjà chiffrés, chez un ami qui l\'accepte : il ne peut rien lire et la copie compte dans son quota. Envoi une fois par nuit (20h12 solaire).'));
+    backup.firstChild.replaceWith(head('Sauvegarde privée', 'Vos fichiers et contacts non partagés sont copiés, déjà chiffrés, chez un ami qui l\'accepte : il ne peut rien lire et la copie compte dans son quota. Envoi une fois par nuit (20h12 solaire).'));
     if (!b.friends.length && !mine) backup.append(h('p', { class: 'muted' }, 'Aucun proche réciproque : suivez-vous mutuellement pour choisir un hébergeur.'));
     else if (mine && mine.enabled) backup.append(
       h('p', {}, h('span', { class: mine.status === 'accepted' ? 'pill ok' : 'pill' }, { pending: 'En attente de réponse', accepted: 'Acceptée', declined: 'Refusée', revoked: 'Révoquée' }[mine.status] || mine.status), ` ${mine.label}`),
@@ -273,14 +279,13 @@ export default async function account(root, K) {
   const [back, guard] = bk?.guardians ? (await K.mod('m-guard.js')).default(bk, K, () => account(root, K)) : [];
 
   // Compte invité : l'adresse a été générée par la station. On ne promet pas une fonction qui n'existe pas (changer d'adresse).
-  const guest = a.guest ? h('p', { class: 'warn', role: 'note' }, h('strong', {}, 'Compte invité. '), 'Votre adresse a été créée par la station : c\'est votre identifiant UPlanet, pas une boîte aux lettres. Gardez la clé de secours imprimée à la création et votre code PASS : sans email, ce sont vos seuls moyens de récupérer le compte.') : null;
+  const guest = a.guest ? h('div', { class: 'warn ac-head', role: 'note' }, h('span', {}, h('strong', {}, 'Compte invité. '), t('Gardez votre clé de secours et votre code PASS.')), tip('Votre adresse a été créée par la station : c\'est votre identifiant UPlanet, pas une boîte aux lettres. Gardez la clé de secours imprimée à la création et votre code PASS : sans email, ce sont vos seuls moyens de récupérer le compte.')) : null;
   // Bandeau d'identité (comme « Mon compte » d'UPlanet). `replaceChildren` écrirait le texte « null » pour un nœud absent : on filtre.
   const title = a.profile.name || a.email || 'Mon compte';
   const hero = h('div', { class: 'hero' }, h('div', { class: 'avatar', 'aria-hidden': 'true' }, [...title][0].toUpperCase()),
     h('div', { class: 'who' }, h('h2', {}, title), a.email && a.email !== title ? h('div', { class: 'sub' }, a.email) : null, h('span', { class: 'pill' }, ROLE[a.role] || a.role), a.guest ? h('span', { class: 'pill' }, 'Invité') : null));
   // « Si je perds tout » : la procédure de la clé de secours (3 morceaux, 2 suffisent), dite sans cryptographie.
-  const rescue = h('section', { class: 'card' }, h('h2', {}, t('Si je perds tout')),
-    h('p', {}, t('Votre clé est découpée en 3 morceaux ; 2 suffisent pour tout retrouver : la carte de secours imprimée chez vous, la station, et l\'ami qui garde votre sauvegarde.')),
+  const rescue = h('section', { class: 'card' }, head(t('Si je perds tout'), t('Votre clé est découpée en 3 morceaux ; 2 suffisent pour tout retrouver : la carte de secours imprimée chez vous, la station, et l\'ami qui garde votre sauvegarde.')),
     h('details', { class: 'fold' }, h('summary', {}, t('J\'ai oublié mon code PASS')), h('p', {}, t('Votre station marche toujours : demandez à son Capitaine un code de secours. Rien n\'est perdu.'))),
     h('details', { class: 'fold' }, h('summary', {}, t('Ma station est détruite, ou je déménage')), h('ol', {},
       h('li', {}, t('Sur une autre station de la même constellation, ouvrez la page « Rétablir mon compte » (adresse /restore).')),
@@ -288,8 +293,12 @@ export default async function account(root, K) {
       h('li', {}, t('Appuyez sur « Prévenir mes gardiens », puis appelez l\'ami qui garde votre sauvegarde : il confirme d\'un geste dans Mon compte › Ma sécurité. Reconnaître votre voix est la seule vérification.')),
       h('li', {}, t('Dès qu\'il confirme, votre compte renaît tout seul. Notez le nouveau code PASS affiché.')),
       h('li', {}, t('Vos amis, vos contacts et vos fichiers reviennent d\'eux-mêmes au fil des heures.')))));
+  // ── Bien démarrer et Mon espace (m-start.js, chargé avec l'écran) ──
+  const start = h('section', { class: 'card wide ac-start', hidden: true }), space = h('section', { class: 'card', hidden: true });
+  K.mod('m-start.js').then(m => m.default(K, { start, space, head, nDevices, guide: GUIDE }), () => {});
+
   // Trois onglets plutôt qu'une colonne de dix cartes : l'onglet ouvert se garde dans l'adresse (#/account?tab=securite).
-  const TABS = [['moi', t('Moi'), [profile, pics, reading, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), back, guard, rescue, backup, idCard, keys].filter(Boolean)]];
+  const TABS = [['moi', t('Moi'), [start, profile, space, pics, reading, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), back, guard, rescue, backup, idCard, keys].filter(Boolean)]];
   const want = new URLSearchParams(location.hash.split('?')[1] || '').get('tab'), cur = TABS.some(x => x[0] === want) ? want : 'moi';
   const panels = TABS.map(([k, , cards]) => h('div', { class: 'grid', role: 'tabpanel', id: 'ac-p-' + k, 'aria-labelledby': 'ac-t-' + k, hidden: k !== cur }, cards));
   const tabs = TABS.map(([k, label], i) => h('button', { type: 'button', class: 'link', role: 'tab', id: 'ac-t-' + k, 'aria-controls': 'ac-p-' + k, 'aria-selected': String(k === cur), tabIndex: k === cur ? 0 : -1, onclick: () => pick(i),

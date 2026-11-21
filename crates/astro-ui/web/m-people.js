@@ -165,7 +165,7 @@ const wipe = ids => {
 function ask(ids) {
   const d = root.querySelector('.pe-name'), inp = d.querySelector('input'), list = d.querySelector('datalist');
   list.replaceChildren(...names().map(n => K.h('option', { value: n })));
-  d.querySelector('p').textContent = `${ids.length} visage(s) à ranger. Le nom d'une de vos Personnes les range dans sa fiche (plusieurs fiches de ce nom : vous choisissez laquelle) ; un nouveau nom crée sa fiche.`;
+  d.querySelector('p').textContent = `${ids.length} visage(s) · un nom connu ou nouveau.`;
   d.onsubmit = ev => { if (ev.submitter?.value === 'ok' && inp.value.trim()) target(inp.value.trim()).then(tg => assign(ids, tg)); };
   inp.value = ''; d.showModal(); inp.focus();
 }
@@ -352,7 +352,7 @@ export default async function people(el, kit, q) {
         h('button', { class: 'pe-pochette new', 'data-drop': 'new' }, '＋ Nouvelle personne'), h('button', { class: 'pe-pochette trash', 'data-drop': 'trash' }, '✕ Pas à reconnaître'), h('button', { class: 'pe-pochette trash', 'data-drop': 'wipe' }, '🗑 Supprimer les photos'),
         h('input', { type: 'search', placeholder: 'Chercher une personne', 'aria-label': 'Chercher une personne', oninput: () => side() }), h('div', { class: 'pe-people' }),
         h('h3', {}, 'À ranger'), h('div', { class: 'pe-todo' }))),
-    tray, h('dialog', { class: 'pe-name', 'aria-labelledby': 'pe-n' }, h('form', { method: 'dialog' }, h('h2', { id: 'pe-n' }, 'Qui est-ce ?'), h('p', { class: 'muted' }), h('input', { 'list-id': 'pe-l', required: true, maxLength: 80, 'aria-label': 'Nom de la personne' }), h('datalist', { id: 'pe-l' }), h('menu', {}, h('button', { class: 'ghost', value: 'no' }, 'Annuler'), h('button', { value: 'ok' }, 'Ranger'))))), tip);
+    tray, h('dialog', { class: 'pe-name', 'aria-labelledby': 'pe-n' }, h('form', { method: 'dialog' }, h('h2', { id: 'pe-n' }, 'Qui est-ce ?'), h('p', { class: 'muted' }), h('input', { 'list-id': 'pe-l', required: true, maxLength: 80, 'aria-label': 'Nom de la personne' }), h('datalist', { id: 'pe-l' }), h('menu', {}, h('button', { class: 'ghost', value: 'no', formNoValidate: true }, 'Annuler'), h('button', { value: 'ok' }, 'Ranger'))))), tip);
   root.querySelector('input[list-id]').setAttribute('list', 'pe-l'); // `list` est en lecture seule côté DOM
   cx = cv.getContext('2d');
   const size = () => { dpr = window.devicePixelRatio || 1; cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr); redraw(); };

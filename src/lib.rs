@@ -71,6 +71,7 @@ pub mod zen_credit;
 pub mod oc_emission;
 pub mod oc_member;
 pub mod public_clean;
+pub mod public_blog;
 pub mod public_site;
 pub mod upload_image;
 pub mod profile_image;

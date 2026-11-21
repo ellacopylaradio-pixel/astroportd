@@ -186,6 +186,50 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
             .map_err(db_err)?;
         Ok(json!({ "dav": self.dav.config.mount, "items": items, "next": next }))
     }
+    async fn import_meta(&self, who: &Principal, body: Value) -> Result<Value, ApiError> {
+        let items = body["items"].as_array().ok_or_else(|| ApiError::bad_request("items : liste attendue"))?;
+        if items.len() > 500 {
+            return Err(ApiError::bad_request("500 fichiers au plus par appel"));
+        }
+        let now = now_secs();
+        // Chaque valeur est vérifiée ; une valeur douteuse est ignorée (jamais une erreur pour tout le lot).
+        let rows: Vec<(String, Option<i64>, Option<f64>, Option<f64>, Option<String>)> = items
+            .iter()
+            .filter_map(|it| {
+                let path = astro_dav::vfs::normalize_path(it["path"].as_str()?).ok()?;
+                let taken = it["taken_at"].as_i64().filter(|t| (31_536_000..=now + 86_400).contains(t));
+                let (lat, lon) = match (it["lat"].as_f64(), it["lon"].as_f64()) {
+                    (Some(a), Some(o)) if (-90.0..=90.0).contains(&a) && (-180.0..=180.0).contains(&o) && (a != 0.0 || o != 0.0) => (Some(a), Some(o)),
+                    _ => (None, None),
+                };
+                let desc = it["desc"].as_str().map(str::trim).filter(|d| !d.is_empty()).map(|d| d.chars().take(2000).collect::<String>());
+                (taken.is_some() || lat.is_some() || desc.is_some()).then_some((path, taken, lat, lon, desc))
+            })
+            .collect();
+        let owner = who.hex.clone();
+        // Une valeur déjà notée (saisie, import précédent) n'est jamais écrasée ; la lecture EXIF qui suivra non plus (voir `thumb`).
+        let updated = self
+            .services
+            .db
+            .writer()
+            .transaction(move |tx| {
+                let mut n = 0usize;
+                for (path, taken, lat, lon, desc) in &rows {
+                    n += tx.execute(
+                        "UPDATE ucloud_entries SET taken_at = COALESCE(taken_at, ?3), lat = COALESCE(lat, ?4), lon = COALESCE(lon, ?5), desc_text = COALESCE(NULLIF(desc_text, ''), ?6) \
+                         WHERE owner_hex = ?1 AND path = ?2 AND type = 'file'",
+                        rusqlite::params![owner, path, taken, lat, lon, desc],
+                    )?;
+                }
+                Ok(n)
+            })
+            .await
+            .map_err(db_err)?;
+        if updated > 0 {
+            self.dav.publisher.as_ref().inspect(|p| p.notify(&who.hex));
+        }
+        Ok(json!({ "updated": updated }))
+    }
     async fn library(&self, who: &Principal, q: astro_ui::api::LibraryQuery) -> Result<Value, ApiError> {
         use astro_ui::api::LibraryQuery as Q;
         let owner = who.hex.clone();

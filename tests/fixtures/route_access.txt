@@ -46,6 +46,8 @@ GET /api/v1/join/{id} anon=404 member=404
 GET /api/v1/locate anon=400 member=400
 GET /api/v1/me anon=401 member=200
 GET /api/v1/me/ai anon=401 member=200
+GET /api/v1/me/blog anon=401 member=200
+GET /api/v1/me/blog/friends anon=401 member=200
 GET /api/v1/me/footprint anon=401 member=200
 GET /api/v1/me/links anon=401 member=200
 GET /api/v1/me/reading anon=401 member=501
@@ -98,6 +100,7 @@ POST /api/v1/account/profile anon=401 member=200
 POST /api/v1/account/sign anon=401 member=400
 POST /api/v1/account/site/example anon=401 member=200
 POST /api/v1/account/token anon=401 member=200
+POST /api/v1/account/token/show anon=401 member=200
 POST /api/v1/account/unlock anon=400 member=400
 POST /api/v1/agents anon=401 member=422
 POST /api/v1/agents/decide anon=401 member=422
@@ -155,6 +158,10 @@ POST /api/v1/invite/{token}/deliver anon=401 member=401
 POST /api/v1/invites anon=401 member=400
 POST /api/v1/invites/remote-accept anon=401 member=422
 POST /api/v1/me/ai anon=401 member=200
+POST /api/v1/me/blog/image anon=401 member=400
+POST /api/v1/me/blog/preview anon=401 member=200
+POST /api/v1/me/blog/publish anon=401 member=400
+POST /api/v1/me/blog/settings anon=401 member=400
 POST /api/v1/me/links anon=401 member=200
 POST /api/v1/me/reading anon=401 member=400
 POST /api/v1/me/zen/preview anon=401 member=501
@@ -199,6 +206,7 @@ POST /api/v1/station/zen-credit/preview anon=401 member=403
 POST /api/v1/station/zen-credit/recipients anon=401 member=403
 POST /api/v1/station/zen-credit/send anon=401 member=403
 POST /api/v1/ucloud/have anon=401 member=422
+POST /api/v1/ucloud/import-meta anon=401 member=400
 POST /api/v1/ucloud/media/edit anon=401 member=422
 POST /api/v1/ucloud/media/friends/request anon=401 member=422
 POST /api/v1/ucloud/media/play anon=401 member=422

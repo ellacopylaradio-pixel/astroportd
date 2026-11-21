@@ -56,23 +56,19 @@ fn clean(rest: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
-fn esc(s: &str) -> String {
-    s.chars().flat_map(|c| match c { '&' => "&amp;".chars().collect::<Vec<_>>(), '<' => "&lt;".chars().collect(), '>' => "&gt;".chars().collect(), '"' => "&quot;".chars().collect(), '\'' => "&#39;".chars().collect(), c => vec![c] }).collect()
-}
-
-fn human(n: u64) -> String {
-    match n {
-        0..=1023 => format!("{n} o"),
-        1024..=1_048_575 => format!("{:.0} Ko", n as f64 / 1024.0),
-        _ => format!("{:.1} Mo", n as f64 / 1_048_576.0),
-    }
-}
-
 /// Site public des comptes de la station.
 pub struct Site<B: BlobStore> {
     dav: Arc<DavState<B>>,
     uplanet_name: String,
     zone: Mutex<Option<(Instant, Option<String>)>>,
+    /// Stations d'accueil sondées récemment : adresse → (quand, joignable).
+    probes: Mutex<std::collections::HashMap<String, (Instant, bool)>>,
+    /// File de réplication à la demande : (clé du membre, relai de sa station) confiés au crawler N².
+    want: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>>,
+    /// Dernière demande de réplication par membre : pas plus d'une toutes les 10 min.
+    asked: Mutex<std::collections::HashMap<String, Instant>>,
+    /// Sonde imposée (tests : pas de réseau) ; `None` en production.
+    probe: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
     /// Photos nettoyées récemment servies (CID de l'original → copie nettoyée) : une photo très vue n'est pas redéchiffrée à chaque visite.
     cleaned: Mutex<std::collections::VecDeque<(String, bytes::Bytes)>>,
 }
@@ -85,7 +81,71 @@ const CLEAN_CACHE: usize = 64 * 1024 * 1024;
 impl<B: BlobStore> Site<B> {
     /// Site pour la constellation `uplanet_name` (la zone DNS vient de sa configuration coopérative).
     pub fn new(dav: Arc<DavState<B>>, uplanet_name: String) -> Self {
-        Self { dav, uplanet_name, zone: Mutex::new(None), cleaned: Mutex::new(std::collections::VecDeque::new()) }
+        Self { dav, uplanet_name, zone: Mutex::new(None), probes: Mutex::new(std::collections::HashMap::new()), probe: None, want: None, asked: Mutex::new(std::collections::HashMap::new()), cleaned: Mutex::new(std::collections::VecDeque::new()) }
+    }
+
+    /// Branche la réplication à la demande : afficher le blog d'un membre d'une autre station en rapatrie les événements ici.
+    #[must_use]
+    pub fn with_replicator(mut self, tx: tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>) -> Self {
+        self.want = Some(tx);
+        self
+    }
+
+    /// Demande au crawler de rapatrier les événements de `hex` (au plus une fois toutes les 10 min par membre).
+    fn ask(&self, hex: &str, home: Option<&str>) {
+        let Some(tx) = &self.want else { return };
+        let mut asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
+        if asked.get(hex).is_some_and(|at| at.elapsed() < Duration::from_secs(600)) {
+            return;
+        }
+        if asked.len() > 5000 {
+            asked.clear();
+        }
+        asked.insert(hex.to_owned(), Instant::now());
+        let relay = home.map(|u| u.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1));
+        let _ = tx.send((hex.to_owned(), relay));
+    }
+
+    /// Événements du blog de `hex` déjà présents ici (articles publics, notes).
+    async fn has_blog(&self, hex: &str) -> bool {
+        let h = hex.to_owned();
+        self.dav.db.readers().read(move |c| Ok(c.query_row("SELECT EXISTS (SELECT 1 FROM nostr_events WHERE pubkey = ?1 AND kind IN (1, 30023))", [&h], |r| r.get::<_, bool>(0))?)).await.unwrap_or(false)
+    }
+
+    /// Blog d'un membre d'une autre station, **lu ici** : la station rapatrie ses événements (synchro N² à la demande) et le rend
+    /// elle-même, sans renvoyer le visiteur ailleurs. Rien encore ici : on attend la réplication quelques secondes, puis, à défaut,
+    /// on redirige vers sa station si elle répond, sinon la copie de secours (vide) le dit.
+    async fn mirror(&self, who: &str, hex: &str, home: Option<String>, base: &str, rest: &str, headers: &HeaderMap) -> Response {
+        self.ask(hex, home.as_deref());
+        if !self.has_blog(hex).await && self.want.is_some() {
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if self.has_blog(hex).await {
+                    break;
+                }
+            }
+        }
+        let up = match &home {
+            Some(url) => self.reachable(url).await,
+            None => false,
+        };
+        if !self.has_blog(hex).await {
+            if let (true, Some(url)) = (up, &home) {
+                return secure(Redirect::temporary(&format!("{url}/site/{who}/{rest}")).into_response());
+            }
+        }
+        let files_at = match (&home, up) {
+            (Some(url), true) => format!("{url}/site/{who}/"),
+            _ => String::new(),
+        };
+        self.backup(hex, base, rest, headers, !up, &files_at).await
+    }
+
+    /// Remplace la sonde des stations d'accueil (tests seulement : aucune configuration n'y mène).
+    #[must_use]
+    pub fn with_probe(mut self, probe: Arc<dyn Fn(&str) -> bool + Send + Sync>) -> Self {
+        self.probe = Some(probe);
+        self
     }
 
     async fn zone(&self) -> Option<String> {
@@ -138,25 +198,70 @@ impl<B: BlobStore> Site<B> {
             .unwrap_or(Value::Null)
     }
 
-    /// Station qui héberge le site `who` quand ce n'est pas celle-ci : son adresse publique, lue dans le résumé de santé qu'elle publie (tag `url`,
-    /// répliqué par la constellation) à partir de la station d'accueil du DID du membre (`home_station` = `<PeerID>:<clé du NODE>`).
-    /// `None` : membre inconnu, ou station d'accueil sans adresse connue. C'est ce qui permet à un DNS en tourniquet (plusieurs stations derrière
-    /// `*.<zone>`) de rediriger chaque visiteur vers la bonne station.
-    async fn elsewhere(&self, who: &str) -> Option<String> {
+    /// Membre d'une autre station de la constellation dont le nom public est `who` : sa clé, et l'adresse publique de sa station d'accueil,
+    /// lue dans le résumé de santé qu'elle publie (tag `url`, répliqué par la constellation) à partir du `home_station` de son DID
+    /// (`<PeerID>:<clé du NODE>`). C'est ce qui permet à un DNS en tourniquet (plusieurs stations derrière `*.<zone>`) de mener chaque
+    /// visiteur à la bonne station, et à une station amie de servir la copie de secours quand celle-ci est tombée.
+    async fn remote(&self, who: &str) -> Option<(String, Option<String>)> {
         let who = who.to_ascii_lowercase();
-        let rows: Vec<(String, String)> = self
+        let rows: Vec<(String, String, Option<String>)> = self
             .dav
             .db
             .readers()
             .read(|c| {
-                let mut st = c.prepare("SELECT email, home_station FROM identities WHERE hosted = 0 AND email IS NOT NULL AND home_station IS NOT NULL LIMIT 20000")?;
-                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                let mut st = c.prepare("SELECT hex, email, home_station FROM identities WHERE hosted = 0 AND email IS NOT NULL LIMIT 20000")?;
+                let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
             })
             .await
             .ok()?;
-        let (_, home) = rows.into_iter().find(|(email, _)| name_of(email) == who)?;
-        self.dav.db.readers().read(move |c| Ok(crate::locate::home_url(c, &home)?)).await.ok().flatten()
+        let (hex, _, home) = rows.into_iter().find(|(_, email, _)| name_of(email) == who)?;
+        let url = match home {
+            Some(home) => self.dav.db.readers().read(move |c| Ok(crate::locate::home_url(c, &home)?)).await.ok().flatten(),
+            None => None,
+        };
+        Some((hex, url))
+    }
+
+    /// La station d'accueil répond-elle (`/health`, 3 s) ? Résultat gardé 60 s : une station tombée ne ralentit pas chaque visite.
+    async fn reachable(&self, url: &str) -> bool {
+        if let Some(p) = &self.probe {
+            return p(url);
+        }
+        if let Some((at, ok)) = self.probes.lock().unwrap_or_else(|e| e.into_inner()).get(url).copied() {
+            if at.elapsed() < Duration::from_secs(60) {
+                return ok;
+            }
+        }
+        let limits = crate::fetch::FetchLimits { timeout: Duration::from_secs(3), max_redirects: 0, ..crate::fetch::FetchLimits::new(64 * 1024) };
+        let ok = crate::fetch::fetch(&format!("{}/health", url.trim_end_matches('/')), &limits).await.is_ok();
+        let mut probes = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+        if probes.len() > 1000 {
+            probes.clear();
+        }
+        probes.insert(url.to_owned(), (Instant::now(), ok));
+        ok
+    }
+
+    /// Blog de secours d'un membre d'une autre station, quand la sienne est injoignable : rendu ici depuis ses événements, que la
+    /// synchro de la constellation a déjà apportés (articles, notes, réponses). Ses fichiers publics, eux, restent chez lui.
+    async fn backup(&self, hex: &str, base: &str, rest: &str, headers: &HeaderMap, down: bool, files_at: &str) -> Response {
+        let Some(rel) = clean(rest) else { return secure(not_found()) };
+        if rel == "files" || rel.split('/').next().is_some_and(|s| s.contains('.') && !matches!(s, "feed.xml" | "sitemap.xml" | "robots.txt")) {
+            return secure(not_found());
+        }
+        let (profile, origin, (peer, app)) = (self.profile(hex).await, origin_of(headers), self.links(base).await);
+        let none = std::collections::HashMap::new();
+        let notice = if down { "Copie de secours : la station de ce blog est injoignable, une station amie le sert. Les fichiers partagés reviendront avec elle." } else { "" };
+        let ctx = crate::public_blog::Ctx { hex, peer: &peer, app: &app, replies: &none, friends: &[], notice, files_at, base, origin: &origin, profile: &profile, theme: "aurore" };
+        match crate::public_blog::route(&self.dav.db, hex, &rel, &ctx, async { Vec::new() }).await {
+            Some(page) => {
+                let mut r = blog_response(page, false);
+                r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=30"));
+                r
+            }
+            None => secure(not_found()),
+        }
     }
 
     /// Compte une visite (page vue) de `hex` : un compteur par jour et par page, sans adresse ni identifiant de visiteur. Se fait en tâche de
@@ -213,7 +318,11 @@ impl<B: BlobStore> Site<B> {
             }
             Some(_) => self.directory(hex, base, &rel, &path, headers, head).await,
             None if rel.is_empty() => self.directory(hex, base, &rel, &path, headers, head).await, // /Public pas encore créé : page d'accueil par défaut
-            None => return secure(not_found()),
+            // Pas de vrai fichier à ce chemin : une page du blog (articles, notes, flux…), sinon 404.
+            None => match self.blog(hex, base, &rel, headers, head).await {
+                Some(r) => r,
+                None => return secure(not_found()),
+            },
         };
         if !head && resp.status() == StatusCode::OK {
             self.count_visit(hex, &shown);
@@ -226,10 +335,85 @@ impl<B: BlobStore> Site<B> {
         if let Some(e) = self.entry(hex, &index).await.filter(|e| e.kind == EntryKind::File) {
             return secure(self.file(hex, &index, &e, headers, head).await);
         }
+        // Sans index.html : l'accueil du blog à la racine, la liste du dossier ailleurs (même mise en page).
+        if rel.is_empty() {
+            return self.blog(hex, base, rel, headers, head).await.unwrap_or_else(|| secure(not_found()));
+        }
         let entries: Vec<Entry> = self.children(hex, path).await.into_iter().filter(|e| !vfs::name_of(&e.path).starts_with('.')).collect();
-        let profile = if rel.is_empty() { self.profile(hex).await } else { Value::Null };
-        let body = default_page(&profile, base, rel, &entries);
-        secure((StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], if head { String::new() } else { body }).into_response())
+        let (profile, origin, theme, (peer, app)) = (self.profile(hex).await, origin_of(headers), self.theme(hex).await, self.links(base).await);
+        let none = std::collections::HashMap::new();
+        let ctx = crate::public_blog::Ctx { hex, peer: &peer, app: &app, replies: &none, friends: &[], notice: "", files_at: "", base, origin: &origin, profile: &profile, theme: &theme };
+        blog_response(crate::public_blog::Page::Html(crate::public_blog::files_page(&ctx, rel, &entries)), head)
+    }
+
+    /// Thème du site choisi par le membre (`kv` site-theme), Aurore par défaut.
+    pub async fn theme(&self, hex: &str) -> String {
+        let h = hex.to_owned();
+        self.dav.db.readers().read(move |c| Ok(rusqlite::OptionalExtension::optional(c.query_row("SELECT value FROM kv WHERE scope = 'site-theme' AND key = ?1", [&h], |r| r.get::<_, String>(0)))?)).await.ok().flatten().filter(|t| matches!(t.as_str(), "aurore" | "sobre" | "kraft")).unwrap_or_else(|| "aurore".into())
+    }
+
+    /// Choisit le thème du site (`aurore`, `sobre` ou `kraft`).
+    pub async fn set_theme(&self, hex: &str, theme: &str) -> Result<(), String> {
+        if !matches!(theme, "aurore" | "sobre" | "kraft") {
+            return Err("thème : aurore, sobre ou kraft".into());
+        }
+        let (h, t, at) = (hex.to_owned(), theme.to_owned(), i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())).unwrap_or(0));
+        self.dav.db.writer().execute("INSERT INTO kv(scope, key, value, updated_at) VALUES ('site-theme', ?1, ?2, ?3) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", vec![h.into(), t.into(), at.into()]).await.map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    /// Modèle d'adresse des sites des autres membres et origine de l'application, selon que le site est servi en `/site/<nom>` ou
+    /// sous son propre nom d'hôte (`<nom>.<zone>` : l'application est alors à la racine de la zone).
+    async fn links(&self, base: &str) -> (String, String) {
+        if !base.is_empty() {
+            return ("/site/{}/".into(), String::new());
+        }
+        match self.zone().await {
+            Some(z) => (format!("https://{{}}.{z}/"), format!("https://{z}")),
+            None => ("/site/{}/".into(), String::new()),
+        }
+    }
+
+    /// Range une image d'article dans `/Public/images` (nom daté, jamais écrasé) ; rend son chemin dans le site (`images/<nom>`).
+    pub async fn save_image(&self, hex: &str, name: &str, bytes: Vec<u8>) -> Result<String, String> {
+        if bytes.len() > 16 * 1024 * 1024 {
+            return Err("image trop lourde (16 Mo au plus)".into());
+        }
+        // Le type vient des octets, jamais du nom : seuls JPEG, PNG et WebP passent (ceux dont la station retire lieu et appareil).
+        let mime = if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "image/jpeg"
+        } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            "image/png"
+        } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+            "image/webp"
+        } else {
+            return Err("format refusé : JPEG, PNG ou WebP".into());
+        };
+        crate::public_clean::clean(&bytes).map_err(|e| format!("image illisible : {e}"))?;
+        let stem: String = name.rsplit_once('.').map_or(name, |(a, _)| a).chars().filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_')).take(40).collect();
+        let ext = match mime {
+            "image/png" => "png",
+            "image/webp" => "webp",
+            _ => "jpg",
+        };
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        let file = format!("{at}-{}.{ext}", if stem.is_empty() { "image" } else { &stem });
+        let (h, now) = (hex.to_owned(), i64::try_from(at / 1000).unwrap_or(0));
+        vfs::vfs_tx(&self.dav.db, move |tx| vfs::mkdir_p_tx(tx, &h, "/Public/images", now)).await.map_err(|e| e.to_string())?;
+        astro_dav::ingest::replace(&self.dav, hex, "/Public/images", &file, Some(mime), Cursor::new(bytes)).await.map_err(|e| e.to_string())?;
+        if let Some(p) = &self.dav.publisher {
+            p.notify(hex);
+        }
+        Ok(format!("images/{file}"))
+    }
+
+    /// Page du blog au chemin `rel` (voir `public_blog`) ; `None` si ce n'en est pas une.
+    async fn blog(&self, hex: &str, base: &str, rel: &str, headers: &HeaderMap, head: bool) -> Option<Response> {
+        let (profile, origin, theme, (peer, app)) = (self.profile(hex).await, origin_of(headers), self.theme(hex).await, self.links(base).await);
+        let none = std::collections::HashMap::new();
+        let ctx = crate::public_blog::Ctx { hex, peer: &peer, app: &app, replies: &none, friends: &[], notice: "", files_at: "", base, origin: &origin, profile: &profile, theme: &theme };
+        let files = async { self.children(hex, DIR).await.into_iter().filter(|e| !vfs::name_of(&e.path).starts_with('.')).collect::<Vec<_>>() };
+        let page = crate::public_blog::route(&self.dav.db, hex, rel, &ctx, files).await?;
+        Some(blog_response(page, head))
     }
 
     /// Sert un fichier de `/Public` : une photo (JPEG, PNG, WebP, reconnue à ses octets) part **nettoyée** de sa position et de
@@ -436,8 +620,9 @@ impl<B: BlobStore> Site<B> {
         let who = host.strip_suffix(&format!(".{zone}"))?;
         let Some((hex, _)) = self.owner(who).await else {
             // Pas hébergé ici : le DNS (tourniquet) a mené le visiteur à une autre station que celle du membre. On le redirige vers la bonne
-            // (jamais vers cette adresse-ci : pas de boucle).
-            return self.elsewhere(who).await.filter(|url| !url.contains(host.as_str())).map(|url| secure(Redirect::temporary(&format!("{url}/site/{who}{path}")).into_response()));
+            // (jamais vers cette adresse-ci : pas de boucle) ; si elle est injoignable, on sert la copie de secours de son blog.
+            let (rhex, url) = self.remote(who).await?;
+            return Some(self.mirror(who, &rhex, url.filter(|u| !u.contains(host.as_str())), "", path.trim_start_matches('/'), headers).await);
         };
         Some(self.serve(&hex, "", path, headers, head).await)
     }
@@ -470,10 +655,12 @@ async fn sub<B: BlobStore>(State(site): State<Arc<Site<B>>>, Path((who, rest)): 
 }
 
 async fn page<B: BlobStore>(site: &Site<B>, who: &str, rest: &str, headers: &HeaderMap) -> Response {
+    let base = format!("/site/{}", who.to_ascii_lowercase());
     match site.owner(who).await {
-        Some((hex, _)) => site.serve(&hex, &format!("/site/{}", who.to_ascii_lowercase()), rest, headers, false).await,
-        None => match site.elsewhere(who).await {
-            Some(url) => secure(Redirect::temporary(&format!("{url}/site/{}/{rest}", who.to_ascii_lowercase())).into_response()),
+        Some((hex, _)) => site.serve(&hex, &base, rest, headers, false).await,
+        // Membre d'une autre station : son blog est lu ICI (réplication à la demande), jamais une simple redirection.
+        None => match site.remote(who).await {
+            Some((hex, url)) => site.mirror(&who.to_ascii_lowercase(), &hex, url, &base, rest, headers).await,
             None => secure(not_found()),
         },
     }
@@ -487,6 +674,25 @@ fn not_found() -> Response {
     (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], "<!doctype html><meta charset=utf-8><title>404</title><p>Page introuvable.</p>").into_response()
 }
 
+/// Réponse d'une page du blog : en-têtes du site public, avec la politique plus stricte du blog (aucun script).
+fn blog_response(page: crate::public_blog::Page, head: bool) -> Response {
+    let (ctype, body) = match page {
+        crate::public_blog::Page::Html(b) => ("text/html; charset=utf-8", b),
+        crate::public_blog::Page::Text(t, b) => (t, b),
+    };
+    let mut r = secure((StatusCode::OK, [(header::CONTENT_TYPE, ctype)], if head { String::new() } else { body }).into_response());
+    r.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(crate::public_blog::CSP));
+    r
+}
+
+/// Origine absolue vue par le visiteur (flux Atom, aperçus) : `http` seulement en boucle locale ou si le relais le dit.
+fn origin_of(headers: &HeaderMap) -> String {
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).filter(|h| h.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c))).unwrap_or("localhost");
+    let proto = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok());
+    let local = host.starts_with("localhost") || host.starts_with("127.") || host.starts_with("[::1]");
+    format!("{}://{host}", if proto == Some("http") || (proto.is_none() && local) { "http" } else { "https" })
+}
+
 /// En-têtes de toute réponse du site public (voir le module).
 fn secure(mut r: Response) -> Response {
     let h = r.headers_mut();
@@ -496,36 +702,6 @@ fn secure(mut r: Response) -> Response {
     h.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("public, max-age=60"));
     r
 }
-
-/// Page d'accueil par défaut (aucun `index.html`) : nom, présentation, image et bandeau du profil, puis la liste des fichiers.
-fn default_page(profile: &Value, base: &str, rel: &str, entries: &[Entry]) -> String {
-    let text = |k: &str| profile[k].as_str().filter(|s| !s.is_empty()).map(esc);
-    let img = |k: &str, cls: &str| profile[k].as_str().filter(|u| u.starts_with("https://")).map(|u| format!("<img class=\"{cls}\" src=\"{}\" alt=\"\">", esc(u)));
-    let title = text("name").unwrap_or_else(|| if rel.is_empty() { "Site public".into() } else { esc(rel) });
-    let mut rows = String::new();
-    if !rel.is_empty() {
-        rows.push_str(&format!("<li><a href=\"{base}/{}/\">⬆ ..</a></li>", esc(rel.rsplit_once('/').map_or("", |(p, _)| p)).trim_end_matches('/')));
-    }
-    for e in entries {
-        let name = vfs::name_of(&e.path);
-        let href = format!("{base}/{}{}", if rel.is_empty() { String::new() } else { format!("{rel}/") }, name);
-        match e.kind {
-            EntryKind::Dir => rows.push_str(&format!("<li>📁 <a href=\"{}/\">{}</a></li>", esc(&href), esc(name))),
-            EntryKind::File => rows.push_str(&format!("<li>📄 <a href=\"{}\">{}</a> <small>{}</small></li>", esc(&href), esc(name), human(e.size))),
-        }
-    }
-    if entries.is_empty() {
-        rows.push_str("<li><em>Rien n'est publié pour l'instant.</em></li>");
-    }
-    format!(
-        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{title}</title><style>{DEFAULT_CSS}</style></head><body>{banner}<main>{icon}<h1>{title}</h1>{about}<ul>{rows}</ul></main><footer>Site publié avec astroportd</footer></body></html>",
-        banner = img("banner", "banner").unwrap_or_default(),
-        icon = img("picture", "icon").unwrap_or_default(),
-        about = text("about").map(|a| format!("<p>{a}</p>")).unwrap_or_default(),
-    )
-}
-
-const DEFAULT_CSS: &str = "body{margin:0;font-family:system-ui,sans-serif;background:#f5f7fb;color:#18202f}main{max-width:42rem;margin:0 auto;padding:1rem}.banner{display:block;width:100%;max-height:14rem;object-fit:cover}.icon{width:5rem;height:5rem;border-radius:50%;object-fit:cover;margin-top:-3rem;border:4px solid #fff;background:#fff}h1{margin:.4rem 0}ul{list-style:none;padding:0}li{padding:.35rem 0;border-bottom:1px solid #0001}a{color:#2a46c8}small{color:#667}footer{text-align:center;color:#889;font-size:.8rem;padding:2rem 0}@media(prefers-color-scheme:dark){body{background:#12151f;color:#eef0f8}a{color:#9bb0ff}.icon{border-color:#12151f;background:#12151f}}";
 
 const EXAMPLE_INDEX: &str = "<!doctype html>\n<html lang=\"fr\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>Ma page</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <main>\n    <h1>Bonjour 👋</h1>\n    <p>Cette page est le fichier <code>index.html</code> de votre dossier <code>/Public</code>.\n       Modifiez-la depuis votre client WebDAV : elle change aussitôt.</p>\n    <h2>Mes fichiers</h2>\n    <ul>\n      <li><a href=\"LISEZMOI.txt\">LISEZMOI.txt</a></li>\n      <!-- Ajoutez vos liens : <li><a href=\"photos/vacances.jpg\">Mes vacances</a></li> -->\n    </ul>\n  </main>\n</body>\n</html>\n";
 
@@ -552,10 +728,13 @@ mod tests {
     }
 
     #[test]
-    fn user_text_is_escaped_in_the_default_page() {
-        let profile = json!({ "name": "<script>alert(1)</script>", "about": "a & b", "picture": "javascript:alert(1)" });
-        let page = default_page(&profile, "/site/x", "", &[]);
-        assert!(!page.contains("<script>") && page.contains("&lt;script&gt;") && page.contains("a &amp; b"));
-        assert!(!page.contains("javascript:"), "seule une image https est reprise");
+    fn the_origin_is_https_except_on_the_loopback() {
+        let mut h = HeaderMap::new();
+        h.insert(header::HOST, HeaderValue::from_static("qo-op.com"));
+        assert_eq!(origin_of(&h), "https://qo-op.com");
+        h.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
+        assert_eq!(origin_of(&h), "http://127.0.0.1:8080");
+        h.insert(header::HOST, HeaderValue::from_static("evil\"><x"));
+        assert_eq!(origin_of(&h), "http://localhost", "un hôte douteux n'entre jamais dans les pages");
     }
 }

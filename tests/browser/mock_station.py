@@ -2,6 +2,7 @@
 
 Utilisée par `smoke_ui.py` (test de fumée) et `docs/roman/roman_photo.py` (captures des romans-photos)."""
 import base64, io, json, math, random, sys, threading
+from urllib.parse import unquote as _uq
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -155,12 +156,13 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/chat/messages': return self.send(200, dict(peer='ab' * 32, messages=STATE['chat'], more=False))
         if p == '/api/v1/chat/settings': return self.send(200, dict(receipts=STATE.get('receipts', True)))
         if p == '/health': return self.send(200, dict(status='ok'))
-        if p == '/api/v1/me/footprint': return self.send(200, dict(disk=None))
+        if p == '/api/v1/me/footprint': return self.send(200, dict(disk=dict(used_bytes=2_400_000_000, files=5321, quota_bytes=10_000_000_000, unlimited=False, tier='Basic', by_kind=dict(ucloud=dict(photo=1_500_000_000, video=600_000_000, music=120_000_000, doc=40_000_000, other=20_000_000), public=dict(photo=90_000_000, doc=30_000_000)))))
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/faces/folders': return self.send(200, dict(folders=[dict(dir='/Images/2026/10', faces=12, todo=9), dict(dir='/Images/2026/09', faces=4, todo=0)]))
         if p == '/api/v1/faces/board':
             import time; time.sleep(STATE.get('delay', 0))
             return self.send(200, dict(enabled=True, dav='/dav', faces=STATE['faces'], people=people(), unknown=sum(1 for f in STATE['faces'] if not f['named']), groups_skipped=False, truncated=False))
+        if p.startswith('/dav/') and _uq(p[4:]) in STATE.setdefault('dav', {}): return self.send(200, STATE['dav'][_uq(p[4:])], 'text/plain')
         if p.startswith('/dav/'): return self.send(200, base64.b64decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), 'image/gif')
         if p == '/api/v1/station/planes': return self.send(200, dict(configured=True, multi_process=True, front=True, planes=[dict(name='origin', origin=True, http='127.0.0.1:8090', db='/x/uplanet.db', db_exists=True, running=True), dict(name='zen1', origin=False, http='127.0.0.1:8091', db='/x/zen1/uplanet.db', db_exists=False, running=False)], restart_needed=True, pending=['zen1'], path='/x/planes.json', service=dict(unit=STATE.get('unit', 'serve'), path='/h/.config/systemd/user/astroportd.service', command='/usr/bin/astroportd planes', mismatch=STATE.get('unit', 'serve') == 'serve', restart=True)))
         if p.startswith('/api/v1/book'):
@@ -177,7 +179,11 @@ class H(BaseHTTPRequestHandler):
             if p == '/api/v1/book/photo-choices': return self.send(200, dict(faces=[7]))
             if p == '/api/v1/book/duplicates': return self.send(200, dict(groups=[dict(reasons=['même téléphone'], cards=[dict(path='/Contacts/Lea.vcf', name='Léa Martin', emails=[], phones=['+33 6 12']), dict(path='/Contacts/Lea2.vcf', name='L. Martin', emails=[], phones=['06 12'])])]))
         if p == '/api/v1/ucloud/memories': return self.send(200, dict(memories=[]))
+        if p == '/api/v1/ucloud/list' and 'Favoris' in self.path:
+            return self.send(200, dict(dav='/dav', entries=[dict(name=k.rsplit('/', 1)[1], path=k, type='file', mime='application/internet-shortcut', size=len(v), mtime=1795000000) for k, v in STATE.setdefault('dav', {}).items() if k.startswith('/Favoris/')]))
         if p == '/api/v1/ucloud/list': return self.send(200, dict(dav='/dav', entries=[dict(name='Documents', path='/Documents', type='dir', mime=None, size=None, mtime=1790000000), dict(name='notes.txt', path='/notes.txt', type='file', mime='text/plain', size=120, mtime=1790000000)]))
+        if p == '/api/v1/me/blog/friends': return self.send(200, dict(posts=[dict(author='cd' * 32, name='Léa', picture=None, site='/site/lea/', d='potager', title='Mon potager en novembre', summary='Ce qui pousse encore quand il fait froid.', image=None, tags=['jardin'], published_at=1795100000, reserved=False, minutes=3, html='<p>Les poireaux tiennent bon.</p><h2>Les choux</h2><p>Ils adorent le froid.</p>'), dict(author='ef' * 32, name='Paul', picture=None, site='/site/paul/', d='fete', title='La fête de samedi', summary='Rien que pour la famille.', image=None, tags=[], published_at=1795000000, reserved=True, minutes=1, html='<p>Rendez-vous à 19 h.</p>')]))
+        if p == '/api/v1/me/blog': return self.send(200, dict(groups=[dict(id='ab' * 32, name='Famille', members=4)], theme='aurore', site='/site/alice/', hex='aa' * 32, posts=[dict(draft=False, d='levain', title='Mon levain a dix ans', summary='Farine, eau, patience.', image=None, tags=['pain'], published_at=1795000000, updated_at=1795000000, scheduled=False, content='Texte'), dict(draft=True, d='coop', title='Pourquoi une coopérative ?', summary='', image=None, tags=[], published_at=1795100000, updated_at=1795100000, scheduled=False, content='Brouillon')]))
         if p == '/api/v1/me/reading': return self.send(200, READING)
         if p == '/api/v1/me/reading/offers': return self.send(200, OFFERS)
         if p == '/api/v1/station/accounts': return self.send(200, dict(accounts=ACCOUNTS))
@@ -228,8 +234,20 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/ucloud/media/trace':
             return self.send(200, dict(shared=True, **{'from': None}, copies=[dict(label='Léa', at=1790000000)], reshared=['Léa']))
         self.send(404, dict(error='simulé : ' + p))
-    def do_DELETE(self):
+    def _dav_write(self):
+        from urllib.parse import unquote as uq
+        n = int(self.headers.get('Content-Length') or 0); body = self.rfile.read(n) if n else b''
+        path = uq(self.path.split('?')[0][4:])
+        if self.command == 'PUT': STATE.setdefault('dav', {})[path] = body
+        if self.command == 'DELETE': STATE.setdefault('dav', {}).pop(path, None)
+        STATE.setdefault('dav_ops', []).append((self.command, path))
+        return self.send(201 if self.command != 'DELETE' else 204, b'', 'text/plain')
+    do_PUT = do_MKCOL = _dav_write
+
+    def do_DELETE(self):  # WebDAV dans /dav ; ailleurs, les DELETE de l'API (liens, invitations)
+        if self.path.startswith('/dav/'): return self._dav_write()
         STATE['deleted'].append(self.path); self.send(200, dict(revoked=True))
+
     def do_POST(self):
         n = int(self.headers.get('Content-Length', 0)); body = json.loads(self.rfile.read(n) or b'{}'); p = self.path
         STATE['posts'].append((p, body))
@@ -330,6 +348,19 @@ class H(BaseHTTPRequestHandler):
             if body.get('pass') != '123456': return self.send(401, dict(error='code PASS incorrect : 4 essai(s) restant(s) avant verrouillage'))
             return self.send(200, dict(email=body['email'], hex='aa' * 32, token='TOKEN-SESSION', guest=False))
         if p == '/api/v1/account/sign': return self.send(200, dict(id='11' * 32, pubkey='aa' * 32, sig='22' * 64, created_at=1, **{k: body[k] for k in ('kind', 'content', 'tags')}))
+        if p == '/api/v1/me/blog/preview':
+            md = body.get('markdown', '')
+            return self.send(200, dict(html=''.join(f'<h2>{l[3:]}</h2>' if l.startswith('## ') else f'<p>{l}</p>' for l in md.split('\n') if l.strip() and not l.startswith('# ')), minutes=max(1, len(md.split()) // 220 + 1)))
+        if p == '/api/v1/me/blog/publish': return self.send(200, dict(event=dict(id='ee' * 32, kind=body.get('kind'))))
+        if p == '/api/v1/me/blog/settings': return self.send(200, dict(theme=body.get('theme')))
+        if p == '/api/v1/me/blog/image': return self.send(200, dict(path='/site/alice/images/x.jpg', rel='images/x.jpg'))
+        if p == '/api/v1/ucloud/have':
+            import hashlib
+            owned = {hashlib.sha256(v).hexdigest(): k for k, v in STATE.setdefault('dav', {}).items()}
+            return self.send(200, dict(have=[dict(sha=x, path=owned[x]) for x in body.get('shas', []) if x in owned]))
+        if p == '/api/v1/feedback': return self.send(200, dict(ok=True, stored='git', issue_url='https://github.com/papiche/astroportd/issues/1', issue_number=1))
+        if p == '/api/v1/ucloud/import-meta': STATE.setdefault('meta', []).extend(body['items']); return self.send(200, dict(updated=len(body['items'])))
+        if p == '/api/v1/account/token/show': return self.send(200, dict(login='alice@example.org', token='jeton'))
         if p == '/api/v1/account/token': return self.send(200, dict(login='alice@example.org', token='NOUVEAU-JETON', generation=1))
         if p == '/api/v1/account/keys': return self.send(200, dict(nsec='nsec1secret', npub='npub1test', dunikey='sec: x', dunikey_error=None))
         if p == '/api/v1/account/profile': return self.send(200, ACCOUNT)

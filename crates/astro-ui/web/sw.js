@@ -5,6 +5,20 @@
 const V = 'astroport-v1', SHELL = ['/', '/ui/app.css', '/ui/app.js', '/ui/icon.svg', '/ui/manifest.webmanifest'];
 self.addEventListener('install', e => e.waitUntil(caches.open(V).then(c => Promise.all(SHELL.map(u => fetch(new Request(u, { cache: 'reload', headers: { Accept: 'text/html,*/*' } })).then(r => (r.ok ? c.put(u, r) : 0))))).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())));
+// « Partager » depuis le téléphone (share_target du manifeste) : le texte, le lien et les images sont déposés dans un cache éphémère,
+// relu puis effacé par l'écran Mon blog (#/write?shared=1). Rien ne part vers la station avant que le membre publie.
+self.addEventListener('fetch', e => {
+  const u = new URL(e.request.url);
+  if (e.request.method !== 'POST' || u.origin !== location.origin || u.pathname !== '/ui/share') return;
+  e.respondWith((async () => {
+    try {
+      const f = await e.request.formData(), c = await caches.open('astro-share'), files = f.getAll('files').filter(x => x && x.size && x.size < 40e6).slice(0, 10);
+      await Promise.all(files.map((x, i) => c.put('/ui/share/file/' + i, new Response(x, { headers: { 'Content-Type': x.type || 'image/jpeg', 'X-Name': encodeURIComponent(x.name || 'image.jpg') } }))));
+      await c.put('/ui/share/meta', new Response(JSON.stringify({ title: f.get('title') || '', text: f.get('text') || '', url: f.get('url') || '', files: files.length })));
+    } catch { /* on ouvre l'éditeur quand même */ }
+    return Response.redirect('/#/write?shared=1', 303);
+  })());
+});
 self.addEventListener('fetch', e => {
   const r = e.request, u = new URL(r.url), page = r.mode === 'navigate' && u.pathname === '/';
   if (r.method !== 'GET' || u.origin !== location.origin || !(page || (u.pathname.startsWith('/ui/') && u.pathname !== '/ui/sw.js'))) return;

@@ -206,7 +206,8 @@ async fn only_public_images_can_be_picked_for_the_profile() {
 
 #[tokio::test]
 async fn a_station_that_does_not_host_the_site_redirects_to_the_one_that_does() {
-    let r = rig("redirect").await;
+    let mut r = rig("redirect").await;
+    r.site = Arc::new(Site::new(r.dav.clone(), UP.to_owned()).with_probe(Arc::new(|_| true))); // sa station répond
     // Bob est hébergé ailleurs : son DID (répliqué) dit sa station d'accueil, et cette station publie son adresse dans sa santé économique.
     let (bob, node) = ("bob.durand@exemple.org", "ab".repeat(32));
     r.db.writer().execute("INSERT INTO identities(hex, role, email, hosted, home_station) VALUES (?1, 'multipass', ?2, 0, ?3)", vec!["bb".repeat(32).into(), bob.to_owned().into(), format!("12D3KooWautre:{node}").into()]).await.unwrap();
@@ -222,13 +223,31 @@ async fn a_station_that_does_not_host_the_site_redirects_to_the_one_that_does() 
     let mut patch = BTreeMap::new();
     patch.insert("OVH_ZONE".to_owned(), Some("coop.net".to_owned()));
     astroportd::coop_config::save(&r.db, &Arc::new(Store(r.db.clone())), UP, &patch).await.unwrap();
-    let site = Arc::new(Site::new(r.dav.clone(), UP.to_owned()));
+    let site = Arc::new(Site::new(r.dav.clone(), UP.to_owned()).with_probe(Arc::new(|_| true)));
     let resp = site.by_host(&format!("{name}.coop.net"), "/index.html", &HeaderMap::new(), false).await.unwrap();
     assert_eq!((resp.status(), resp.headers()[header::LOCATION].to_str().unwrap()), (StatusCode::TEMPORARY_REDIRECT, format!("https://autre.exemple/site/{name}/index.html").as_str()));
 
-    // Station d'accueil sans adresse connue, ou membre inconnu : pas de redirection devinée.
+    // Dès que ses événements sont ici (synchro N²), son blog est lu ICI, même si sa station répond : aucune redirection, et ses fichiers
+    // partagés restent un lien vers sa station.
+    let early = astro_nostr_proto::UnsignedEvent { created_at: 1_789_000_000, kind: 1, tags: vec![], content: "Bonjour d'ailleurs".into() }.sign(&[0xBB; 32]).unwrap();
+    r.db.writer().execute("UPDATE identities SET hex = ?1 WHERE email = ?2", vec![early.pubkey.clone().into(), bob.to_owned().into()]).await.unwrap();
+    Store(r.db.clone()).publish(early).await.unwrap();
+    let (s, _, page) = get(&r, &format!("/site/{name}/")).await;
+    assert_eq!(s, StatusCode::OK, "lu ici, pas redirigé");
+    assert!(page.contains("Bonjour d&#39;ailleurs") && !page.contains("Copie de secours") && page.contains(&format!("https://autre.exemple/site/{name}/files/")), "{page}");
+    // Sa station est tombée : une station amie sert la copie de secours de son blog, depuis ses événements répliqués (jamais ses fichiers).
+    let ev = astro_nostr_proto::UnsignedEvent { created_at: 1_790_000_000, kind: 30023, tags: vec![t(&["d", "secours"]), t(&["title", "Toujours là"])], content: "Texte".into() }.sign(&[0xBB; 32]).unwrap();
+    Store(r.db.clone()).publish(ev).await.unwrap();
+    r.site = Arc::new(Site::new(r.dav.clone(), UP.to_owned()).with_probe(Arc::new(|_| false)));
+    let (s, h, page) = get(&r, &format!("/site/{name}/")).await;
+    assert_eq!(s, StatusCode::OK, "copie de secours");
+    assert!(page.contains("Copie de secours") && page.contains("Toujours là"), "{page}");
+    assert!(!h[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("allow-scripts"));
+    assert_eq!(get(&r, &format!("/site/{name}/blog/secours")).await.0, StatusCode::OK);
+    assert_eq!(get(&r, &format!("/site/{name}/photos/a.jpg")).await.0, StatusCode::NOT_FOUND, "ses fichiers restent chez lui");
+    // Station d'accueil sans adresse connue : la copie de secours aussi (jamais une redirection devinée) ; membre inconnu : 404.
     r.db.writer().execute("DELETE FROM kv WHERE scope = 'economic_health'", vec![]).await.unwrap();
-    assert_eq!(get(&r, &format!("/site/{name}/")).await.0, StatusCode::NOT_FOUND);
+    assert!(get(&r, &format!("/site/{name}/")).await.2.contains("Copie de secours"));
     assert_eq!(get(&r, "/site/inconnu.exemple.org/").await.0, StatusCode::NOT_FOUND);
 }
 
@@ -348,4 +367,63 @@ async fn a_damaged_or_uncleanable_photo_is_refused_never_served_raw() {
             assert!(!leaks(&body), "{name} : rien de l'original");
         }
     }
+}
+
+/// Publie un événement signé par Alice dans la base (comme le relai le ferait).
+async fn publish(r: &Rig, created_at: u64, kind: u32, tags: Vec<Vec<String>>, content: &str) {
+    let ev = astro_nostr_proto::UnsignedEvent { created_at, kind, tags, content: content.to_owned() }.sign(&ALICE).unwrap();
+    Store(r.db.clone()).publish(ev).await.unwrap();
+}
+
+fn t(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| (*s).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn without_an_index_the_site_is_a_blog_made_of_the_members_articles_and_notes() {
+    let r = rig("blog").await;
+    let b = format!("/site/{}", r.name);
+    publish(&r, 5, 0, vec![], &serde_json::json!({ "name": "Alice", "about": "Boulangère" }).to_string()).await;
+    publish(&r, 1_790_000_000, 30023, vec![t(&["d", "le-levain"]), t(&["title", "Le levain <maison>"]), t(&["summary", "Tout sur le levain"]), t(&["t", "Pain"]), t(&["published_at", "1790000000"])], "# Le levain <maison>\n\nFarine et **eau**. <script>alert(1)</script> [lien](javascript:alert(1))").await;
+    publish(&r, 1_791_000_000, 30023, vec![t(&["d", "la-baguette"]), t(&["title", "La baguette"]), t(&["t", "pain"])], "Croustillante.").await;
+    publish(&r, 1_792_000_000, 1, vec![], "Four allumé ce matin https://exemple.org/four.jpg").await;
+    publish(&r, 1_792_000_100, 1, vec![t(&["e", &"ab".repeat(32)])], "Une réponse à quelqu'un").await;
+    put(&r, "/Public", "tarifs.pdf", "application/pdf", "%PDF").await;
+
+    let (s, h, home) = get(&r, &format!("{b}/")).await;
+    assert_eq!(s, StatusCode::OK);
+    let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(csp.contains("default-src 'none'") && !csp.contains("allow-scripts"), "aucun script sur les pages du blog : {csp}");
+    assert!(home.contains("À la une") && home.contains("La baguette") && home.contains("Le levain &lt;maison&gt;"), "articles à l'accueil");
+    assert!(home.contains("Four allumé") && home.contains("src=\"https://exemple.org/four.jpg\""), "notes à l'accueil, image montrée");
+    assert!(!home.contains("Une réponse à quelqu'un"), "les réponses ne sont pas des notes du blog");
+    assert!(home.contains("tarifs.pdf"), "fichiers publics à l'accueil");
+
+    let (s, _, post) = get(&r, &format!("{b}/blog/le-levain")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(post.contains("<strong>eau</strong>") && post.contains("&lt;script&gt;") && !post.contains("<script>") && !post.contains("javascript:"), "Markdown rendu, HTML brut neutralisé : {post}");
+    assert!(post.contains("og:title") && post.contains("Article suivant") && post.contains(&format!("{b}/tag/pain")));
+    assert_eq!(post.matches("<h1>").count(), 1, "le titre n'est pas répété par le « # » du texte");
+
+    let (_, _, tag) = get(&r, &format!("{b}/tag/pain")).await;
+    assert!(tag.contains("2 articles"));
+    let (_, h, feed) = get(&r, &format!("{b}/feed.xml")).await;
+    assert!(h[header::CONTENT_TYPE].to_str().unwrap().starts_with("application/atom+xml") && feed.matches("<entry>").count() == 2);
+    assert_eq!(get(&r, &format!("{b}/blog/inconnu")).await.0, StatusCode::NOT_FOUND);
+
+    // Une réponse d'un ami à une note : repliée sous la note, avec un lien « Répondre » vers l'éditeur.
+    let note_id: String = r.db.readers().read(|c| Ok(c.query_row("SELECT id FROM nostr_events WHERE kind = 1 AND content LIKE 'Four%'", [], |x| x.get(0))?)).await.unwrap();
+    let ev = astro_nostr_proto::UnsignedEvent { created_at: 1_792_000_500, kind: 1, tags: vec![t(&["e", &note_id, "", "root"])], content: "Miam !".into() }.sign(&[0xB0; 32]).unwrap();
+    Store(r.db.clone()).publish(ev).await.unwrap();
+    let (_, _, notes) = get(&r, &format!("{b}/notes/")).await;
+    assert!(notes.contains("<details class=\"thread\"><summary>1 réponse</summary>") && notes.contains("Miam"), "fil replié : {notes}");
+    // « Répondre » passe par Nostr : le client du visiteur (`nostr:`) ou SON application Astroport (`web+nostr:`), sur sa propre station.
+    assert!(notes.contains("<a href=\"web+astro:nevent1") && notes.contains("href=\"nostr:nevent1"), "« Répondre » ouvre l'application Astroport du visiteur, nostr: en second");
+    // Un vrai fichier du membre passe toujours avant une page du blog.
+    put(&r, "/Public/blog", "le-levain", "text/plain", "mon propre fichier").await;
+    assert_eq!(get(&r, &format!("{b}/blog/le-levain")).await.2, "mon propre fichier");
+    // Et son propre index.html remplace l'accueil, le blog restant à son adresse.
+    put(&r, "/Public", "index.html", "text/html", "<h1>Ma page</h1>").await;
+    assert!(get(&r, &format!("{b}/")).await.2.contains("Ma page"));
+    assert!(get(&r, &format!("{b}/notes/")).await.2.contains("Four allumé"));
 }

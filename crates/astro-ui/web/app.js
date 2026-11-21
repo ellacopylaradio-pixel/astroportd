@@ -322,5 +322,7 @@ let stale; const had = !!navigator.serviceWorker?.controller;
 addEventListener('hashchange', () => (stale && !$('.call-local') ? location.reload() : route()));
 addEventListener('offline', () => toast('Hors ligne : la station est injoignable'));
 addEventListener('online', () => toast('Connexion rétablie', 1));
+// Les adresses Nostr (« Répondre » d'un blog ami) ouvrent l'éditeur de CETTE station : la réponse part d'ici, la synchro N² l'apporte.
+for (const s of ['web+astro', 'web+nostr']) try { navigator.registerProtocolHandler?.(s, '/#/write?nostr=%s'); } catch { /* navigateur sans gestionnaires */ }
 if ('serviceWorker' in navigator) navigator.serviceWorker.oncontrollerchange = () => { stale = had; }, navigator.serviceWorker.register('/ui/sw.js', { scope: '/' }).catch(() => { /* contexte non sécurisé : sans PWA */ });
 loadLang().then(route);

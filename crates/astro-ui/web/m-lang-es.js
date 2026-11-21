@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire es, phrases communes. Les écrans de `parts` ont aussi m-lang-es-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account billets call contacts coop files guard locks media mesh options planes reading sync';
+export const parts = 'account beta billets call contacts coop files guard locks media mesh move options planes reading favs start sync write';
 export default {
 "{0} message(s) non lu(s)": "{0} mensaje(s) sin leer",
 "trouvée par ce qu’elle montre": "encontrada por lo que muestra",
@@ -241,7 +241,7 @@ export default {
 "créés": "creados",
 "en circulation": "en circulación",
 "encaissés": "cobrados",
-"page par défaut (votre profil et la liste des fichiers)": "página por defecto (su perfil y la lista de archivos)",
+"votre blog : articles, notes et fichiers": "su blog: artículos, notas y archivos",
 "dossier": "carpeta",
 "Visites": "Visitas",
 "jours": "días",
@@ -253,6 +253,7 @@ export default {
 "dossier Public lui-même : rien à déplacer": "la propia carpeta Public: nada que mover",
 "Trier en grand": "Ordenar a pantalla completa",
 "Table de tri": "Mesa de clasificación",
+"Ranger les visages": "Ordenar las caras",
 "Visages reconnus": "Caras reconocidas",
 "Voir la photo": "Ver la foto",
 "{0} visage(s)": "{0} cara(s)",
@@ -480,4 +481,9 @@ export default {
 "{0} alerte(s) à traiter": "{0} alerta(s) por atender",
 "envoi interrompu : voir les alertes": "envío interrumpido: ver las alertas",
 "Votre station": "Su estación",
+"Titre": "Título",
+"Chez mes amis": "De mis amigos",
+"Déménager": "Mudarme",
+"Erreur {0}": "Error {0}",
+"Je viens de Google ou d’Apple": "Vengo de Google o de Apple",
 };

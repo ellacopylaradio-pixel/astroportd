@@ -65,6 +65,12 @@ pub trait AccountApi: Auth {
     fn account_unlock(&self, _ip: Option<std::net::IpAddr>, _email: String, _pass: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("connexion par PASS non disponible sur cette station")) }
     }
+    /// Mon blog : `list` (articles, brouillons, groupes, thème), `friends` (articles de mes amis réciproques, publics ou qu'ils m'ont
+    /// réservés), `publish` (note, article, brouillon, suppression, signés ici), `preview`
+    /// (Markdown rendu comme sur le site), `image` (image d'article rangée dans Public), `settings` (thème du site).
+    fn blog(&self, _who: &Principal, _op: &'static str, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("blog non disponible sur cette station")) }
+    }
     /// Signe un événement avec la clé du compte (signataire distant : la clé ne quitte jamais la station).
     fn account_sign(&self, _who: &Principal, _event: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("signature non disponible sur cette station")) }
@@ -76,6 +82,10 @@ pub trait AccountApi: Auth {
     /// Le Capitaine éjecte un MULTIPASS créé ici qui ne s'est jamais connecté en 24 h (aucune Ğ1 reçue).
     fn account_eject(&self, _who: &Principal, _hex: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("éjection non disponible sur cette station")) }
+    }
+    /// Montre le jeton WebDAV en vigueur, sans le changer.
+    fn account_token_show(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("Mon compte n'est pas disponible sur cette station")) }
     }
     /// Change le jeton WebDAV : l'ancien cesse de fonctionner.
     fn account_token_rotate(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
@@ -115,8 +125,15 @@ pub(super) fn routes<B: AccountApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/account/site", get(account_site::<B>))
         .route("/api/v1/account/site/example", post(account_site_example::<B>))
         .route("/api/v1/account/token", post(account_token_rotate::<B>))
+        .route("/api/v1/account/token/show", post(account_token_show::<B>))
         .route("/api/v1/account/unlock", post(account_unlock::<B>).options(cors_preflight))
         .route("/api/v1/account/sign", post(account_sign::<B>))
+        .route("/api/v1/me/blog", get(blog_list::<B>))
+        .route("/api/v1/me/blog/friends", get(blog_friends::<B>))
+        .route("/api/v1/me/blog/publish", post(blog_op::<B, 0>))
+        .route("/api/v1/me/blog/preview", post(blog_op::<B, 1>))
+        .route("/api/v1/me/blog/image", post(blog_op::<B, 2>).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)))
+        .route("/api/v1/me/blog/settings", post(blog_op::<B, 3>))
         .route("/api/v1/station/accounts/{hex}/unlock-pass", post(pass_unlock::<B>))
         .route("/api/v1/station/accounts/{hex}/eject", post(account_eject::<B>))
         .route("/api/v1/account/keys", post(account_keys::<B>).options(cors_preflight))
@@ -211,6 +228,10 @@ async fn account_position<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Auth
     reply(st.backend.account_position(&p, body).await)
 }
 
+async fn account_token_show<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.account_token_show(&p).await)
+}
+
 async fn account_token_rotate<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
     reply(st.backend.account_token_rotate(&p).await)
 }
@@ -227,6 +248,24 @@ async fn account_unlock<B: AccountApi>(State(st): State<Arc<UiState<B>>>, req: a
     let Ok(bytes) = axum::body::to_bytes(req.into_body(), 1024).await else { return reply(Err(ApiError::bad_request("requête trop grande"))) };
     let Ok(body) = serde_json::from_slice::<UnlockBody>(&bytes) else { return reply(Err(ApiError::bad_request("JSON attendu : { \"email\": \"…\", \"pass\": \"123456\" }"))) };
     any_origin(reply(st.backend.account_unlock(ip, body.email, body.pass).await))
+}
+
+async fn blog_list<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.blog(&p, "list", Value::Null).await)
+}
+
+async fn blog_friends<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.blog(&p, "friends", Value::Null).await)
+}
+
+async fn blog_op<B: AccountApi, const OP: u8>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<Value>) -> Response {
+    let op = match OP {
+        0 => "publish",
+        1 => "preview",
+        2 => "image",
+        _ => "settings",
+    };
+    reply(st.backend.blog(&p, op, body).await)
 }
 
 async fn account_sign<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<Value>) -> Response {

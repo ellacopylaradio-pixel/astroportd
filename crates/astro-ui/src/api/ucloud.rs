@@ -64,6 +64,11 @@ pub trait UcloudApi: Auth {
     fn rotate_photos(&self, _who: &Principal, _paths: Vec<String>, _turn: i8) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("rotation non disponible sur cette station")) }
     }
+    /// Déménagement : applique aux fichiers déjà envoyés la date, le lieu et la description lus dans l'archive (Google Takeout, iCloud).
+    /// `items` : `[{ path, taken_at?, lat?, lon?, desc? }]`, 500 au plus. Rend `{ updated }`.
+    fn import_meta(&self, _who: &Principal, _items: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("import non disponible sur cette station")) }
+    }
     /// Interroge la bibliothèque du compte (photos, souvenirs, chronologie, recherche, doublons).
     fn library(&self, _who: &Principal, _q: LibraryQuery) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("bibliothèque non disponible sur cette station")) }
@@ -156,6 +161,7 @@ pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/ucloud/list", get(ucloud_list::<B>))
         .route("/api/v1/ucloud/photos", get(ucloud_photos::<B>))
         .route("/api/v1/ucloud/have", post(library_have::<B>))
+        .route("/api/v1/ucloud/import-meta", post(import_meta::<B>))
         .route("/api/v1/ucloud/memories", get(library_memories::<B>))
         .route("/api/v1/ucloud/timeline", get(library_timeline::<B>))
         .route("/api/v1/ucloud/search", get(library_search::<B>))
@@ -358,6 +364,10 @@ if b.paths.is_empty() || b.paths.len() > 200 || !matches!(b.turn, 1 | -1) {
 return reply(Err(ApiError::bad_request("1 à 200 photos, quart de tour 1 ou -1")));
 }
 reply(st.backend.rotate_photos(&p, b.paths, b.turn).await)
+}
+
+async fn import_meta<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<Value>) -> Response {
+    reply(st.backend.import_meta(&p, body).await)
 }
 
 async fn library_have<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<HaveBody>) -> Response {

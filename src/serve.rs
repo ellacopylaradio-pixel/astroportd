@@ -886,6 +886,8 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     background.push(tokio::spawn(friends_media.clone().run(Duration::from_secs(30), stop_watch.clone())));
     // Réveil du crawl : un module qui demande une clé (secours d'un compte) n'attend pas le passage suivant.
     let crawl_nudge = Arc::new(tokio::sync::Notify::new());
+    // Réplication à la demande : le site public y dépose les membres d'autres stations dont on lit le blog ici ; le crawler les rapatrie.
+    let (site_want_tx, site_want_rx) = tokio::sync::mpsc::unbounded_channel::<(String, Option<String>)>();
     let beacon_nudge = Arc::new(tokio::sync::Notify::new());
     // Sauvegarde privée chez un ami : le proche doit accepter ; le blob part chiffré, sans sa clé.
     let backup = {
@@ -945,6 +947,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         node_publisher: node_publisher.clone(),
         crawl_nudge: crawl_nudge.clone(),
         beacon_nudge: beacon_nudge.clone(),
+        site_wants: std::sync::Mutex::new(Some(site_want_rx)),
     };
     tasks::ssh_sync(&parts, &tunnel_policy, &mut background);
     // Adresses de la coopérative : la station et chaque MULTIPASS hébergé pointent vers leur espace IPNS (DNSLink OVH).
@@ -1263,7 +1266,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
             })
         }));
     }
-    let site = Arc::new(astroportd::public_site::Site::new(dav.clone(), uplanet_name.to_string()));
+    let site = Arc::new(astroportd::public_site::Site::new(dav.clone(), uplanet_name.to_string()).with_replicator(site_want_tx));
     ui = ui.with_site(site.clone());
     let (fm_list, fm_request) = (friends_media.clone(), friends_media.clone());
     let media_share = Arc::new(astroportd::media_share::MediaShare::new(dav.clone(), media_share_keys, publish_fn(&event_publisher)));

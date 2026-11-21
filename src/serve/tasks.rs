@@ -25,6 +25,8 @@ pub(super) struct Parts<'a> {
     pub crawl_nudge: Arc<tokio::sync::Notify>,
     /// Réveil de la balise de station (30850) ; la nuit la réveille après la clôture hebdomadaire.
     pub beacon_nudge: Arc<tokio::sync::Notify>,
+    /// Membres dont le site public demande les événements (blog lu ici, hébergé ailleurs) : consommé par le crawl.
+    pub site_wants: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<(String, Option<String>)>>>,
 }
 
 type Background = Vec<tokio::task::JoinHandle<()>>;
@@ -145,6 +147,29 @@ pub(super) fn crawl(p: &Parts<'_>, relay_client: &Arc<astroportd::p2p_relay::P2p
         let config = astro_sync::CrawlConfig { relays: a.relays.clone(), ..astro_sync::CrawlConfig::default() };
         let coop_keys: Vec<String> = astroportd::coop_config::coop_keys(uplanet_name).map(|(_, hex)| vec![hex]).unwrap_or_default();
         let crawler = Arc::new(astro_sync::Crawler::new(db.clone(), client.clone(), config).with_relay_source(source).with_hook(hook).with_extra_keys(coop_keys).with_nudge(crawl_nudge.clone()));
+        // Réplication à la demande du site public : la station d'accueil du membre d'abord, puis les relais du crawl ; 20 s au plus.
+        if let Some(mut rx) = p.site_wants.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let (crawler, mut stop) = (crawler.clone(), p.stop_watch.clone());
+            background.push(tokio::spawn(async move {
+                loop {
+                    // L'arrêt de la station l'emporte : la file ne retient jamais le processus.
+                    let (hex, home) = tokio::select! {
+                        _ = stop.changed() => break,
+                        got = rx.recv() => match got { Some(x) => x, None => break },
+                    };
+                    let relays: Vec<String> = home.into_iter().chain(crawler.current_relays()).take(4).collect();
+                    for relay in relays {
+                        let got = tokio::select! {
+                            _ = stop.changed() => return,
+                            got = tokio::time::timeout(Duration::from_secs(20), crawler.sync_key(&relay, &hex)) => got,
+                        };
+                        if matches!(got, Ok(Ok(ref stats)) if stats.fetched > 0) {
+                            break;
+                        }
+                    }
+                }
+            }));
+        }
         // Mesure de la réplication des données des membres hébergés : où et par qui (événements ; fichiers si kubo est joint).
         {
             let swarm = a.swarm_dir.clone().or_else(default_swarm_dir);

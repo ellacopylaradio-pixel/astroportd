@@ -1181,6 +1181,7 @@ async fn a_device_token_opens_webdav_only_never_the_api() {
         assert_eq!(b.get(uri, &device).await.0, StatusCode::UNAUTHORIZED, "{uri}");
     }
     assert_eq!(b.post("/api/v1/account/token", &device, json!({})).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(b.post("/api/v1/account/token/show", &device, json!({})).await.0, StatusCode::UNAUTHORIZED, "un jeton d'appareil ne lit jamais le jeton principal");
     assert_eq!(b.post("/api/v1/devices", &device, json!({ "label": "pirate", "root": "/Photos/x", "mode": "readwrite" })).await.0, StatusCode::UNAUTHORIZED, "un appareil ne s'en crée pas d'autres");
     // Le WebDAV de son dossier, lui, répond.
     let (s, _, _) = call(&b.app, Method::from_bytes(b"PROPFIND").unwrap(), "/dav/", Some(&device), &[("depth", "0")], vec![]).await;
@@ -1983,4 +1984,90 @@ async fn the_media_library_indexes_fiches_streams_with_range_and_lets_the_owner_
 
 fn percent_query(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"/-_.".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// Mon blog : la station signe et publie notes et articles du membre ; un article daté du futur attend sa date ; elle refuse ce qui
+/// engage l'identité coopérative et le retrait de l'article d'un autre ; l'aperçu neutralise le HTML.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_member_writes_his_blog_and_the_station_signs_only_what_it_should() {
+    let b = bench("blog", None).await;
+    let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let art = |d: &str, at: u64| json!({ "kind": 30023, "content": "# T\n\nTexte **fort**.", "tags": [["d", d], ["title", d], ["published_at", at.to_string()]] });
+    let (s, r) = b.post("/api/v1/me/blog/publish", &alice, art("premier", now - 10)).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["event"]["pubkey"], hex(&ALICE), "signé par la clé du membre");
+    assert_eq!(b.post("/api/v1/me/blog/publish", &alice, art("plus-tard", now + 86_400)).await.0, StatusCode::OK);
+    assert_eq!(b.post("/api/v1/me/blog/publish", &alice, json!({ "kind": 1, "content": "Bonjour" })).await.0, StatusCode::OK);
+    let (_, list) = b.get("/api/v1/me/blog", &alice).await;
+    let posts = list["posts"].as_array().unwrap();
+    assert!(posts.iter().any(|p| p["d"] == "premier" && p["scheduled"] == false) && posts.iter().any(|p| p["d"] == "plus-tard" && p["scheduled"] == true));
+    // Le site ne montre que ce qui est daté du passé.
+    let arts = astroportd::public_blog::articles(&b.db, &hex(&ALICE)).await;
+    assert_eq!(arts.iter().map(|a| a.slug.as_str()).collect::<Vec<_>>(), ["premier"], "un article programmé attend sa date");
+    // Refus : un kind qui engage l'identité, un article sans identifiant, le retrait de l'article d'un autre.
+    assert_eq!(b.post("/api/v1/me/blog/publish", &alice, json!({ "kind": 30800, "content": "" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(b.post("/api/v1/me/blog/publish", &alice, json!({ "kind": 30023, "content": "x", "tags": [["title", "x"]] })).await.0, StatusCode::BAD_REQUEST);
+    let theirs = format!("30023:{}:premier", hex(&ALICE));
+    assert_eq!(b.post("/api/v1/me/blog/publish", &bob, json!({ "kind": 5, "content": "", "tags": [["a", theirs]] })).await.0, StatusCode::BAD_REQUEST);
+    // Alice, elle, retire le sien.
+    assert_eq!(b.post("/api/v1/me/blog/publish", &alice, json!({ "kind": 5, "content": "", "tags": [["a", theirs]] })).await.0, StatusCode::OK);
+    assert!(astroportd::public_blog::articles(&b.db, &hex(&ALICE)).await.is_empty(), "retiré du site");
+    // Aperçu : Markdown rendu, HTML brut neutralisé.
+    let (_, p) = b.post("/api/v1/me/blog/preview", &alice, json!({ "markdown": "**a** <script>x</script>" })).await;
+    assert!(p["html"].as_str().unwrap().contains("<strong>a</strong>") && !p["html"].as_str().unwrap().contains("<script>"));
+    // Article réservé à un groupe du chat : NIP-70 et un `p` par membre ; jamais sur le site public ; lu par l'ami dans « Chez mes amis ».
+    let (ah, bh) = (hex(&ALICE), hex(&BOB));
+    b.db.writer().execute("INSERT INTO chat_groups(owner_hex, id, name, members) VALUES (?1, ?2, 'Famille', ?3)", vec![ah.clone().into(), "ab".repeat(32).into(), json!([ah, bh]).to_string().into()]).await.unwrap();
+    let mut reserved = art("en-famille", now - 5);
+    reserved["audience"] = json!(format!("group:{}", "ab".repeat(32)));
+    let (s, r) = b.post("/api/v1/me/blog/publish", &alice, reserved).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let tags = r["event"]["tags"].as_array().unwrap();
+    assert!(tags.contains(&json!(["-"])) && tags.contains(&json!(["p", bh])) && !tags.contains(&json!(["p", ah])), "protégé, adressé aux membres sauf l'auteur : {tags:?}");
+    assert!(astroportd::public_blog::articles(&b.db, &ah).await.iter().all(|a| a.slug != "en-famille"), "jamais sur le site public");
+    // Bob et Alice amis réciproques : Bob lit l'article réservé chez ses amis.
+    let follow = |from: &[u8; 32], to: &str| astro_nostr_proto::UnsignedEvent { created_at: now, kind: 3, tags: vec![vec!["p".into(), to.into()]], content: String::new() }.sign(from).unwrap();
+    for e in [follow(&ALICE, &bh), follow(&BOB, &ah)] {
+        b.db.writer().transaction(move |tx| astro_db::events::insert_event(tx, &e).map(|_| ())).await.unwrap();
+    }
+    b.db.writer().execute("INSERT OR REPLACE INTO social_graph(owner_hex, pubkey, level, updated_at) VALUES (?1, ?2, 1, 1)", vec![bh.clone().into(), ah.clone().into()]).await.unwrap();
+    let (_, fr) = b.get("/api/v1/me/blog/friends", &bob).await;
+    assert!(fr["posts"].as_array().unwrap().iter().any(|p| p["d"] == "en-famille" && p["reserved"] == true), "{fr}");
+    // Thème : seulement l'un des trois.
+    assert_eq!(b.post("/api/v1/me/blog/settings", &alice, json!({ "theme": "kraft" })).await.0, StatusCode::OK);
+    assert_eq!(b.post("/api/v1/me/blog/settings", &alice, json!({ "theme": "<x>" })).await.0, StatusCode::BAD_REQUEST);
+}
+
+/// Déménagement : la date, le lieu et la description lus dans une archive (Google Takeout, iCloud) complètent les fichiers envoyés,
+/// sans jamais écraser une valeur déjà notée ni toucher aux fichiers d'un autre compte ; une valeur absurde est ignorée.
+#[tokio::test(flavor = "multi_thread")]
+async fn moving_in_completes_dates_places_and_descriptions_without_overwriting() {
+    let b = bench("move", None).await;
+    let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
+    let (a, o) = (hex(&ALICE), hex(&BOB));
+    db_insert(&b.db, &a, "/Photos/Google/Vacances/IMG_1.jpg", "image/jpeg", 1, None).await;
+    db_insert(&b.db, &a, "/Photos/Google/2023/IMG_2.jpg", "image/jpeg", 1, None).await;
+    db_insert(&b.db, &o, "/Photos/Google/Vacances/IMG_1.jpg", "image/jpeg", 1, None).await;
+    b.db.writer().execute("UPDATE ucloud_entries SET taken_at = 42 WHERE owner_hex = ?1 AND path LIKE '%IMG_2.jpg'", vec![V::Text(a.clone())]).await.unwrap();
+    let items = json!({ "items": [
+        { "path": "/Photos/Google/Vacances/IMG_1.jpg", "taken_at": 1_690_007_200, "lat": 42.52, "lon": 3.08, "desc": "Plage de Collioure" },
+        { "path": "/Photos/Google/2023/IMG_2.jpg", "taken_at": 1_691_000_000, "lat": 0.0, "lon": 0.0 },
+        { "path": "/Photos/Google/2023/IMG_2.jpg", "taken_at": 99_999_999_999_i64 },
+        { "path": "/../etc/passwd", "desc": "x" },
+    ] });
+    let (s, r) = b.post("/api/v1/ucloud/import-meta", &alice, items.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let row = |owner: String, path: &'static str| {
+        let db = b.db.clone();
+        async move { db.readers().read(move |c| Ok(c.query_row("SELECT taken_at, lat, lon, desc_text FROM ucloud_entries WHERE owner_hex = ?1 AND path = ?2", [&owner, path], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<f64>>(1)?, r.get::<_, Option<f64>>(2)?, r.get::<_, Option<String>>(3)?)))?)).await.unwrap() }
+    };
+    assert_eq!(row(a.clone(), "/Photos/Google/Vacances/IMG_1.jpg").await, (Some(1_690_007_200), Some(42.52), Some(3.08), Some("Plage de Collioure".into())));
+    assert_eq!(row(a.clone(), "/Photos/Google/2023/IMG_2.jpg").await, (Some(42), None, None, None), "date déjà notée gardée ; lieu 0,0 et date absurde ignorés");
+    assert_eq!(row(o.clone(), "/Photos/Google/Vacances/IMG_1.jpg").await, (None, None, None, None), "le fichier d'un autre compte n'est jamais touché");
+    // Bob n'atteint pas les fichiers d'Alice, et un lot trop gros est refusé.
+    let _ = b.post("/api/v1/ucloud/import-meta", &bob, items).await;
+    assert_eq!(row(a, "/Photos/Google/Vacances/IMG_1.jpg").await.3.as_deref(), Some("Plage de Collioure"));
+    let big = json!({ "items": vec![json!({ "path": "/x.jpg" }); 501] });
+    assert_eq!(b.post("/api/v1/ucloud/import-meta", &alice, big).await.0, StatusCode::BAD_REQUEST);
 }

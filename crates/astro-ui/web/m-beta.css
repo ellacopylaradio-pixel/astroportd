@@ -1,0 +1,11 @@
+/* Bêta (chargé avec m-beta.js) : la carte de l'accueil et le formulaire de retour. */
+.bt-card { border-left: 4px solid var(--warn); }
+.bt-acts { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .6rem; }
+.bt-acts > * { min-height: 44px; display: inline-flex; align-items: center; }
+.bt-dialog { width: min(34rem, calc(100vw - 2rem)); border: 1px solid var(--line); border-radius: var(--rc); background: var(--panel); color: var(--ink); padding: 1.2rem; }
+.bt-dialog::backdrop { background: #0008; }
+.bt-dialog h2 { margin: 0 0 .6rem; }
+.bt-dialog label { display: block; font-weight: 600; margin: .6rem 0 .25rem; }
+.bt-dialog p label { display: inline; font-weight: 400; }
+.bt-dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; margin: .8rem 0 0; }
+.bt-dialog menu button { min-height: 44px; }

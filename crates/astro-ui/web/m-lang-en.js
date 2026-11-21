@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire en, phrases communes. Les écrans de `parts` ont aussi m-lang-en-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account billets call contacts coop files guard locks media mesh options planes reading sync';
+export const parts = 'account beta billets call contacts coop files guard locks media mesh move options planes reading favs start sync write';
 export default {
 "{0} message(s) non lu(s)": "{0} unread message(s)",
 "trouvée par ce qu’elle montre": "found by what it shows",
@@ -240,7 +240,7 @@ export default {
 "créés": "created",
 "en circulation": "in circulation",
 "encaissés": "cashed",
-"page par défaut (votre profil et la liste des fichiers)": "default page (your profile and the file list)",
+"votre blog : articles, notes et fichiers": "your blog: articles, notes and files",
 "dossier": "folder",
 "Visites": "Visits",
 "jours": "days",
@@ -252,6 +252,7 @@ export default {
 "dossier Public lui-même : rien à déplacer": "the Public folder itself: nothing to move",
 "Trier en grand": "Sort full screen",
 "Table de tri": "Sorting table",
+"Ranger les visages": "Sort the faces",
 "Visages reconnus": "Recognised faces",
 "Voir la photo": "See the photo",
 "{0} visage(s)": "{0} face(s)",
@@ -479,4 +480,9 @@ export default {
 "{0} alerte(s) à traiter": "{0} alert(s) to handle",
 "envoi interrompu : voir les alertes": "sending interrupted: see alerts",
 "Votre station": "Your station",
+"Titre": "Title",
+"Chez mes amis": "From my friends",
+"Déménager": "Move in",
+"Erreur {0}": "Error {0}",
+"Je viens de Google ou d’Apple": "I'm coming from Google or Apple",
 };

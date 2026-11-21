@@ -56,6 +56,7 @@ crc32fast.workspace = true
 flate2.workspace = true
 if-addrs.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal", "process"] }
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 [features]
 # Moteur FaceID local (SCRFD + ArcFace) par ONNX Runtime : `astroportd serve --face-models DIR`. Désactivé par défaut.

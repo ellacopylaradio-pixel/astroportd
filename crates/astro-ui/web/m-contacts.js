@@ -146,7 +146,7 @@ export default async function contacts(root, K) {
     sas.replaceChildren(h('span', { class: 'ab-sas-n', 'aria-hidden': 'true' }, n > 999 ? '999+' : String(n)),
       h('div', {}, h('strong', {}, n ? t('{0} visage(s) à ranger', n) : t('Tous les visages sont rangés')),
         h('p', { class: 'muted' }, n ? t('Une question à la fois : « Est-ce Léa ? », « Qui est-ce ? ». Chaque réponse range les visages dans la fiche de la personne.') : t('La station analyse vos nouvelles photos : les visages à ranger apparaîtront ici.'))),
-      h('span', { class: 'ab-sas-go' }, n ? h('button', { onclick: go('#/people/tri?grand') }, t('Trier en grand')) : null, h('button', { class: 'ghost', onclick: go('#/people/tri') }, t('Table de tri'))));
+      h('span', { class: 'ab-sas-go' }, h('button', { onclick: go(n ? '#/people/tri?grand' : '#/people/tri') }, n ? t('Ranger les visages') : t('Table de tri'))));
   }, () => {});
   root.replaceChildren(h('h2', {}, t('Proches')), sas, tabs, tools, selbar, main);
   show0();
