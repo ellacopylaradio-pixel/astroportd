@@ -611,6 +611,10 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     astroportd::bridge::record_plane(&db, &uplanet_name).await?;
     // Stations relais publiées par la coopérative : la station s'y trouve-t-elle ? Alors elle sert de relais.
     let coop_relays = astroportd::coop_config::p2p_relays(&db, &uplanet_name).await;
+    // Écoutes locales qui mènent chez un ami (`--p2p-forward`, accès à chaud) : la politique ne republie jamais un service
+    // dont la cible en est une (anti-cascade).
+    let local_binds = Arc::new(astroportd::forwards::LocalBinds::default());
+    tunnel_policy.watch_binds(local_binds.clone());
     let (mut p2p_guards, p2p_handle, p2p_role) = p2p::start(&a, station.p2p_seed, &coop_relays, &local, &tunnel_policy, &mut exposed_names, &ai_book).await?;
     let blobs = Arc::new(match &p2p_handle {
         Some(h) => P2pBlobStore::new(local.clone(), h.clone(), vec![]),
@@ -896,6 +900,24 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
             b = b.with_prefetch(blob_prefetch(handle, &local));
             // Copies de pièces jointes d'un ami : jamais plus que la taille d'une pièce jointe, annoncée avant tout octet reçu.
             b = b.with_attachment_prefetch(blob_prefetch_max(handle, &local, astro_dav::share::ATTACHMENT_MAX as u64, Duration::from_secs(60)));
+            // Restauration k-sur-n : une sonde `HASN` par station gardienne avant de tirer ses fragments.
+            let probe_handle = handle.clone();
+            b = b.with_probe(Arc::new(move |cids: Vec<String>, peer: String| {
+                let handle = probe_handle.clone();
+                Box::pin(async move {
+                    let peer: astro_p2p::PeerId = peer.parse().map_err(|e| format!("PeerID illisible : {e}"))?;
+                    astro_p2p::blob::has_many(&handle, peer, &cids, Duration::from_secs(8)).await
+                })
+            }));
+            // Réparation nocturne : contrôle de possession par lecture de 4 Kio d'un fragment chez son gardien.
+            let sample_handle = handle.clone();
+            b = b.with_sample(Arc::new(move |cid: String, peer: String, off: u64, len: u64, total: u64| {
+                let handle = sample_handle.clone();
+                Box::pin(async move {
+                    let peer: astro_p2p::PeerId = peer.parse().map_err(|e| format!("PeerID illisible : {e}"))?;
+                    astro_p2p::blob::fetch_range(&handle, peer, &cid, off, len, total, Duration::from_secs(20)).await
+                })
+            }));
         }
         Arc::new(b)
     };
@@ -1037,7 +1059,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     // Agents du membre (kind 31903 `d = agents`) et serveur MCP : un agent demande, le membre accorde ou refuse.
     let agents = Arc::new(astroportd::agents::Agents::new(db.clone(), agent_keys, publish_fn(&event_publisher)).with_activity(activity.clone()));
     let member_ai = Arc::new(astroportd::member_ai::MemberAi::new(db.clone(), agent_keys2, publish_fn(&event_publisher)));
-    let forwards = Arc::new(astroportd::forwards::Forwards::new(p2p_handle.clone()));
+    let forwards = Arc::new(astroportd::forwards::Forwards::new(p2p_handle.clone()).with_binds(local_binds.clone()));
     let assist_admin = admin::assist_admin(&assist);
     // Maillage (stations, bootstrap gardé) et Capitaines (suivre, services des amis, accès à chaud) pour l'écran du Capitaine.
     let mut mesh = astroportd::mesh_admin::Mesh::new(db.clone(), p2p_handle.clone(), a.p2p_bootstrap.clone(), station_planes(&a.db).0, activity.clone())
@@ -1162,9 +1184,11 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let locks = Arc::new(astroportd::locks::Locks::new(db.clone(), kinds_control.clone(), circle.clone(), facts, activity.clone()));
     // « Lecture de vos documents » : décisions du Capitaine (station, MULTIPASS, prêt aux amis) et accord de chaque membre.
     let reading = Arc::new(astroportd::delegation::Delegation::new(db.clone(), if a.no_index { Vec::new() } else { astro_index::Indexer::tasks(index_local.as_ref()) }, p2p_handle.is_some().then(|| (tunnel_policy.clone(), exposed_names.clone()))));
-    let admin_fn = Arc::new(astroportd::station_admin::Admin { face: face_control, kinds: kinds_control, tunnels: Some((tunnel_policy.clone(), exposed_names.clone())), targets: service_targets(&a), dnslink: Some(dnslink.clone()), assist: Some(assist_admin), tasks: Some(db.clone()), mesh: Some(mesh_admin), captains: Some(captains_admin), locks: Some(locks), index: Some(reading.clone()) }).handler();
+    // Services ouverts par la constellation : la même porte pour l'écran Réseau et pour `astroportd tunnel …` (control.sock).
+    let swarm_route = Arc::new(astroportd::swarm_route::SwarmRoute::new(stations.clone(), p2p_handle.clone(), forwards.clone(), a.lat.zip(a.lon)).with_policy(tunnel_policy.clone()));
+    let route_fn = swarm_route.clone().admin();
+    let admin_fn = Arc::new(astroportd::station_admin::Admin { face: face_control, kinds: kinds_control, tunnels: Some((tunnel_policy.clone(), exposed_names.clone())), targets: service_targets(&a), dnslink: Some(dnslink.clone()), assist: Some(assist_admin), tasks: Some(db.clone()), mesh: Some(mesh_admin), captains: Some(captains_admin), locks: Some(locks), index: Some(reading.clone()), route: p2p_handle.is_some().then(|| route_fn.clone()) }).handler();
     // Prise de contrôle locale (`astroportd tunnel …`) : la politique des tunnels et le routage vers les services des autres stations.
-    let swarm_route = Arc::new(astroportd::swarm_route::SwarmRoute::new(stations.clone(), p2p_handle.clone(), forwards.clone(), a.lat.zip(a.lon)));
     if p2p_handle.is_some() {
         reading.set_route(swarm_route.clone());
     }
@@ -1172,10 +1196,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     control_sections.insert("tunnels", admin_fn.clone());
     // Maillage (`astroportd swarm …`, `astroportd bootstrap …`) : joindre, garder ou oublier une station, jamais plus.
     control_sections.insert("mesh", admin_fn.clone());
-    control_sections.insert("tunnel", Arc::new(move |_section, body| {
-        let route = swarm_route.clone();
-        Box::pin(async move { route.act(&body.unwrap_or(serde_json::Value::Null)).await })
-    }));
+    control_sections.insert("tunnel", route_fn);
     // Contrôle des blobs à la demande (`astroportd repo verify`) : un lot, comme le passage de 20h12 (même curseur).
     {
         let integrity = Arc::new(astroportd::integrity::Integrity::new(db.clone(), local.clone(), Some(activity.clone())));

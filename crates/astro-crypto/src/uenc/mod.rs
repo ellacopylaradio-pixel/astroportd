@@ -241,6 +241,17 @@ pub async fn encrypt_to_vec(key: &UencKey, cipher: Cipher, plain: &[u8]) -> Resu
     Ok(out)
 }
 
+/// Rechiffre `plain` avec l'en-tête `head` d'un chiffré **déjà émis** (même clé, même préfixe de nonce) : rend les mêmes
+/// octets que la première fois si le clair est le même. Sert à recalculer un paquet de sauvegarde sans l'avoir gardé ;
+/// l'appelant **doit** comparer le résultat à l'empreinte du chiffré d'origine et le jeter s'il diffère (un autre clair
+/// sous le même nonce ne doit jamais sortir).
+pub async fn reseal_to_vec(key: &UencKey, head: &[u8; HEADER_LEN], plain: &[u8]) -> Result<Vec<u8>, UencError> {
+    let mut input = plain;
+    let mut out = Vec::with_capacity(plain.len() + HEADER_LEN + TAG_LEN);
+    v2::reseal_stream(key, head, &mut input, &mut out).await?;
+    Ok(out)
+}
+
 /// Déchiffre un tampon en mémoire.
 pub async fn decrypt_to_vec(key: &UencKey, blob: &[u8]) -> Result<Vec<u8>, UencError> {
     let mut input = blob;

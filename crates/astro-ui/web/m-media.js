@@ -71,7 +71,7 @@ export default async function media(root, K, q) {
   const { h, t, api, toast } = K;
   const css = h('link', { rel: 'stylesheet', href: '/ui/m-media.css' }); document.head.append(css); K.cleanup(() => css.remove());
   const KINDS = [['', 'Tout'], ['film', 'Films'], ['episode', 'Séries'], ['video', 'Vidéos'], ['music', 'Musique'], ['friends', 'Chez mes amis']];
-  let items = [], kind = q.get('k') || '', open = null, friends = null, polling = false;
+  let items = [], kind = q.get('k') || '', open = null, friends = null, polling = false, safety = {};
   const find = h('input', { type: 'search', placeholder: t('Titre, artiste, genre, acteur, mot-clé…'), 'aria-label': t('Rechercher dans la médiathèque'), maxlength: 120, oninput: () => draw() });
   const kinds = h('div', { class: 'bar mm-kinds', role: 'group', 'aria-label': t('Type') }, KINDS.map(([k, l]) => h('button', { class: 'ghost', 'data-k': k, onclick: () => { kind = k; open = null; draw(); } }, t(l))));
   const body = h('div', { class: 'mm-body' }), note = h('p', { class: 'muted', role: 'status' });
@@ -83,14 +83,28 @@ export default async function media(root, K, q) {
     return path ? img : h('span', { class: 'mm-ph', 'aria-hidden': 'true' }, emoji);
   };
   const art = it => it.art?.poster || it.art?.cover || it.art?.still || it.art?.backdrop;
+  // Copies vérifiées chez des amis d'un fichier partagé : pastille discrète dans la liste, phrase dans la fiche.
+  const sfOf = it => (it.level === 'circle' ? safety[it.path] : null);
+  const dot = it => { const f = sfOf(it); return !f ? '' : f.safe ? '🟢 ' : f.copies || f.packed ? '🟡 ' : '⏳ '; };
+  const ago = s => { const hrs = Math.max(1, Math.round((Date.now() / 1000 - s) / 3600)); return hrs < 48 ? t('vérifié il y a {0} h', hrs) : t('vérifié il y a {0} j', Math.round(hrs / 24)); };
+  const safeLine = it => {
+    const f = sfOf(it);
+    if (!f) return '';
+    const who = f.at.slice(0, 3).join(', '), when = f.verified_at ? ' · ' + ago(f.verified_at) : '';
+    const txt = f.safe ? t('🟢 En sécurité : {0} copies chez vos amis', f.copies)
+      : f.copies ? (f.copies > 1 ? t('🟡 {0} copies chez {1}', f.copies, who) : t('🟡 1 copie chez {0}', who)) + (f.packed ? ' ' + t('+ votre sauvegarde') : '')
+        : f.packed ? t('🟡 Gardé par votre sauvegarde, pas encore de copie vérifiée chez vos amis') : t('⏳ Pas encore à l\'abri : il part cette nuit chez vos gardiens');
+    return h('p', { class: 'muted mm-safe', role: 'status' }, txt + when);
+  };
   const card = (title, sub, path, emoji, go) => h('button', { class: 'mm-card', onclick: go }, thumb(path, emoji), h('b', {}, title), h('small', { class: 'muted' }, sub || ''));
   const back = () => h('button', { class: 'ghost', onclick: () => { open = null; draw(); } }, '← ' + t('Médiathèque'));
   const hay = it => norm([it.title, it.original_title, it.year, it.overview, it.genres, it.keywords, it.cast, it.directors, it.series?.name, it.music?.artist, it.music?.album, it.music?.album_artist, it.music?.composer].flat().join(' '));
 
   async function load() {
     try {
-      const r = await api(A);
-      items = r.items;
+      // Mise à l'abri des fichiers partagés : une seule lecture pour toute la médiathèque.
+      const [r, sf] = await Promise.all([api(A), api(A + '/safety').catch(() => null)]);
+      items = r.items; safety = sf?.files || {};
       note.textContent = r.pending ? t('{0} fiche(s) en cours de lecture…', r.pending) : '';
       if (r.pending) setTimeout(() => root.isConnected && load(), 1500);
     } catch (e) { note.textContent = e.message; }
@@ -113,7 +127,7 @@ export default async function media(root, K, q) {
     const albums = [...new Set(songs.map(albumKey))].sort();
     const grid = (title, cards) => cards.length ? h('section', {}, h('h2', {}, title, ' ', h('small', { class: 'muted' }, String(cards.length))), h('div', { class: 'mm-grid' }, cards)) : '';
     body.replaceChildren(
-      grid(t('Films et vidéos'), films.map(it => card(it.title, [it.year, dur(it.duration_s)].filter(Boolean).join(' · '), art(it), '🎬', () => detail(it)))),
+      grid(t('Films et vidéos'), films.map(it => card(it.title, dot(it) + [it.year, dur(it.duration_s)].filter(Boolean).join(' · '), art(it), '🎬', () => detail(it)))),
       grid(t('Séries'), series.map(n => { const e = eps.filter(i => (i.series?.name || i.title) === n); return card(n, t('{0} épisode(s)', e.length), e.map(art).find(Boolean), '📺', () => show(n, e)); })),
       grid(t('Musique'), albums.map(k => { const s = songs.filter(i => albumKey(i) === k), [who, alb] = k.split('\n'); return card(alb || t('Morceaux'), who, s.map(art).find(Boolean), '🎵', () => album(k, s)); })));
   }
@@ -154,7 +168,7 @@ export default async function media(root, K, q) {
   function detail(it) {
     open = () => body.replaceChildren(back(), h('article', { class: 'card mm-detail' }, thumb(art(it), it.type === 'music' ? '🎵' : '🎬'),
       h('div', {}, h('h2', {}, it.title, ' ', shared(it)), h('p', { class: 'muted' }, meta(it)), it.original_title && it.original_title !== it.title ? h('p', { class: 'muted' }, it.original_title) : '',
-        h('p', {}, h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')), ' ', edit(it)), shareBox([it]),
+        h('p', {}, h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')), ' ', edit(it)), shareBox([it]), safeLine(it),
         it.overview ? h('p', {}, it.overview) : '', line('Réalisation', it.directors), line('Avec', it.cast), line('Mots-clés', it.keywords))));
     draw();
   }
@@ -175,7 +189,7 @@ export default async function media(root, K, q) {
       h('div', {}, h('h2', {}, alb || t('Morceaux')), h('p', { class: 'muted' }, (mix ? t('Mix de {0}', who) : who) + ' · ' + t('{0} morceau(x)', songs.length)),
         h('p', {}, h('button', { onclick: () => listen(K, songs) }, '▶ ' + t('Tout lire')), ' ', h('button', { class: 'ghost', onclick: () => listen(K, [...songs].sort(() => Math.random() - 0.5)) }, '🔀 ' + t('Au hasard'))), shareBox(songs, { kind: 'album', title: `${who} — ${alb || t('Morceaux')}` }))),
       h('ol', { class: 'mm-tracks' }, songs.map((s, i) => h('li', {}, h('button', { class: 'ghost', 'aria-label': t('Lire') + ' ' + s.title, onclick: () => listen(K, songs, i) }, '▶'),
-        h('span', {}, s.title, ' ', h('small', { class: 'muted' }, s.music?.artist !== who ? s.music?.artist || '' : ''), ' ', shared(s)), h('small', { class: 'muted' }, dur(s.duration_s)),
+        h('span', {}, dot(s), s.title, ' ', h('small', { class: 'muted' }, s.music?.artist !== who ? s.music?.artist || '' : ''), ' ', shared(s)), h('small', { class: 'muted' }, dur(s.duration_s)),
         h('button', { class: 'ghost', 'aria-label': t('Corriger la fiche') + ' ' + s.title, onclick: () => form(s) }, '✎'))))));
     draw();
   }

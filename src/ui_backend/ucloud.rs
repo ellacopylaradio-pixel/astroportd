@@ -115,6 +115,13 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
         let paths = paths.iter().map(|p| astro_dav::vfs::normalize_path(p).map_err(|_| ApiError::bad_request("chemin invalide"))).collect::<Result<Vec<_>, _>>()?;
         (f.share)(who.hex.clone(), paths, on, list).await.map_err(ApiError::bad_request)
     }
+    async fn media_safety(&self, who: &Principal) -> Result<Value, ApiError> {
+        let b = self.backup.as_ref().ok_or_else(|| ApiError::unavailable("sauvegarde privée non activée"))?;
+        (b.media_copies)(who.hex.clone()).await.map_err(|e| {
+            eprintln!("interface : copies des fichiers partagés : {e}");
+            ApiError::internal("mise à l'abri des fichiers indisponible")
+        })
+    }
     async fn media_trace(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
         let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station"))?;
         let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;

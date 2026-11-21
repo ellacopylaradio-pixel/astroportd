@@ -106,6 +106,10 @@ pub trait UcloudApi: Auth {
     fn media_trace(&self, _who: &Principal, _path: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station")) }
     }
+    /// Mise à l'abri des fichiers partagés, en une lecture : `{ files: { <chemin>: { copies, at, verified_at, packed, safe } } }`.
+    fn media_safety(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("sauvegarde privée non disponible sur cette station")) }
+    }
     /// Proches réciproques du compte (double suivi) : `{ friends: [{ hex, label, hosted }] }`.
     fn friends(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("envoi à des proches non disponible sur cette station")) }
@@ -166,6 +170,7 @@ pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/ucloud/media/friends", get(media_friends::<B>))
         .route("/api/v1/ucloud/media/share", post(media_share::<B>))
         .route("/api/v1/ucloud/media/trace", get(media_trace::<B>))
+        .route("/api/v1/ucloud/media/safety", get(media_safety::<B>))
         .route("/api/v1/ucloud/media/friends/request", post(media_friend_request::<B>))
         .route("/api/v1/ucloud/media/friends/match", get(media_friend_match::<B>))
         .route("/api/v1/pull", get(pull_list::<B>).post(pull_add::<B>))
@@ -253,6 +258,10 @@ async fn media_share<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p):
         return reply(Err(ApiError::bad_request("liste : series ou album, avec un titre")));
     }
     reply(st.backend.media_share(&p, b.paths, b.on, b.list.map(|l| (l.kind, l.title))).await)
+}
+
+async fn media_safety<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.media_safety(&p).await)
 }
 
 async fn media_trace<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<FicheQuery>) -> Response {

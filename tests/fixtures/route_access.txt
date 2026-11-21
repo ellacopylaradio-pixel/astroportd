@@ -75,6 +75,7 @@ GET /api/v1/ucloud/media anon=401 member=200
 GET /api/v1/ucloud/media/fiche anon=401 member=400
 GET /api/v1/ucloud/media/friends anon=401 member=501
 GET /api/v1/ucloud/media/friends/match anon=401 member=400
+GET /api/v1/ucloud/media/safety anon=401 member=501
 GET /api/v1/ucloud/media/trace anon=401 member=400
 GET /api/v1/ucloud/memories anon=401 member=200
 GET /api/v1/ucloud/photos anon=401 member=200

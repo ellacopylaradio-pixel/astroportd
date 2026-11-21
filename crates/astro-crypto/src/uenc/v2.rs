@@ -68,6 +68,33 @@ where
     raw[6] = CHUNK_LOG2;
     raw[7..].copy_from_slice(&prefix);
     let header = Header { raw, cipher, chunk_log2: CHUNK_LOG2, prefix };
+    seal_with(key, header, reader, writer).await
+}
+
+/// Rescelle avec un en-tête **déjà émis** (même clé, même préfixe de nonce). Réservé au recalcul d'un chiffré dont le
+/// clair est connu identique (vérifié par l'appelant contre l'empreinte du chiffré d'origine) : avec un autre clair, le
+/// même nonce sous la même clé serait une faute.
+pub(crate) async fn reseal_stream<R, W>(key: &UencKey, raw: &[u8; HEADER_LEN], reader: &mut R, writer: &mut W) -> Result<u64, UencError>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    if &raw[..4] != MAGIC || raw[4] != 2 {
+        return Err(UencError::NotUenc);
+    }
+    let mut head = [0u8; 6];
+    head.copy_from_slice(&raw[..6]);
+    let mut rest = [0u8; HEADER_LEN - 6];
+    rest.copy_from_slice(&raw[6..]);
+    seal_with(key, Header::parse(&head, &rest)?, reader, writer).await
+}
+
+async fn seal_with<R, W>(key: &UencKey, header: Header, reader: &mut R, writer: &mut W) -> Result<u64, UencError>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let cipher = header.cipher;
     let aead = Aead::new(cipher, key)?;
 
     writer.write_all(&header.raw).await?;

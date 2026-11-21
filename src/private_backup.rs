@@ -58,6 +58,12 @@ use crate::share_inbox::Prefetch;
 use crate::sharing::Sharing;
 use crate::upload_worker::Notify;
 
+mod compact;
+mod repair;
+mod rs;
+pub use repair::{REPAIR_AFTER, RepairStats, Sample};
+pub use rs::{BIG_BLOB, BIG_BLOB_COPIES, FileCopies, Probe, RS_TARGET_PERMILLE, choose_k};
+
 /// Étiquette (`["t", …]`) des messages de sauvegarde.
 pub const TAG: &str = "astro-backup";
 const CLAIM: &str = "backup_inbox";
@@ -65,7 +71,7 @@ const TRIES: &str = "backup_inbox_tries";
 /// Fichiers envoyés au plus par passage et par compte.
 const PER_PASS: usize = 100;
 /// Pause entre deux envois NIP-59 vers une autre station.
-const SEND_PACE: std::time::Duration = std::time::Duration::from_millis(250);
+const SEND_PACE: std::time::Duration = std::time::Duration::from_millis(if cfg!(test) { 0 } else { 250 });
 const LOOKBACK_SECS: i64 = 30 * 24 * 3600;
 const BATCH: usize = 50;
 const MAX_TRIES: u32 = 12;
@@ -74,6 +80,18 @@ const MAX_BYTES: u64 = astro_p2p::blob::MAX_BLOB_BYTES;
 const RESTORE_RETRY_SECS: i64 = 6 * 3600;
 /// Sans manifeste retrouvé au bout de 3 jours, le compte repart à neuf : la publication de manifestes est débloquée.
 const RESTORE_GIVE_UP_SECS: i64 = 3 * 24 * 3600;
+/// Après ces 3 jours (état `late`) : une relance par jour des amis qui n'ont encore rien renvoyé…
+const RESTORE_LATE_RETRY_SECS: i64 = 24 * 3600;
+/// … pendant 30 jours ; un manifeste qui revient pendant ce temps est fusionné sans rien écraser.
+const RESTORE_LATE_SECS: i64 = 30 * 24 * 3600;
+/// Suivi « vos fichiers reviennent » montré au membre après la fin de la restauration.
+const RESTORE_SHOW_SECS: i64 = 7 * 24 * 3600;
+/// Événement de manifeste d'origine, gardé avant que le compte ne publie le sien (il le remplacerait) : `kv` restore_origin.
+const ORIGIN: &str = "restore_origin";
+/// Blobs renvoyés par chaque ami pendant la restauration : `kv` restore_from, clé `<propriétaire>:<ami>`.
+const RETURNED: &str = "restore_from";
+/// Contacts sans nom public au plus montrés sur la page de secours (le reste est compté).
+const RESCUE_SHOW: usize = 50;
 /// Fichiers renvoyés à un propriétaire par passage, et CID redemandés par message.
 const RESTORE_PER_PASS: usize = 40;
 const RESTORE_WANT: usize = 200;
@@ -117,9 +135,38 @@ struct RescueOut {
     by: Option<String>,
     /// Gardiens qui n'ont pas reconnu la demande.
     denied: Vec<String>,
+    /// Clé du gardien qui a rendu la part (pour l'état nominatif de la page de secours).
+    #[serde(default)]
+    by_hex: Option<String>,
+    /// Clés des gardiens qui ont refusé.
+    #[serde(default)]
+    denied_hex: Vec<String>,
+    /// Contacts dont la station n'a pas pu être jointe, avec la date du premier échec (retentés à chaque passage).
+    #[serde(default)]
+    failed: Vec<(String, i64)>,
 }
 /// Délai avant de retirer chez l'ami le blob d'un fichier disparu chez le propriétaire (suppression ou remplacement).
 pub const GRACE_SECS: i64 = 7 * 24 * 3600;
+
+/// Résumé de la sauvegarde k-sur-n de toute la station pour l'espace Capitaine (Santé) : côté propriétaires hébergés ici,
+/// paquets, fragments (acquittés, en attente, perdus), réparations en cours, compactage, retraits en file, gardiens fautifs
+/// (fragment perdu ou contrôle à finir) ; côté gardien, fragments tenus pour des amis.
+pub fn captain_summary(c: &rusqlite::Connection) -> rusqlite::Result<Value> {
+    const MINE: &str = "owner_hex IN (SELECT hex FROM identities WHERE hosted = 1)";
+    let one = |sql: String| c.query_row(&sql, [], |r| r.get::<_, i64>(0));
+    Ok(json!({
+        "packets": one(format!("SELECT COUNT(*) FROM backup_packets WHERE {MINE} AND staged = 0"))?,
+        "staged": one(format!("SELECT COUNT(*) FROM backup_packets WHERE {MINE} AND staged = 1"))?,
+        "frags_acked": one(format!("SELECT COUNT(*) FROM backup_frags WHERE {MINE} AND acked_at IS NOT NULL AND lost_at IS NULL"))?,
+        "frags_pending": one(format!("SELECT COUNT(*) FROM backup_frags WHERE {MINE} AND acked_at IS NULL AND lost_at IS NULL"))?,
+        "frags_lost": one(format!("SELECT COUNT(*) FROM backup_frags WHERE {MINE} AND lost_at IS NOT NULL"))?,
+        "repairing": one(format!("SELECT COUNT(*) FROM backup_frags f WHERE f.{MINE} AND f.acked_at IS NULL AND f.lost_at IS NULL AND EXISTS (SELECT 1 FROM backup_frags x WHERE x.owner_hex = f.owner_hex AND x.packet_id = f.packet_id AND x.lost_at IS NOT NULL)"))?,
+        "drops_queued": one("SELECT COUNT(*) FROM kv WHERE scope = 'backup_rs_drop'".into())?,
+        "faulty_guardians": one(format!("SELECT COUNT(DISTINCT host_hex) FROM backup_frags WHERE {MINE} AND lost_at IS NOT NULL"))?,
+        "suspects": one("SELECT COUNT(*) FROM kv WHERE scope = 'backup_rs_suspect'".into())?,
+        "held_for_friends": one("SELECT COUNT(*) FROM backup_frags WHERE owner_hex NOT IN (SELECT hex FROM identities WHERE hosted = 1)".into())?,
+    }))
+}
 
 /// Secondes UNIX de l'horloge de la station.
 pub fn now() -> i64 {
@@ -186,12 +233,16 @@ pub struct PrivateBackup<O: Outbox, B: BlobStore> {
     label: Option<String>,
     /// Réveil du crawl, pour retrouver tout de suite les contacts d'un compte en secours.
     crawl_nudge: Option<Arc<tokio::sync::Notify>>,
+    /// Sonde groupée de présence des fragments chez une station (`HASN`), pour la restauration k-sur-n.
+    probe: Option<Probe>,
+    /// Contrôle de possession des fragments (lecture d'une plage chez la station du gardien), pour la réparation nocturne.
+    sample: Option<Sample>,
 }
 
 impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
     /// `sharing` fournit la liste des proches réciproques ; `station_peer` est indiqué à l'hébergeur pour rapatrier les blobs.
     pub fn new(db: Arc<Db>, keys: Arc<dyn KeySource>, outbox: Arc<O>, blobs: Arc<B>, sharing: Arc<Sharing<O>>, activity: ActivityBus) -> Self {
-        Self { db, keys, outbox, blobs, sharing, publisher: None, station_peer: None, home: None, publish: None, accounts_dir: None, activity, notify: None, prefetch: None, attachment_prefetch: None, node: None, label: None, crawl_nudge: None }
+        Self { db, keys, outbox, blobs, sharing, publisher: None, station_peer: None, home: None, publish: None, accounts_dir: None, activity, notify: None, prefetch: None, attachment_prefetch: None, node: None, label: None, crawl_nudge: None, probe: None, sample: None }
     }
 
     /// Republie le manifeste de l'hébergeur après chaque rangement, et indique la station aux amis.
@@ -390,7 +441,18 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         let o = owner.to_owned();
         let rescue = self.db.readers().read(move |c| Ok(c.query_row("SELECT COUNT(*) FROM kv WHERE scope = ?1 AND key LIKE ?2", rusqlite::params![SHARE_SENT, format!("{o}:%")], |r| r.get::<_, i64>(0))?)).await.unwrap_or(0);
         let friends = self.sharing.friends(owner).await?.into_iter().map(|f| json!({ "hex": f.hex, "label": f.label })).collect::<Vec<_>>();
-        Ok(json!({ "mine": mine, "hosting": hosting_json, "friends": friends, "rescue_friends": rescue }))
+        let at = now();
+        let guardians = self.guardians(owner, at).await;
+        let mut gjson = Vec::new();
+        for (hex, enabled, same, p) in &guardians {
+            gjson.push(json!({ "label": self.label_of(hex).await, "files": enabled, "same_station": same, "availability": p }));
+        }
+        // Clés : la carte imprimée + un gardien joignable ; fichiers : un gardien qui reçoit la copie complète.
+        let remote: Vec<Option<u32>> = guardians.iter().filter(|g| !g.2).map(|g| g.3).collect();
+        let files: Vec<Option<u32>> = guardians.iter().filter(|g| !g.2 && g.1).map(|g| g.3).collect();
+        let (permille, next) = crate::guardians::estimate(&remote);
+        let safety = json!({ "permille": permille, "next_permille": next, "files_permille": crate::guardians::estimate(&files).0 });
+        Ok(json!({ "mine": mine, "hosting": hosting_json, "friends": friends, "rescue_friends": rescue, "guardians": gjson, "safety": safety, "coded": self.coded_view(owner, at).await, "restore": self.restore_view(owner, at).await }))
     }
 
     /// Active la sauvegarde chez `host` (un proche réciproque : la demande lui est envoyée) ou la suspend (`host` absent).
@@ -408,7 +470,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             .db
             .writer()
             .transaction(move |tx| {
-                tx.execute("UPDATE backup_pacts SET enabled = 0 WHERE owner_hex = ?1", [&o])?;
+                // Un gardien de plus ne remplace pas les autres : chacun reçoit sa part de chaque nouveau paquet.
                 let status: Option<String> = tx.query_row("SELECT status FROM backup_pacts WHERE owner_hex = ?1 AND host_hex = ?2", [&o, &h], |r| r.get(0)).optional()?;
                 let ask = !matches!(status.as_deref(), Some("accepted" | "pending"));
                 if status.is_none() {
@@ -471,7 +533,8 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                 "revoked" => "revoke",
                 _ => "decline",
             };
-            self.control(host, owner, op, vec![vec!["quota".into(), quota.to_string()]]).await?;
+            // `["rs","1"]` : cette station sait garder des fragments (sauvegarde k-sur-n) ; sans lui, copie complète.
+            self.control(host, owner, op, vec![vec!["quota".into(), quota.to_string()], vec!["rs".into(), "1".into()]]).await?;
         }
         self.status(host).await
     }
@@ -501,11 +564,15 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                     tx.execute("DELETE FROM ucloud_entries WHERE owner_hex = ?1 AND path LIKE '/Sauvegardes/%' AND json_extract(data, '$.backup_of') = ?2 AND cid = ?3", rusqlite::params![h, o, cid])?;
                 }
                 match &only {
-                    None => tx.execute("DELETE FROM backup_items WHERE owner_hex = ?2 AND host_hex = ?1", [&h, &o])?,
+                    None => {
+                        tx.execute("DELETE FROM backup_frags WHERE owner_hex = ?2 AND host_hex = ?1", [&h, &o])?;
+                        tx.execute("DELETE FROM backup_items WHERE owner_hex = ?2 AND host_hex = ?1", [&h, &o])?
+                    }
                     Some(only) => {
                         let mut n = 0;
                         for cid in only {
                             n += tx.execute("DELETE FROM backup_items WHERE owner_hex = ?1 AND host_hex = ?2 AND cid = ?3", rusqlite::params![o, h, cid])?;
+                            n += tx.execute("DELETE FROM backup_frags WHERE owner_hex = ?1 AND host_hex = ?2 AND cid = ?3", rusqlite::params![o, h, cid])?;
                         }
                         n
                     }
@@ -535,7 +602,8 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
     pub async fn gc_night(&self, at: i64) -> usize {
         // Le manifeste courant n'est pas une entrée du VFS : il ne doit jamais être pris pour un fichier disparu.
         const GONE: &str = "(NOT EXISTS (SELECT 1 FROM ucloud_entries e WHERE e.owner_hex = backup_items.owner_hex AND e.cid = backup_items.cid AND e.path NOT LIKE '/Sauvegardes/%') \
-                            AND backup_items.cid <> COALESCE((SELECT k.value FROM kv k WHERE k.scope = 'ucloud_manifest_cid' AND k.key = backup_items.owner_hex), ''))";
+                            AND backup_items.cid <> COALESCE((SELECT k.value FROM kv k WHERE k.scope = 'ucloud_manifest_cid' AND k.key = backup_items.owner_hex), '') \
+                            AND backup_items.cid NOT IN (SELECT x.index_cid FROM backup_index x WHERE x.owner_hex = backup_items.owner_hex))";
         let pacts: Vec<(String, String)> = self
             .db
             .readers()
@@ -589,8 +657,9 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         dropped
     }
 
-    /// Fichiers privés de `owner` pas encore sauvegardés chez `host`.
-    async fn pending_files(&self, owner: &str, host: &str, limit: usize) -> Vec<(String, u64)> {
+    /// Fichiers privés de `owner` pas encore sauvegardés chez `host`. `unpacked_only` (gardien k-sur-n) : seulement ceux
+    /// que le flux de paquets ne prend pas (CID d'une autre forme que `bafkrei…`), qui partent donc en copie complète.
+    async fn pending_files(&self, owner: &str, host: &str, limit: usize, unpacked_only: bool) -> Vec<(String, u64)> {
         let (o, h) = (owner.to_owned(), host.to_owned());
         self.db
             .readers()
@@ -603,9 +672,10 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                        AND NOT EXISTS (SELECT 1 FROM face_shares f WHERE f.owner_hex = e.owner_hex AND f.cid = e.cid) \
                        AND NOT EXISTS (SELECT 1 FROM invites i WHERE i.owner_hex = e.owner_hex AND i.revoked_at IS NULL AND instr(i.items, e.cid) > 0) \
                        AND NOT EXISTS (SELECT 1 FROM backup_items b WHERE b.owner_hex = e.owner_hex AND b.host_hex = ?2 AND b.cid = e.cid) \
+                       AND (?4 = 0 OR e.cid NOT LIKE 'bafkrei%') \
                      ORDER BY COALESCE(e.mtime, 0) LIMIT ?3",
                 )?;
-                let rows = stmt.query_map(rusqlite::params![o, h, i64::try_from(limit).unwrap_or(i64::MAX)], |r| Ok((r.get::<_, String>(0)?, u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0))))?;
+                let rows = stmt.query_map(rusqlite::params![o, h, i64::try_from(limit).unwrap_or(i64::MAX), i64::from(unpacked_only)], |r| Ok((r.get::<_, String>(0)?, u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0))))?;
                 Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
             .await
@@ -646,11 +716,25 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
 
     async fn used(&self, owner: &str, host: &str) -> u64 {
         let (o, h) = (owner.to_owned(), host.to_owned());
-        self.db.readers().read(move |c| Ok(c.query_row("SELECT COALESCE(SUM(size), 0) FROM backup_items WHERE owner_hex = ?1 AND host_hex = ?2", [o, h], |r| r.get::<_, i64>(0))?)).await.map_or(0, |n| u64::try_from(n).unwrap_or(0))
+        // Copies complètes et fragments comptent ensemble dans le volume accordé.
+        self.db
+            .readers()
+            .read(move |c| {
+                Ok(c.query_row(
+                    "SELECT COALESCE((SELECT SUM(size) FROM backup_items WHERE owner_hex = ?1 AND host_hex = ?2), 0) + COALESCE((SELECT SUM(size) FROM backup_frags WHERE owner_hex = ?1 AND host_hex = ?2), 0)",
+                    [o, h],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .map_or(0, |n| u64::try_from(n).unwrap_or(0))
     }
 
-    /// Envoie ce qui reste à sauvegarder pour chaque propriétaire hébergé ici dont l'ami a accepté. Rend le nombre de blobs envoyés.
+    /// Envoie ce qui reste à sauvegarder pour chaque propriétaire hébergé ici dont l'ami a accepté : fragments k-sur-n et index
+    /// aux gardiens qui savent les garder ([`rs`]), copie complète aux autres (et à ceux de cette station), manifeste à tous.
+    /// Rend le nombre de blobs (fichiers, fragments, index) envoyés.
     pub async fn run_once(&self) -> usize {
+        let packed = self.rs_once(now()).await;
         let pacts: Vec<(String, String, u64)> = self
             .db
             .readers()
@@ -660,14 +744,15 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             })
             .await
             .unwrap_or_default();
-        let mut sent = 0;
+        let mut sent = packed;
         for (owner, host, quota) in pacts {
             let local = self.hosted_here(&host).await;
+            let coded = !local && self.kv_get(rs::RS, &format!("{owner}:{host}")).await.is_some();
             let label = self.label_of(&owner).await;
             let mut used = self.used(&owner, &host).await;
             let mut stored_here = false;
             let mut todo: Vec<(String, u64)> = self.manifest_item(&owner, &host).await.into_iter().collect();
-            todo.extend(self.pending_files(&owner, &host, PER_PASS).await);
+            todo.extend(self.pending_files(&owner, &host, PER_PASS, coded).await);
             for (cid, size) in todo {
                 if used.saturating_add(size) > quota {
                     continue; // trop gros pour le volume restant : les plus petits peuvent encore passer
@@ -778,6 +863,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             self.claim(&wrap.id, at).await; // pas une sauvegarde : le partage entre amis s'en occupe
             return;
         }
+        self.seen(&sender, at).await;
         // Secours : l'expéditeur n'est pas (encore) un ami connu ici ; chaque cas porte son propre contrôle.
         let to_node = self.node.as_ref().is_some_and(|(h, _)| h == me);
         match tag(&rumor.tags, "op") {
@@ -834,10 +920,18 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                         tx.execute("UPDATE backup_pacts SET status = ?3, quota_bytes = ?4, decided_at = ?5 WHERE owner_hex = ?1 AND host_hex = ?2", rusqlite::params![m, s, status, quota.max(0), at])?;
                         if status != "accepted" {
                             tx.execute("DELETE FROM backup_items WHERE owner_hex = ?1 AND host_hex = ?2", [&m, &s])?;
+                            tx.execute("DELETE FROM backup_frags WHERE owner_hex = ?1 AND host_hex = ?2", [&m, &s])?;
                         }
                         Ok(())
                     })
                     .await;
+                // Négociation : seul un gardien qui annonce `rs` reçoit des fragments ; les autres gardent la copie complète.
+                let key = format!("{me}:{sender}");
+                if op == "accept" && tag(&rumor.tags, "rs") == Some("1") {
+                    self.kv_put(rs::RS, &key, "1", at).await;
+                } else {
+                    self.kv_del(rs::RS, &key).await;
+                }
                 self.claim(&wrap.id, at).await;
                 let text = if op == "accept" { format!("✅ {label} accepte d'héberger votre sauvegarde privée.") } else { format!("⛔ {label} n'héberge plus (ou refuse d'héberger) votre sauvegarde privée.") };
                 self.tell(me, text).await;
@@ -868,6 +962,20 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                     }
                     _ => stats.ignored += 1,
                 }
+                self.claim(&wrap.id, at).await;
+                stats.control += 1;
+            }
+            // Un fragment de paquet (ou l'index des paquets) à ranger, puis à acquitter.
+            Some("frag") if rumor.kind == kind::FILE => self.store_frag(me, &sender, &wrap.id, &rumor, at, stats).await,
+            // Mon gardien a rangé mes fragments.
+            Some("frag-ack") => {
+                self.frag_ack(me, &sender, &rumor, at).await;
+                self.claim(&wrap.id, at).await;
+                stats.control += 1;
+            }
+            // Mon ami retire des fragments.
+            Some("frag-drop") => {
+                self.frag_drop(me, &sender, &rumor).await;
                 self.claim(&wrap.id, at).await;
                 stats.control += 1;
             }
@@ -1116,6 +1224,97 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             .flatten()
     }
 
+    /// Le compte `hex` s'est montré aujourd'hui (message de sauvegarde reçu de lui).
+    async fn seen(&self, hex: &str, at: i64) {
+        if let Err(e) = self.db.writer().execute("INSERT OR IGNORE INTO guardian_presence(hex, day) VALUES (?1, ?2)", vec![hex.to_owned().into(), (at / 86_400).into()]).await {
+            self.activity.publish_to(Audience::Captain, "alert", "backup", format!("présence d'un gardien non notée ({e})"), None);
+        }
+    }
+
+    /// Relève, au plus une fois par heure, les jours où chaque gardien des comptes d'ici s'est montré : un événement signé de lui,
+    /// ou une balise de santé (30850) de sa station d'accueil, rapatriés par le crawl (les deux derniers jours). La décision est
+    /// prise en SQL ; les jours de plus de 60 jours sont oubliés. Rend le nombre de jours ajoutés.
+    pub async fn observe_presence(&self, at: i64) -> usize {
+        if self.kv_get("guardian_presence_at", "").await.is_some_and(|(_, t)| at - t < 3600 && at >= t) {
+            return 0;
+        }
+        self.kv_put("guardian_presence_at", "", "", at).await;
+        let (since, horizon) = (at - 2 * 86_400, (at / 86_400 - 60));
+        let added = self
+            .db
+            .writer()
+            .transaction(move |tx| {
+                let n = tx.execute(
+                    "INSERT OR IGNORE INTO guardian_presence(hex, day) \
+                     SELECT g.host_hex, e.created_at / 86400 FROM (SELECT DISTINCT host_hex FROM backup_pacts WHERE status = 'accepted') g \
+                       JOIN nostr_events e ON e.pubkey = g.host_hex WHERE e.created_at BETWEEN ?1 AND ?2 \
+                     UNION SELECT g.host_hex, e.created_at / 86400 FROM (SELECT DISTINCT host_hex FROM backup_pacts WHERE status = 'accepted') g \
+                       JOIN identities i ON i.hex = g.host_hex AND instr(i.home_station, ':') > 0 \
+                       JOIN nostr_events e ON e.kind = 30850 AND e.pubkey = substr(i.home_station, instr(i.home_station, ':') + 1) \
+                     WHERE e.created_at BETWEEN ?1 AND ?2",
+                    rusqlite::params![since, at],
+                )?;
+                tx.execute("DELETE FROM guardian_presence WHERE day < ?1", [horizon])?;
+                Ok(n)
+            })
+            .await;
+        match added {
+            Ok(n) => n,
+            Err(e) => {
+                self.activity.publish_to(Audience::Captain, "alert", "backup", format!("présence des gardiens non relevée ({e})"), None);
+                0
+            }
+        }
+    }
+
+    /// Gardiens de `owner` : amis qui hébergent sa sauvegarde ET à qui sa part de clé a été confiée, avec leur disponibilité (‰,
+    /// `None` sans assez de recul). Un gardien hébergé sur cette même station ne protège pas d'une panne de la station : `same`.
+    async fn guardians(&self, owner: &str, at: i64) -> Vec<(String, bool, bool, Option<u32>)> {
+        let (o, today) = (owner.to_owned(), at / 86_400);
+        let rows: Vec<(String, i64, i64, i64, i64)> = self
+            .db
+            .readers()
+            .read(move |c| {
+                let mut stmt = c.prepare(
+                    "SELECT p.host_hex, p.enabled, COALESCE(p.decided_at, p.asked_at), \
+                            EXISTS (SELECT 1 FROM identities i WHERE i.hex = p.host_hex AND i.hosted = 1), \
+                            (SELECT COUNT(*) FROM guardian_presence g WHERE g.hex = p.host_hex AND g.day > ?2 - ?3 AND g.day <= ?2) \
+                     FROM backup_pacts p JOIN kv k ON k.scope = ?4 AND k.key = p.owner_hex || ':' || p.host_hex \
+                     WHERE p.owner_hex = ?1 AND p.status = 'accepted' ORDER BY p.decided_at",
+                )?;
+                Ok(stmt
+                    .query_map(rusqlite::params![o, today, crate::guardians::WINDOW_DAYS, SHARE_SENT], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                    .collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap_or_default();
+        rows.into_iter()
+            .map(|(hex, enabled, since, same, seen)| {
+                let p = if same == 1 { Some(0) } else { crate::guardians::availability(seen, today - since / 86_400 + 1) };
+                (hex, enabled == 1, same == 1, p)
+            })
+            .collect()
+    }
+
+    /// Suivi de la restauration pour le membre : état, amis qui ont renvoyé, amis attendus (dernier jour vu).
+    async fn restore_view(&self, owner: &str, at: i64) -> Value {
+        let Some((state, since)) = self.kv_get("restore", owner).await else { return Value::Null };
+        if !(state == "pending" || state == "late" || (state == "done" && at - since < RESTORE_SHOW_SECS)) {
+            return Value::Null;
+        }
+        let (mut returned, mut waiting) = (Vec::new(), Vec::new());
+        for f in self.remote_friends(owner).await {
+            if self.kv_get(RETURNED, &format!("{owner}:{f}")).await.is_some() {
+                returned.push(json!(self.label_of(&f).await));
+            } else if state != "done" && waiting.len() < 8 {
+                let h = f.clone();
+                let last: Option<i64> = self.db.readers().read(move |c| Ok(c.query_row("SELECT MAX(day) FROM guardian_presence WHERE hex = ?1", [h], |r| r.get(0))?)).await.ok().flatten();
+                waiting.push(json!({ "label": self.label_of(&f).await, "seen_days": last.map(|d| (at / 86_400 - d).max(0)) }));
+            }
+        }
+        json!({ "state": state, "since": since, "returned": returned, "waiting": waiting })
+    }
+
     /// Comptes hébergés ici dont la restauration est dans l'état `state` (`pending`, `done`).
     async fn restore_owners(&self, state: &'static str) -> Vec<String> {
         self.db
@@ -1138,10 +1337,13 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
     /// blob est là ; puis redemande les fichiers qui manquent encore. Rend le nombre de messages envoyés.
     pub async fn restore_step(&self, at: i64) -> usize {
         let mut sent = 0;
-        for owner in self.restore_owners("pending").await {
+        for owner in self.restore_owners("pending").await.into_iter().chain(self.restore_owners("late").await) {
             sent += self.restore_owner(&owner, at).await;
+            // Les paquets se tirent dès que l'index est là, sans attendre le manifeste.
+            self.restore_packets(&owner, at).await;
         }
         for owner in self.restore_owners("done").await {
+            self.restore_packets(&owner, at).await;
             // Le manifeste a pu revenir avant que le DID soit rapatrié : la station d'accueil s'annonce quand même.
             self.announce_home(&owner, at).await;
             self.announce_moved(&owner, at).await;
@@ -1153,30 +1355,50 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
     async fn restore_owner(&self, owner: &str, at: i64) -> usize {
         self.announce_home(owner, at).await;
         self.announce_moved(owner, at).await;
+        self.keep_origin(owner, at).await;
         if self.try_restore_manifest(owner, at).await {
             return 0;
         }
-        let started = self.kv_get("restore", owner).await.map_or(at, |(_, t)| t);
-        if at - started > RESTORE_GIVE_UP_SECS {
+        let Some((state, since)) = self.kv_get("restore", owner).await else { return 0 };
+        let late = state == "late";
+        if !late && at - since > RESTORE_GIVE_UP_SECS {
+            // Le compte repart (ses manifestes se publient de nouveau) ; l'événement d'origine, s'il a été vu, est déjà gardé.
+            self.kv_put("restore", owner, "late", at).await;
+            self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration de …{} : aucun manifeste en 3 jours, compte débloqué, relance quotidienne des amis pendant 30 jours", &owner[..8.min(owner.len())]), None);
+            self.tell(owner, "⏳ Vos fichiers ne sont pas encore revenus : vos amis qui les gardent sont sans doute hors ligne. Votre espace est de nouveau utilisable. La station leur redemande chaque jour pendant 30 jours ; ce qui reviendra sera ajouté à votre uCloud sans rien écraser.".to_owned()).await;
+            return 0;
+        }
+        if late && at - since > RESTORE_LATE_SECS {
             self.kv_put("restore", owner, "abandoned", at).await;
-            let text = "⚠️ Restauration : aucune sauvegarde de votre uCloud n'a été retrouvée chez vos proches en 3 jours. Le compte repart à neuf ; vos amis et vos contacts restent les vôtres.".to_owned();
-            self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration abandonnée pour {} : aucun manifeste retrouvé", &owner[..8.min(owner.len())]), None);
-            self.tell(owner, text).await;
+            self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration abandonnée pour …{} : aucun manifeste en 33 jours", &owner[..8.min(owner.len())]), None);
+            self.tell(owner, "⚠️ Après un mois de relances, vos anciens fichiers n'ont pas été retrouvés chez vos amis. Votre compte, vos amis et vos contacts restent les vôtres.".to_owned()).await;
             return 0;
         }
         let last = self.kv_get("restore_asked", owner).await.map_or(0, |(_, t)| t);
-        if last > 0 && at - last < RESTORE_RETRY_SECS {
+        if last > 0 && at - last < if late { RESTORE_LATE_RETRY_SECS } else { RESTORE_RETRY_SECS } {
             return 0;
         }
-        let friends = self.remote_friends(owner).await;
+        let mut friends = self.remote_friends(owner).await;
         if friends.is_empty() {
             return 0; // la liste d'amis n'est pas encore rapatriée par le crawl : on réessaiera au prochain passage
+        }
+        if late {
+            // Seuls les absents sont relancés (ceux qui ont déjà renvoyé quelque chose ont tout envoyé) ; à défaut, tous.
+            let mut absent = Vec::new();
+            for f in &friends {
+                if self.kv_get(RETURNED, &format!("{owner}:{f}")).await.is_none() {
+                    absent.push(f.clone());
+                }
+            }
+            if !absent.is_empty() {
+                friends = absent;
+            }
         }
         let mut tags = Vec::new();
         if let Some(home) = &self.home {
             tags.push(vec!["home".to_owned(), home.clone()]);
         }
-        if let Some(pointer) = self.latest_event(owner, kind::APP_DATA, Some(manifest::D_TAG)).await.and_then(|e| manifest::open_pointer(&e, &*self.keys).ok()) {
+        if let Some(pointer) = self.origin_event(owner).await.and_then(|e| manifest::open_pointer(&e, &*self.keys).ok()) {
             tags.push(vec!["cid".to_owned(), pointer.manifest_cid]);
         }
         tags.push(vec!["all".to_owned(), "1".to_owned()]);
@@ -1195,41 +1417,91 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         sent
     }
 
+    /// Garde l'événement de manifeste d'origine dès que le crawl l'a rapatrié et tant que rien n'a été publié ici : quand le compte
+    /// publiera le sien (après 3 jours), l'événement remplaçable d'origine disparaîtrait, et avec lui la clé du manifeste qu'un ami
+    /// revenu tard renverra. Il reste chiffré vers le compte, comme sur le réseau.
+    async fn keep_origin(&self, owner: &str, at: i64) {
+        if self.kv_get("restore", owner).await.is_none_or(|(s, _)| s != "pending") || self.kv_get(ORIGIN, owner).await.is_some() {
+            return;
+        }
+        if let Some(event) = self.latest_event(owner, kind::APP_DATA, Some(manifest::D_TAG)).await {
+            match serde_json::to_string(&event) {
+                Ok(text) => self.kv_put(ORIGIN, owner, &text, at).await,
+                Err(e) => {
+                    self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration : manifeste d'origine non gardé ({e})"), None);
+                }
+            }
+        }
+    }
+
+    /// Manifeste d'origine du compte : celui gardé par [`Self::keep_origin`], sinon le dernier vu tant que rien n'a été publié ici.
+    async fn origin_event(&self, owner: &str) -> Option<Event> {
+        if let Some(event) = self.kv_get(ORIGIN, owner).await.and_then(|(v, _)| serde_json::from_str::<Event>(&v).ok()) {
+            return Some(event);
+        }
+        let event = self.latest_event(owner, kind::APP_DATA, Some(manifest::D_TAG)).await?;
+        let mine = self.kv_get("ucloud_manifest_cid", owner).await.map(|(v, _)| v);
+        // Un manifeste publié par cette station-ci n'a rien à rendre.
+        match manifest::open_pointer(&event, &*self.keys) {
+            Ok(p) if Some(&p.manifest_cid) != mine.as_ref() => Some(event),
+            _ => None,
+        }
+    }
+
     /// Applique le manifeste d'origine dès que son blob est revenu. Rend `true` quand la restauration n'a plus rien à attendre.
+    /// Un uCloud encore vide le reçoit tel quel ; sinon (le membre a déjà ajouté des fichiers, ou le manifeste arrive après les
+    /// 3 jours) il est **fusionné** sans rien écraser (`manifest::merge_into`), ce qui est rejouable.
     async fn try_restore_manifest(&self, owner: &str, at: i64) -> bool {
-        if self.kv_get("restore", owner).await.is_none_or(|(state, _)| state != "pending") {
+        let Some((state, _)) = self.kv_get("restore", owner).await else { return false };
+        if state != "pending" && state != "late" {
             return false;
         }
-        let Some(event) = self.latest_event(owner, kind::APP_DATA, Some(manifest::D_TAG)).await else { return false };
+        let Some(event) = self.origin_event(owner).await else { return false };
         let Ok(pointer) = manifest::open_pointer(&event, &*self.keys) else { return false };
         if self.blobs.open(&pointer.manifest_cid).await.is_err() {
             return false;
         }
         let o = owner.to_owned();
         let files: i64 = self.db.readers().read(move |c| Ok(c.query_row("SELECT COUNT(*) FROM ucloud_entries WHERE owner_hex = ?1 AND type = 'file'", [o], |r| r.get(0))?)).await.unwrap_or(0);
-        if files > 0 {
-            // Appliquer le manifeste remplacerait tout le VFS : on ne détruit pas ce que le membre a ajouté depuis.
-            self.kv_put("restore", owner, "abandoned", at).await;
-            self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration de …{} : des fichiers ont été ajoutés avant le manifeste, non appliqué", &owner[..8.min(owner.len())]), None);
-            self.tell(owner, "⚠️ Des fichiers ont été ajoutés avant la fin de la restauration : pour ne rien perdre, le manifeste d'origine n'a pas été appliqué. Prévenez le Capitaine.".to_owned()).await;
-            return true;
-        }
-        match manifest::restore_from_event(&self.db, &*self.blobs, &*self.keys, &event).await {
-            Ok(Pointer { manifest_cid, rev, files, .. }) => {
-                self.kv_put("ucloud_manifest_rev", owner, &rev.to_string(), at).await;
-                self.kv_put("ucloud_manifest_cid", owner, &manifest_cid, at).await;
-                self.kv_put("restore_missing", owner, "0", at).await;
-                self.kv_put("restore", owner, "done", at).await;
-                if let Some(p) = &self.publisher {
-                    p.notify(owner);
+        if files == 0 && state == "pending" {
+            return match manifest::restore_from_event(&self.db, &*self.blobs, &*self.keys, &event).await {
+                Ok(Pointer { manifest_cid, rev, files, .. }) => {
+                    self.kv_put("ucloud_manifest_rev", owner, &rev.to_string(), at).await;
+                    self.kv_put("ucloud_manifest_cid", owner, &manifest_cid, at).await;
+                    self.finish_restore(owner, at).await;
+                    self.tell(owner, format!("✅ Votre compte est rétabli : {files} fichier(s) retrouvé(s) dans votre uCloud. Les fichiers eux-mêmes reviennent de chez vos proches au fil des heures.")).await;
+                    true
                 }
-                self.tell(owner, format!("✅ Votre compte est rétabli : {files} fichier(s) retrouvé(s) dans votre uCloud. Les fichiers eux-mêmes reviennent de chez vos proches au fil des heures.")).await;
+                Err(e) => {
+                    self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration de …{} : manifeste illisible ({e})", &owner[..8.min(owner.len())]), None);
+                    false
+                }
+            };
+        }
+        match manifest::merge_from_event(&self.db, &*self.blobs, &*self.keys, &event).await {
+            Ok((pointer, merged)) => {
+                // La prochaine révision publiée ici doit dépasser celle d'origine.
+                let rev = self.kv_get("ucloud_manifest_rev", owner).await.and_then(|(v, _)| v.parse::<u64>().ok()).unwrap_or(0).max(pointer.rev);
+                self.kv_put("ucloud_manifest_rev", owner, &rev.to_string(), at).await;
+                self.finish_restore(owner, at).await;
+                let renamed = if merged.renamed > 0 { format!(" ; {} élément(s) dont la place était prise ont été gardés sous le nom « … (ancien) »", merged.renamed) } else { String::new() };
+                self.tell(owner, format!("✅ Vos anciens fichiers sont revenus : {} fichier(s) ajouté(s) à votre uCloud, sans rien écraser{renamed}. Ils se remplissent au fil des heures.", merged.added + merged.renamed)).await;
                 true
             }
             Err(e) => {
-                self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration de …{} : manifeste illisible ({e})", &owner[..8.min(owner.len())]), None);
+                self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration de …{} : fusion du manifeste impossible ({e})", &owner[..8.min(owner.len())]), None);
                 false
             }
+        }
+    }
+
+    /// Manifeste appliqué : la restauration est close, la publication reprend et les fichiers manquants sont redemandés.
+    async fn finish_restore(&self, owner: &str, at: i64) {
+        self.kv_put("restore_missing", owner, "0", at).await;
+        self.kv_put("restore", owner, "done", at).await;
+        self.kv_del(ORIGIN, owner).await;
+        if let Some(p) = &self.publisher {
+            p.notify(owner);
         }
     }
 
@@ -1445,6 +1717,10 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                 if let Some(size) = backup {
                     return Ok(Some((size, "backup")));
                 }
+                let frag = conn.query_row("SELECT size FROM backup_frags WHERE owner_hex = ?1 AND host_hex = ?2 AND cid = ?3 AND acked_at IS NOT NULL", [&o, &h, &c], |r| r.get::<_, i64>(0)).optional()?;
+                if let Some(size) = frag {
+                    return Ok(Some((size, "frag")));
+                }
                 let shared = conn
                     .query_row(
                         "SELECT COALESCE(e.size, 0) FROM ucloud_entries e WHERE e.owner_hex = ?2 AND e.cid = ?3 AND e.type = 'file' AND e.path NOT LIKE '/Sauvegardes/%' \
@@ -1467,6 +1743,11 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         if let Some(peer) = &self.station_peer {
             tags.push(vec!["station".into(), peer.clone()]);
         }
+        // L'index des paquets se reconnaît à la restauration ; `rs` : cette station sait garder des fragments.
+        if self.kv_get(rs::INDEX_HELD, &format!("{host}:{owner}")).await.is_some_and(|(v, _)| v == cid) {
+            tags.push(vec!["kind".into(), "index".into()]);
+        }
+        tags.push(vec!["rs".into(), "1".into()]);
         let sent = self.send_to(host, owner, kind::FILE, tags, &format!("ipfs://{cid}")).await;
         tokio::time::sleep(SEND_PACE).await; // pas de rafale de gift wraps
         sent
@@ -1571,16 +1852,33 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             return;
         }
         let quota: i64 = tag(&rumor.tags, "quota").and_then(|q| q.parse().ok()).unwrap_or(0);
-        if tag(&rumor.tags, "src") == Some("backup") && quota > 0 {
-            // L'ami héberge ma sauvegarde : l'accord est rétabli sans qu'il ait rien à faire, et ce blob n'a pas à repartir.
-            let _ = self.record_item(me, sender, cid, size).await;
+        let src = tag(&rumor.tags, "src");
+        if let Some(peer) = tag(&rumor.tags, "station").filter(|p| (10..=64).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric())) {
+            self.kv_put(rs::PEER, sender, peer, at).await; // pour tirer ses fragments si son DID manque
+        }
+        let is_index = tag(&rumor.tags, "kind") == Some("index");
+        if is_index {
+            self.kv_put(rs::RESTORE_INDEX, &format!("{me}:{sender}"), cid, at).await;
+        }
+        if is_index || src == Some("frag") {
+            self.rs_dirty(me, at).await;
+        }
+        if matches!(src, Some("backup" | "frag")) && quota > 0 {
+            // L'ami héberge ma sauvegarde : l'accord est rétabli sans qu'il ait rien à faire, et ce blob n'a pas à repartir
+            // (un fragment, lui, est déjà connu par l'index).
+            if src == Some("backup") {
+                let _ = self.record_item(me, sender, cid, size).await;
+            }
+            if tag(&rumor.tags, "rs") == Some("1") {
+                self.kv_put(rs::RS, &format!("{me}:{sender}"), "1", at).await;
+            }
             let (m, s) = (me.to_owned(), sender.to_owned());
             let pact = self
                 .db
                 .writer()
                 .execute(
                     "INSERT INTO backup_pacts(owner_hex, host_hex, status, quota_bytes, enabled, asked_at, decided_at) \
-                     VALUES (?1, ?2, 'accepted', ?3, NOT EXISTS (SELECT 1 FROM backup_pacts WHERE owner_hex = ?1 AND enabled = 1), ?4, ?4) \
+                     VALUES (?1, ?2, 'accepted', ?3, 1, ?4, ?4) \
                      ON CONFLICT(owner_hex, host_hex) DO UPDATE SET status = 'accepted', quota_bytes = excluded.quota_bytes, decided_at = excluded.decided_at",
                     vec![m.into(), s.into(), quota.into(), at.into()],
                 )
@@ -1589,6 +1887,9 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                 self.activity.publish_to(Audience::Captain, "alert", "backup", format!("restauration : accord de sauvegarde non rétabli ({e})"), None);
             }
         }
+        let key = format!("{me}:{sender}");
+        let n: u64 = self.kv_get(RETURNED, &key).await.and_then(|(v, _)| v.parse().ok()).unwrap_or(0);
+        self.kv_put(RETURNED, &key, &(n + 1).to_string(), at).await;
         self.claim(wrap_id, at).await;
         stats.stored += 1;
         self.try_restore_manifest(me, at).await;
@@ -1596,6 +1897,8 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
 
     /// Étape de la nuit (20h12 solaire) : envoie tout ce qui reste à sauvegarder, par lots, jusqu'à épuisement.
     pub async fn sync_night(&self) -> Result<String, String> {
+        // Réparation d'abord : les fragments refaits partent avec l'envoi de la nuit (et l'index qui les cite).
+        let repair = self.repair_night(now()).await;
         let mut total = 0;
         for _ in 0..200 {
             let sent = self.run_once().await;
@@ -1606,7 +1909,10 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         }
         let dropped = self.gc_night(now()).await;
         let moved = self.purge_moved(now()).await?;
-        Ok(format!("{total} fichier(s) privé(s) sauvegardé(s) chez des amis, {dropped} ancien(s) blob(s) retiré(s) ; {moved} élément(s) de plus de 30 jours effacé(s) de la corbeille"))
+        Ok(format!(
+            "{total} fichier(s) privé(s) sauvegardé(s) chez des amis, {dropped} ancien(s) blob(s) retiré(s) ; réparation : {} fragment(s) contrôlé(s), {} perdu(s), {} refait(s), {} orphelin(s) ramassé(s) ; {moved} élément(s) de plus de 30 jours effacé(s) de la corbeille",
+            repair.checked, repair.lost, repair.rebuilt, repair.orphans
+        ))
     }
 
     /// Vide la corbeille de la station (comptes déménagés, comptes éjectés… : voir [`crate::trash`]) de ce qui y dort depuis
@@ -1691,15 +1997,51 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             self.rescue_step(at).await;
             r = self.rescue_session(&share.hex, at).await.unwrap_or(r);
         }
-        Ok(Self::rescue_view(self.rescue_session(&share.hex, at).await.filter(|x| !x.asks.is_empty()).as_ref().or(Some(&r).filter(|x| !x.asks.is_empty()))))
+        let current = self.rescue_session(&share.hex, at).await.filter(|x| !x.asks.is_empty()).or(Some(r).filter(|x| !x.asks.is_empty()));
+        Ok(self.rescue_view(current.as_ref(), at).await)
     }
 
-    fn rescue_view(r: Option<&RescueOut>) -> Value {
-        match r {
-            None => json!({ "status": "none" }),
-            Some(r) if r.share.is_some() => json!({ "status": "ready", "by": r.by, "denied": r.denied }),
-            Some(r) => json!({ "status": if r.sent.is_empty() { "searching" } else { "waiting" }, "sent": r.sent.len(), "denied": r.denied, "asks_left": RESCUE_MAX_ASKS.saturating_sub(r.asks.len()) }),
+    /// État de la demande pour la page publique `/restore`, où l'on ne présente que la carte imprimée : rien de plus que ce que
+    /// le réseau montre déjà à tous. Les contacts sollicités viennent de la liste de contacts publique du compte et sont nommés
+    /// par leur nom public (profil), jamais par leur adresse ; leur état ne dit que ce que CETTE station a fait ou reçu (prévenu,
+    /// station injoignable depuis…, a confirmé, n'a pas reconnu). Qui garde réellement une part n'est jamais affirmé : un ami qui
+    /// n'en garde pas reste muet, exactement comme un gardien qui n'a pas encore répondu.
+    async fn rescue_view(&self, r: Option<&RescueOut>, at: i64) -> Value {
+        let Some(r) = r else { return json!({ "status": "none" }) };
+        let mut contacts = Vec::new();
+        let mut push = |name: Option<String>, state: &str, since: Option<i64>| contacts.push(json!({ "name": name, "state": state, "since": since }));
+        for hex in r.by_hex.iter() {
+            push(self.public_name(hex).await, "confirmed", None);
         }
+        for hex in &r.denied_hex {
+            push(self.public_name(hex).await, "denied", None);
+        }
+        for hex in r.sent.iter().filter(|h| Some(*h) != r.by_hex.as_ref() && !r.denied_hex.contains(h)).take(RESCUE_SHOW) {
+            push(self.public_name(hex).await, "asked", None);
+        }
+        for (hex, since) in r.failed.iter().filter(|(h, _)| !r.sent.contains(h)).take(RESCUE_SHOW) {
+            push(self.public_name(hex).await, "offline", Some(*since));
+        }
+        if r.share.is_some() {
+            return json!({ "status": "ready", "by": r.by, "denied": r.denied, "contacts": contacts });
+        }
+        // Le crawl n'a trouvé aucun contact au bout d'un quart d'heure : personne à qui demander.
+        let first = r.asks.first().copied().unwrap_or(r.at);
+        let status = if !r.sent.is_empty() { "waiting" } else if r.failed.is_empty() && at - first > 15 * 60 { "nobody" } else { "searching" };
+        json!({ "status": status, "sent": r.sent.len(), "denied": r.denied, "contacts": contacts, "asks_left": RESCUE_MAX_ASKS.saturating_sub(r.asks.len()) })
+    }
+
+    /// Nom public (profil) d'un contact, pour la page de secours ; jamais son adresse ni sa clé.
+    async fn public_name(&self, hex: &str) -> Option<String> {
+        let h = hex.to_owned();
+        let name: Option<String> = self
+            .db
+            .readers()
+            .read(move |c| Ok(c.query_row("SELECT COALESCE(NULLIF(trim(json_extract(content, '$.display_name')), ''), json_extract(content, '$.name')) FROM nostr_events WHERE pubkey = ?1 AND kind = 0 ORDER BY created_at DESC LIMIT 1", [h], |r| r.get::<_, Option<String>>(0)).optional()?.flatten()))
+            .await
+            .ok()
+            .flatten();
+        name.map(|n| n.chars().filter(|c| !c.is_control()).take(40).collect::<String>().trim().to_owned()).filter(|n| !n.is_empty() && !n.contains('@'))
     }
 
     async fn rescue_sessions_last_hour(&self, at: i64) -> usize {
@@ -1750,6 +2092,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                 }
                 match self.send_with(&node_secret, &node_hex, &friend, kind::CHAT, tags, "secours").await {
                     Ok(()) => {
+                        r.failed.retain(|(h, _)| h != &friend);
                         r.sent.push(friend);
                         sent += 1;
                         changed = true;
@@ -1757,6 +2100,10 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                     // Station du contact injoignable d'ici : il sera retenté au passage suivant.
                     Err(e) => {
                         self.activity.publish("ucloud", "backup", format!("secours : contact …{} injoignable pour l'instant ({e})", &friend[..8]), None);
+                        if !r.failed.iter().any(|(h, _)| h == &friend) {
+                            r.failed.push((friend, at));
+                            changed = true;
+                        }
                     }
                 }
             }
@@ -1825,9 +2172,11 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         if r.share.is_some() || !r.sent.iter().any(|s| s == from) {
             return;
         }
-        let label = self.label_of(from).await;
+        // Montré sur la page publique : le nom public seulement, jamais l'adresse.
+        let label = self.public_name(from).await.unwrap_or_else(|| "un contact".to_owned());
         if op == "rescue-denied" {
-            if !r.denied.contains(&label) {
+            if !r.denied_hex.iter().any(|h| h == from) {
+                r.denied_hex.push(from.to_owned());
                 r.denied.push(label);
             }
             self.save_session(&owner, &r, at).await;
@@ -1837,6 +2186,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             Ok(share) if share.index == 3 && share.hex == owner => {
                 r.share = Some(share.to_text());
                 r.by = Some(label);
+                r.by_hex = Some(from.to_owned());
                 self.save_session(&owner, &r, at).await;
                 // Les autres gardiens n'ont plus rien à faire : leur demande est close.
                 if let Some((node_hex, node_secret)) = self.node.clone() {
@@ -1872,6 +2222,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
             self.restore_step(at).await;
             self.serve_restores().await;
             self.send_shares(at).await;
+            self.observe_presence(at).await;
             tokio::select! {
                 () = tokio::time::sleep(every) => {}
                 changed = stop.changed() => {
@@ -1904,11 +2255,18 @@ mod tests {
         pubkey_of(s).unwrap()
     }
 
+    /// Boîte d'envoi de test : garde ce qui part ; `.1` = envois encore permis avant une coupure du relais (`None` : sans fin).
     #[derive(Default)]
-    struct Capture(Mutex<Vec<(String, Event)>>);
+    struct Capture(Mutex<Vec<(String, Event)>>, Mutex<Option<usize>>);
 
     impl Outbox for Capture {
         async fn send(&self, to: &str, wrap: Event) -> Result<(), OutboxError> {
+            if let Some(left) = self.1.lock().unwrap().as_mut() {
+                if *left == 0 {
+                    return Err(OutboxError("relais injoignable".into()));
+                }
+                *left -= 1;
+            }
             self.0.lock().unwrap().push((to.to_owned(), wrap));
             Ok(())
         }
@@ -2264,8 +2622,13 @@ mod tests {
         assert_eq!(host.outbox.0.lock().unwrap()[0].0, node_hex, "la réponse va à la station qui demande");
         pump(&host, &fresh).await;
         fresh.backup.poll_once(now()).await;
+        // La page publique ne montre que le nom public (profil) des contacts, jamais leur adresse : Carol a un profil, Bob non.
+        give(&fresh.db, UnsignedEvent { created_at: 1, kind: 0, tags: vec![], content: r#"{"name":"Carol"}"#.into() }.sign(&CAROL).unwrap()).await;
         let st = fresh.backup.rescue_ask(&p1, false, now()).await.unwrap();
-        assert_eq!((st["status"].as_str(), st["by"].as_str()), (Some("ready"), Some("carol")));
+        assert_eq!((st["status"].as_str(), st["by"].as_str()), (Some("ready"), Some("un contact")), "réponse reçue avant que le profil ne soit connu");
+        assert_eq!(st["contacts"][0], json!({ "name": "Carol", "state": "confirmed", "since": null }));
+        assert_eq!(st["contacts"][1], json!({ "name": null, "state": "asked", "since": null }), "Bob, sans profil public, reste anonyme");
+        assert!(!st.to_string().contains("example.org") && !st.to_string().contains(&carol), "ni adresse ni clé sur la page publique");
         let got = fresh.backup.rescued_share(&alice).await.unwrap();
         let recovered = astro_lifecycle::share::Recovery::parse(&format!("{p1}\n{got}")).unwrap();
         assert_eq!((recovered.card.salt.as_str(), recovered.card.pepper.as_str(), recovered.card.hex.as_str()), ("Sel123", "Poivre456", alice.as_str()), "P1 + P3 rendue = le compte d'Alice");
@@ -2426,6 +2789,8 @@ mod tests {
         host.backup.respond(&bob, &alice, true, 1_000_000, 1_000_000).await.unwrap();
         pump(&host, &old).await;
         old.backup.poll_once(now()).await;
+        // Gardien d'une ancienne version (sans `rs`) : copie complète, la voie historique que ce test suit.
+        old.db.writer().execute("DELETE FROM kv WHERE scope = 'backup_rs'", vec![]).await.unwrap();
         assert_eq!(old.backup.run_once().await, 4, "le manifeste et les trois fichiers privés");
         pump(&old, &host).await;
         assert_eq!(host.backup.poll_once(now()).await.stored, 4);
@@ -2492,6 +2857,138 @@ mod tests {
         for n in [&new, &host] {
             let _ = std::fs::remove_dir_all(&n.dir);
         }
+    }
+
+    /// Bob, le gardien, est hors ligne plus de 3 jours : le compte d'Alice repart (elle publie de nouveau), la station relance
+    /// Bob une fois par jour, et quand il revient son manifeste est FUSIONNÉ sans rien écraser ; au bout de 30 jours, abandon.
+    #[tokio::test]
+    async fn a_guardian_back_after_three_days_gets_his_files_merged_without_overwriting_and_absent_ones_are_asked_daily_for_thirty_days() {
+        const DAY: i64 = 86_400;
+        let (alice, bob) = (hex(&ALICE), hex(&BOB));
+        let new_home = format!("12D3KooWNewHome:{}", "ab".repeat(32));
+        let old = node("late-old", &[(&ALICE, "alice@example.org")], &[(&BOB, "bob@example.org")], "12D3KooWOldStation", None, None).await;
+        let host = node("late-host", &[(&BOB, "bob@example.org")], &[(&ALICE, "alice@example.org")], "12D3KooWBobStation", None, Some(old.blobs.clone())).await;
+        let new = node("late-new", &[(&ALICE, "alice@example.org")], &[(&BOB, "bob@example.org")], "12D3KooWNewStation", Some(new_home), Some(host.blobs.clone())).await;
+        for (n, owner, friend) in [(&old, &ALICE, &BOB), (&host, &BOB, &ALICE)] {
+            n.db.writer().execute("INSERT INTO social_graph(owner_hex, pubkey, level, updated_at) VALUES (?1, ?2, 1, 0)", vec![hex(owner).into(), hex(friend).into()]).await.unwrap();
+        }
+        give(&old.db, follows(&BOB, &[&ALICE])).await;
+        give(&host.db, follows(&ALICE, &[&BOB])).await;
+        let mut files = Vec::new();
+        for name in ["a.txt", "b.txt"] {
+            let cid = put_blob(&old.backup, format!("ancien {name}").as_bytes()).await;
+            old.db.writer().execute("INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, data) VALUES (?1, ?2, '/Docs', 'file', ?3, 'text/plain', 20, 1, '{}')", vec![alice.clone().into(), format!("/Docs/{name}").into(), cid.clone().into()]).await.unwrap();
+            old.db.writer().execute("INSERT INTO ucloud_keyring(owner_hex, cid, key_hex, enc) VALUES (?1, ?2, ?3, 'uenc2')", vec![alice.clone().into(), cid.clone().into(), format!("{:064x}", files.len() + 1).into()]).await.unwrap();
+            files.push(cid);
+        }
+        old.db.writer().execute("INSERT INTO ucloud_entries(owner_hex, path, parent, type, data) VALUES (?1, '/Docs', '/', 'dir', '{}')", vec![alice.clone().into()]).await.unwrap();
+        manifest::publish(&old.db, &*old.blobs, &*old.backup.keys, &alice).await.unwrap();
+        old.backup.set(&alice, true, Some(&bob)).await.unwrap();
+        pump(&old, &host).await;
+        host.backup.poll_once(now()).await;
+        host.backup.respond(&bob, &alice, true, 1_000_000, 1_000_000).await.unwrap();
+        pump(&host, &old).await;
+        old.backup.poll_once(now()).await;
+        // Gardien d'une ancienne version (sans `rs`) : copie complète, la voie historique que ce test suit.
+        old.db.writer().execute("DELETE FROM kv WHERE scope = 'backup_rs'", vec![]).await.unwrap();
+        old.backup.run_once().await;
+        pump(&old, &host).await;
+        host.backup.poll_once(now()).await;
+        let manifest_event = old.backup.latest_event(&alice, kind::APP_DATA, Some(manifest::D_TAG)).await.unwrap();
+        drop(old);
+
+        // Rétablie il y a 4 jours ; Bob n'a jamais répondu. Le crawl a rapatrié le manifeste d'origine.
+        let t0 = now();
+        new.backup.kv_put("restore", &alice, "pending", t0 - 4 * DAY).await;
+        for e in [follows(&ALICE, &[&BOB]), did_of(&ALICE, "alice@example.org"), manifest_event, follows(&BOB, &[&ALICE])] {
+            give(&new.db, e).await;
+        }
+        assert_eq!(new.backup.restore_step(t0).await, 0);
+        assert_eq!(new.backup.kv_get("restore", &alice).await.map(|v| v.0), Some("late".to_owned()), "plus d'abandon sec à 3 jours");
+        assert!(new.backup.kv_get(ORIGIN, &alice).await.is_some(), "le manifeste d'origine est gardé avant d'être remplacé");
+        assert!(!manifest::restoring(&new.db, &alice).await, "la publication des manifestes est débloquée");
+        // Alice vit sans ses fichiers : elle réécrit a.txt, et son nouveau manifeste remplace celui d'origine sur le réseau.
+        let recent = put_blob(&new.backup, b"a.txt d'aujourd'hui").await;
+        new.db.writer().execute("INSERT INTO ucloud_entries(owner_hex, path, parent, type, data) VALUES (?1, '/Docs', '/', 'dir', '{}')", vec![alice.clone().into()]).await.unwrap();
+        new.db.writer().execute("INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, data) VALUES (?1, '/Docs/a.txt', '/Docs', 'file', ?2, 'text/plain', 20, 2, '{}')", vec![alice.clone().into(), recent.clone().into()]).await.unwrap();
+        new.db.writer().execute("INSERT INTO ucloud_keyring(owner_hex, cid, key_hex, enc) VALUES (?1, ?2, ?3, 'uenc2')", vec![alice.clone().into(), recent.clone().into(), format!("{:064x}", 99).into()]).await.unwrap();
+        manifest::publish(&new.db, &*new.blobs, &*new.backup.keys, &alice).await.unwrap();
+
+        // Relance quotidienne des absents : une demande, puis rien avant 24 h, puis de nouveau.
+        assert_eq!(new.backup.restore_step(t0).await, 1, "Bob est relancé");
+        assert_eq!(new.backup.restore_step(t0 + DAY - 60).await, 0, "pas deux relances le même jour");
+        new.outbox.0.lock().unwrap().clear();
+        assert_eq!(new.backup.restore_step(t0 + DAY + 60).await, 1, "relance du lendemain");
+        let view = new.backup.status(&alice).await.unwrap();
+        assert_eq!(view["restore"]["state"], "late");
+        assert_eq!(view["restore"]["waiting"][0]["label"], "bob");
+
+        // Bob revient : sa station renvoie le manifeste d'origine et les fichiers ; ils sont fusionnés sans rien écraser.
+        pump(&new, &host).await;
+        host.backup.poll_once(now()).await;
+        while host.backup.serve_restores().await > 0 {}
+        pump(&host, &new).await;
+        new.backup.poll_once(now()).await;
+        assert_eq!(new.backup.kv_get("restore", &alice).await.map(|v| v.0), Some("done".to_owned()));
+        let at = |path: &'static str| {
+            let (db, a) = (new.db.clone(), alice.clone());
+            async move { db.readers().read(move |c| Ok(c.query_row("SELECT COALESCE((SELECT cid FROM ucloud_entries WHERE owner_hex = ?1 AND path = ?2), '')", [a, path.to_owned()], |r| r.get::<_, String>(0))?)).await.unwrap() }
+        };
+        assert_eq!(at("/Docs/a.txt").await, recent, "le fichier d'aujourd'hui n'est pas écrasé");
+        assert_eq!(at("/Docs/a (ancien).txt").await, files[0], "l'ancien est gardé à côté, renommé");
+        assert_eq!(at("/Docs/b.txt").await, files[1], "ce qui manquait revient à sa place");
+        assert!(new.backup.kv_get(ORIGIN, &alice).await.is_none());
+        let view = new.backup.status(&alice).await.unwrap();
+        assert_eq!((view["restore"]["state"].as_str(), view["restore"]["returned"][0].as_str()), (Some("done"), Some("bob")), "suivi : Bob a renvoyé");
+        // Rejeu : les mêmes envois relivrés ne changent plus rien.
+        let before = scalar(&new.db, "SELECT COUNT(*) FROM ucloud_entries WHERE owner_hex = ?1", vec![alice.clone()]).await;
+        assert!(!new.backup.try_restore_manifest(&alice, now()).await);
+        assert_eq!(scalar(&new.db, "SELECT COUNT(*) FROM ucloud_entries WHERE owner_hex = ?1", vec![alice.clone()]).await, before);
+
+        // Au bout de 30 jours de relances sans retour : abandon, et le manifeste publié ici n'est jamais pris pour l'original.
+        new.backup.kv_put("restore", &alice, "late", t0 - 31 * DAY).await;
+        assert_eq!(new.backup.restore_step(t0).await, 0);
+        assert_eq!(new.backup.kv_get("restore", &alice).await.map(|v| v.0), Some("abandoned".to_owned()));
+        for n in [&new, &host] {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    /// Ma sécurité : un gardien = un ami qui héberge la sauvegarde ET garde la part ; sa disponibilité vient des jours où il
+    /// s'est montré ; sans 7 jours de recul, pas de chiffre ; un gardien sur la même station ne compte pas.
+    #[tokio::test]
+    async fn the_safety_estimate_counts_only_guardians_off_this_station_and_waits_for_enough_hindsight() {
+        const DAY: i64 = 86_400;
+        let (alice, carol) = (hex(&ALICE), hex(&CAROL));
+        let n = node("safety", &[(&ALICE, "alice@example.org"), (&BOB, "bob@example.org")], &[(&CAROL, "carol@example.org")], "12D3KooWSafety", None, None).await;
+        let empty = n.backup.status(&alice).await.unwrap();
+        assert_eq!((empty["guardians"].as_array().map(Vec::len), &empty["safety"]["permille"]), (Some(0), &Value::Null));
+        let t = now();
+        accept_pact(&n.db, &ALICE, &CAROL).await;
+        n.db.writer().execute("UPDATE backup_pacts SET decided_at = ?1", vec![(t - 2 * DAY).into()]).await.unwrap();
+        let st = n.backup.status(&alice).await.unwrap();
+        assert_eq!(st["guardians"].as_array().map(Vec::len), Some(0), "pas encore de part confiée : pas encore gardienne");
+        n.backup.kv_put(SHARE_SENT, &format!("{alice}:{carol}"), "f", t).await;
+        let st = n.backup.status(&alice).await.unwrap();
+        assert_eq!((st["guardians"][0]["label"].as_str(), &st["safety"]["permille"]), (Some("carol"), &Value::Null), "2 jours de recul : pas de chiffre inventé");
+        // 20 jours de recul, vue 18 jours (dont aujourd'hui par un événement que le crawl a rapporté).
+        n.db.writer().execute("UPDATE backup_pacts SET decided_at = ?1", vec![(t - 19 * DAY).into()]).await.unwrap();
+        for d in 1..18 {
+            n.db.writer().execute("INSERT INTO guardian_presence(hex, day) VALUES (?1, ?2)", vec![carol.clone().into(), (t / DAY - d).into()]).await.unwrap();
+        }
+        give(&n.db, UnsignedEvent { created_at: u64::try_from(t).unwrap(), kind: 1, tags: vec![], content: "bonjour".into() }.sign(&CAROL).unwrap()).await;
+        assert_eq!(n.backup.observe_presence(t).await, 1);
+        assert_eq!(n.backup.observe_presence(t + 60).await, 0, "au plus une fois par heure");
+        let st = n.backup.status(&alice).await.unwrap();
+        assert_eq!(st["guardians"][0]["availability"], 900);
+        assert_eq!((&st["safety"]["permille"], &st["safety"]["next_permille"]), (&json!(900), &json!(990)), "un gardien de plus : 99 %");
+        // Bob, hébergé sur cette même station, devient gardien aussi : il ne protège pas d'une panne de la station.
+        accept_pact(&n.db, &ALICE, &BOB).await;
+        n.backup.kv_put(SHARE_SENT, &format!("{alice}:{}", hex(&BOB)), "f", t).await;
+        let st = n.backup.status(&alice).await.unwrap();
+        assert_eq!(st["guardians"].as_array().map(Vec::len), Some(2));
+        assert_eq!(st["safety"]["permille"], 900, "même station : ne compte pas");
+        let _ = std::fs::remove_dir_all(&n.dir);
     }
 
     #[tokio::test]
@@ -2730,5 +3227,1066 @@ mod tests {
         assert_eq!(astro_dav::share::replica_bytes(&host.db, &alice, expires + 1).await, 0, "le volume est libéré");
         let _ = (std::fs::remove_dir_all(&owner.dir), std::fs::remove_dir_all(&host.dir));
         let _ = carol;
+    }
+
+    // ───────────────── Sauvegarde k-sur-n : fragments chez les gardiens, restauration par tirage ─────────────────
+
+    const GUARDS: [[u8; 32]; 5] = [[0x11; 32], [0x12; 32], [0x13; 32], [0x14; 32], [0x15; 32]];
+    fn guard(i: usize) -> &'static [u8; 32] {
+        &GUARDS[i]
+    }
+
+    fn gx(i: usize) -> String {
+        hex(guard(i))
+    }
+
+    const OWNER_PEER: &str = "12D3KooWOwnerStation";
+
+    /// Le maillage de test : PeerID → magasin de la station. Une station retirée de la carte est éteinte.
+    type Mesh = Arc<Mutex<std::collections::HashMap<String, Arc<FsBlobStore>>>>;
+
+    fn mesh_prefetch(mesh: Mesh, target: Arc<FsBlobStore>) -> Prefetch {
+        Arc::new(move |cid: String, peer: String| {
+            let (mesh, target) = (mesh.clone(), target.clone());
+            Box::pin(async move {
+                use astro_dav::BlobWriter as _;
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                let origin = mesh.lock().unwrap().get(&peer).cloned().ok_or("station éteinte")?;
+                let (mut reader, _) = origin.open(&cid).await.map_err(|e| e.to_string())?;
+                let mut bytes = Vec::new();
+                reader.read_to_end(&mut bytes).await.map_err(|e| e.to_string())?;
+                let mut w = target.begin().await.map_err(|e| e.to_string())?;
+                w.write_all(&bytes).await.map_err(|e| e.to_string())?;
+                let got = w.commit().await.map_err(|e| e.to_string())?.cid;
+                if got == cid { Ok(()) } else { Err(format!("blob altéré : {got} au lieu de {cid}")) }
+            })
+        })
+    }
+
+    fn guard_peer(i: usize) -> String {
+        format!("12D3KooWGuard{i}Station")
+    }
+
+    fn guard_home(i: usize) -> String {
+        format!("{}:{}", guard_peer(i), format!("{:02x}", 0x40 + i).repeat(32))
+    }
+
+    fn guard_email(i: usize) -> String {
+        format!("g{i}@example.org")
+    }
+
+    struct World {
+        owner: Node,
+        guards: Vec<Node>,
+        mesh: Mesh,
+    }
+
+    async fn mutual_friends(n: &Node, me: &[u8; 32], other: &[u8; 32]) {
+        n.db.writer().execute("INSERT OR IGNORE INTO social_graph(owner_hex, pubkey, level, updated_at) VALUES (?1, ?2, 1, 0)", vec![hex(me).into(), hex(other).into()]).await.unwrap();
+        give(&n.db, follows(other, &[me])).await;
+    }
+
+    /// Alice (station du propriétaire) et `count` gardiens, chacun sur sa station, amis réciproques d'Alice.
+    async fn rs_world(tag: &str, count: usize) -> World {
+        let mesh: Mesh = Arc::default();
+        let emails: Vec<String> = (0..count).map(guard_email).collect();
+        let remote: Vec<(&[u8; 32], &str)> = (0..count).map(|i| (guard(i), emails[i].as_str())).collect();
+        let owner = node(&format!("{tag}-o"), &[(&ALICE, "alice@example.org")], &remote, OWNER_PEER, None, None).await;
+        mesh.lock().unwrap().insert(OWNER_PEER.to_owned(), owner.blobs.clone());
+        let mut guards = Vec::new();
+        for (i, email) in emails.iter().enumerate() {
+            let mut g = node(&format!("{tag}-g{i}"), &[(guard(i), email)], &[(&ALICE, "alice@example.org")], &guard_peer(i), None, None).await;
+            g.backup = g.backup.with_prefetch(mesh_prefetch(mesh.clone(), g.blobs.clone()));
+            mesh.lock().unwrap().insert(guard_peer(i), g.blobs.clone());
+            mutual_friends(&g, guard(i), &ALICE).await;
+            mutual_friends(&owner, &ALICE, guard(i)).await;
+            owner.db.writer().execute("UPDATE identities SET home_station = ?2 WHERE hex = ?1", vec![gx(i).into(), guard_home(i).into()]).await.unwrap();
+            guards.push(g);
+        }
+        World { owner, guards, mesh }
+    }
+
+    /// Les messages de `from` adressés à `who` arrivent chez `to` (les autres restent dans la boîte).
+    async fn pump_for(from: &Node, to: &Node, who: &str) -> usize {
+        let mine: Vec<(String, Event)> = {
+            let mut q = from.outbox.0.lock().unwrap();
+            let (mine, rest): (Vec<_>, Vec<_>) = q.drain(..).partition(|(t, _)| t == who);
+            *q = rest;
+            mine
+        };
+        let n = mine.len();
+        for (_, wrap) in mine {
+            to.db.writer().transaction(move |tx| insert_event(tx, &wrap).map(|_| ())).await.unwrap();
+        }
+        n
+    }
+
+    /// Alice demande au gardien `i`, qui accepte `quota` octets ; `rs = false` : gardien d'une ancienne version.
+    async fn rs_pact(w: &World, i: usize, quota: u64, rs: bool) {
+        let (alice, g) = (hex(&ALICE), gx(i));
+        w.owner.backup.set(&alice, true, Some(&g)).await.unwrap();
+        pump_for(&w.owner, &w.guards[i], &g).await;
+        w.guards[i].backup.poll_once(now()).await;
+        w.guards[i].backup.respond(&g, &alice, true, quota, quota).await.unwrap();
+        pump_for(&w.guards[i], &w.owner, &alice).await;
+        w.owner.backup.poll_once(now()).await;
+        if !rs {
+            w.owner.db.writer().execute("DELETE FROM kv WHERE scope = 'backup_rs' AND key = ?1", vec![format!("{alice}:{g}").into()]).await.unwrap();
+        }
+    }
+
+    /// Une nuit : Alice envoie, les gardiens joignables (`alive`) rangent et acquittent, Alice reçoit les accusés.
+    async fn rs_night(w: &World, alive: &[usize]) -> usize {
+        let sent = w.owner.backup.run_once().await;
+        for &i in alive {
+            pump_for(&w.owner, &w.guards[i], &gx(i)).await;
+            w.guards[i].backup.poll_once(now()).await;
+            pump_for(&w.guards[i], &w.owner, &hex(&ALICE)).await;
+        }
+        w.owner.backup.poll_once(now()).await;
+        sent
+    }
+
+    /// Fichiers privés d'Alice (contenu chiffré simulé de 200 Ko chacun), trousseau et manifeste publié.
+    async fn rs_files(n: &Node, names: &[&str], mtime0: i64) -> Vec<String> {
+        let alice = hex(&ALICE);
+        let mut cids = Vec::new();
+        for (j, name) in names.iter().enumerate() {
+            let bytes: Vec<u8> = (0..200_000u32).map(|x| (x.wrapping_mul(7) ^ (j as u32 * 31 + mtime0 as u32)) as u8).collect();
+            let cid = blob_in(n, &bytes).await;
+            n.db.writer()
+                .execute(
+                    "INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, data) VALUES (?1, ?2, '/Docs', 'file', ?3, 'image/jpeg', 200000, ?4, '{}')",
+                    vec![alice.clone().into(), format!("/Docs/{name}").into(), cid.clone().into(), (mtime0 + j as i64).into()],
+                )
+                .await
+                .unwrap();
+            n.db.writer().execute("INSERT INTO ucloud_keyring(owner_hex, cid, key_hex, enc) VALUES (?1, ?2, ?3, 'uenc2')", vec![alice.clone().into(), cid.clone().into(), format!("{:064x}", mtime0 + j as i64 + 1).into()]).await.unwrap();
+            cids.push(cid);
+        }
+        cids
+    }
+
+    async fn frag_rows(n: &Node, owner: &str, host: &str) -> i64 {
+        scalar(&n.db, "SELECT COUNT(*) FROM backup_frags WHERE owner_hex = ?1 AND host_hex = ?2", vec![owner.to_owned(), host.to_owned()]).await
+    }
+
+    fn frag_wrap(to: &str, tags: Vec<Vec<String>>) -> Event {
+        let mut all = vec![vec!["p".to_owned(), to.to_owned()], vec!["t".into(), TAG.into()], vec!["op".into(), "frag".into()], vec!["station".into(), OWNER_PEER.into()]];
+        all.extend(tags);
+        let r = Rumor { pubkey: hex(&ALICE), created_at: u64::try_from(now()).unwrap(), kind: kind::FILE, tags: all, content: String::new() };
+        gift_wrap(&ALICE, to, &r, r.created_at).unwrap()
+    }
+
+    /// Deux stations : un gardien qui annonce `rs` reçoit un fragment par paquet (k = n = 1), l'index et le manifeste ; il
+    /// vérifie tout ce qui arrive (rejeu, second fragment du même paquet, blob forgé, autre indice, quota) et acquitte ;
+    /// le fragment local d'Alice disparaît à l'accusé.
+    #[tokio::test]
+    async fn two_stations_a_coded_guardian_gets_one_fragment_per_packet_checks_everything_and_acks() {
+        let w = rs_world("rs2", 1).await;
+        let (alice, g0) = (hex(&ALICE), hex(&GUARDS[0]));
+        let files = rs_files(&w.owner, &["a.jpg", "b.jpg", "c.jpg"], 10).await;
+        manifest::publish(&w.owner.db, &*w.owner.blobs, &*w.owner.backup.keys, &alice).await.unwrap();
+        rs_pact(&w, 0, 4_000_000, true).await;
+        assert!(w.owner.backup.kv_get(rs::RS, &format!("{alice}:{g0}")).await.is_some(), "l'accord annonce le codage k-sur-n");
+
+        // La nuit : un paquet (k = n = 1), son fragment, l'index et le manifeste ; aucun fichier en copie complète.
+        assert_eq!(rs_night(&w, &[0]).await, 3);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE owner_hex = ?1 AND k = 1", vec![alice.clone()]).await, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_blobs WHERE owner_hex = ?1", vec![alice.clone()]).await, 3);
+        let g = &w.guards[0];
+        assert_eq!(frag_rows(g, &alice, &g0).await, 1);
+        for cid in &files {
+            assert!(g.blobs.open(cid).await.is_err(), "le gardien ne voit plus les blobs eux-mêmes");
+        }
+        assert_eq!(scalar(&g.db, "SELECT COUNT(*) FROM backup_items WHERE owner_hex = ?1", vec![alice.clone()]).await, 2, "manifeste + index en copie complète");
+        let (frag_cid, packet, size): (String, String, i64) = g.db.readers().read(|c| Ok(c.query_row("SELECT cid, packet_id, size FROM backup_frags", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?)).await.unwrap();
+        assert_eq!(scalar(&g.db, "SELECT COUNT(*) FROM ucloud_entries WHERE owner_hex = ?1 AND cid = ?2 AND path LIKE '/Sauvegardes/De_alice/%'", vec![g0.clone(), frag_cid.clone()]).await, 1, "rangé dans son uCloud, servi par le CidGate");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL", vec![]).await, 1, "acquitté");
+        assert!(w.owner.blobs.open(&frag_cid).await.is_err(), "le fragment local est effacé une fois acquitté");
+        assert!(w.owner.blobs.open(&files[0]).await.is_ok());
+        // En bassin partagé, le `CidGate` ne laisse sortir que ce que la base référence : fragments et index le sont.
+        let (fc, ic) = (frag_cid.clone(), w.owner.db.readers().read(|c| Ok(c.query_row("SELECT index_cid FROM backup_index", [], |r| r.get::<_, String>(0))?)).await.unwrap());
+        let gate = w.owner.db.readers().read(move |c| Ok((astro_dav::pool::referenced_by(c, &fc), astro_dav::pool::referenced_by(c, &ic)))).await.unwrap();
+        assert_eq!(gate, (Ok(true), Ok(true)));
+        assert_eq!(rs_night(&w, &[0]).await, 0, "rien de neuf : rien ne repart");
+
+        // Rejeu du même fragment : rien de compté deux fois, simple nouvel accusé.
+        let same = vec![vec!["cid".to_owned(), frag_cid.clone()], vec!["size".into(), size.to_string()], vec!["packet".into(), packet.clone()], vec!["i".into(), "0".into()]];
+        inject(g, frag_wrap(&g0, same)).await;
+        let st = g.backup.poll_once(now()).await;
+        assert_eq!((st.stored, st.control), (0, 1));
+        assert_eq!(frag_rows(g, &alice, &g0).await, 1);
+
+        // Un second fragment du même paquet est refusé (une station n'en garde qu'un), avant tout rapatriement.
+        let other = blob_in(&w.owner, b"autre chose").await;
+        inject(g, frag_wrap(&g0, vec![vec!["cid".into(), other.clone()], vec!["size".into(), "11".into()], vec!["packet".into(), packet.clone()], vec!["i".into(), "1".into()]])).await;
+        assert_eq!(g.backup.poll_once(now()).await.ignored, 1);
+        assert!(g.blobs.open(&other).await.is_err());
+
+        // Un blob forgé (pas un fragment ARSF), puis un vrai fragment annoncé sous un autre indice : refusés et retirés.
+        let forged = blob_in(&w.owner, &[0x41; 4096]).await;
+        inject(g, frag_wrap(&g0, vec![vec!["cid".into(), forged.clone()], vec!["size".into(), "4096".into()], vec!["packet".into(), "ab".repeat(16)], vec!["i".into(), "0".into()]])).await;
+        assert_eq!(g.backup.poll_once(now()).await.ignored, 1);
+        assert!(g.blobs.open(&forged).await.is_err(), "le blob forgé ne reste pas chez le gardien");
+        let (log, _) = g.backup.activity.subscribe(0);
+        assert!(log.iter().any(|a| a.message.contains("fragment de sauvegarde refusé")), "le Capitaine du gardien est prévenu");
+
+        // Quota : un fragment annoncé au-delà du volume restant est refusé sans rien rapatrier.
+        let big = blob_in(&w.owner, &[7u8; 1000]).await;
+        inject(g, frag_wrap(&g0, vec![vec!["cid".into(), big.clone()], vec!["size".into(), "3900000".into()], vec!["packet".into(), "cd".repeat(16)], vec!["i".into(), "0".into()]])).await;
+        assert_eq!(g.backup.poll_once(now()).await.ignored, 1);
+        assert!(g.blobs.open(&big).await.is_err());
+        assert_eq!(frag_rows(g, &alice, &g0).await, 1);
+
+        // Un nouveau fichier : un nouveau paquet, et un nouvel index qui remplace l'ancien chez le gardien.
+        let old_index: String = w.owner.db.readers().read(|c| Ok(c.query_row("SELECT index_cid FROM backup_index", [], |r| r.get(0))?)).await.unwrap();
+        rs_files(&w.owner, &["d.jpg"], 50).await;
+        assert_eq!(rs_night(&w, &[0]).await, 2, "un fragment et l'index");
+        assert_eq!(frag_rows(g, &alice, &g0).await, 2);
+        assert!(g.blobs.open(&old_index).await.is_err(), "l'ancien index est remplacé");
+        assert_eq!(scalar(&w.owner.db, "SELECT rev FROM backup_index WHERE owner_hex = ?1", vec![alice.clone()]).await, 2);
+        let a2 = alice.clone();
+        let m = w.owner.db.readers().read(move |c| astro_dav::manifest::load_manifest(c, &a2, 1, 1)).await.unwrap();
+        let current: String = w.owner.db.readers().read(|c| Ok(c.query_row("SELECT index_cid FROM backup_index", [], |r| r.get(0))?)).await.unwrap();
+        assert_eq!(m.backup_index, Some(current), "le manifeste porte le CID de l'index");
+        for n in std::iter::once(&w.owner).chain(&w.guards) {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    /// Trois stations amies (et une quatrième d'une ancienne version) : chaque paquet va à **tous** les gardiens qui
+    /// savent garder des fragments, nouveaux fichiers compris ; le gardien sans `rs` garde la copie complète.
+    #[tokio::test]
+    async fn every_packet_goes_to_all_coded_guardians_and_an_old_guardian_keeps_full_copies() {
+        let w = rs_world("rs3", 3).await;
+        let alice = hex(&ALICE);
+        let files = rs_files(&w.owner, &["a.jpg", "b.jpg"], 10).await;
+        rs_pact(&w, 0, 4_000_000, true).await;
+        rs_pact(&w, 1, 4_000_000, true).await;
+        rs_pact(&w, 2, 4_000_000, false).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_pacts WHERE owner_hex = ?1 AND enabled = 1", vec![alice.clone()]).await, 3, "un gardien de plus ne désactive pas les autres");
+        rs_night(&w, &[0, 1, 2]).await;
+        // Deux gardiens sans recul : 90 % supposés, k = 1 (miroir) ; un fragment chacun, d'indices différents.
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE k = 1", vec![]).await, 1);
+        for i in 0..2 {
+            assert_eq!(frag_rows(&w.guards[i], &alice, &gx(i)).await, 1);
+        }
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(DISTINCT i) FROM backup_frags", vec![]).await, 2);
+        let g2 = &w.guards[2];
+        assert_eq!(frag_rows(g2, &alice, &hex(&GUARDS[2])).await, 0);
+        for cid in &files {
+            assert!(g2.blobs.open(cid).await.is_ok(), "copie complète chez le gardien sans `rs`");
+        }
+
+        // Le défaut d'avant : les nouveaux fichiers n'allaient qu'au dernier gardien choisi. Ils vont maintenant à tous.
+        let fresh = rs_files(&w.owner, &["c.jpg"], 90).await;
+        rs_night(&w, &[0, 1, 2]).await;
+        for i in 0..2 {
+            assert_eq!(frag_rows(&w.guards[i], &alice, &gx(i)).await, 2, "gardien {i} : un fragment du nouveau paquet");
+        }
+        assert!(g2.blobs.open(&fresh[0]).await.is_ok());
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NULL", vec![]).await, 0);
+        for n in std::iter::once(&w.owner).chain(&w.guards) {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    /// Coupure du relais en plein envoi : ce qui n'est pas parti repart à la nuit suivante, sans réencoder ni rien
+    /// envoyer deux fois.
+    #[tokio::test]
+    async fn a_cut_in_the_middle_of_the_night_resumes_without_reencoding() {
+        let w = rs_world("rscut", 3).await;
+        let alice = hex(&ALICE);
+        rs_files(&w.owner, &["a.jpg", "b.jpg"], 10).await;
+        for i in 0..3 {
+            rs_pact(&w, i, 4_000_000, true).await;
+        }
+        w.owner.outbox.0.lock().unwrap().clear();
+        *w.owner.outbox.1.lock().unwrap() = Some(1);
+        w.owner.backup.run_once().await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets", vec![]).await, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE sent_at IS NOT NULL", vec![]).await, 1, "un seul fragment parti avant la coupure");
+        let packet: String = w.owner.db.readers().read(|c| Ok(c.query_row("SELECT packet_id FROM backup_packets", [], |r| r.get(0))?)).await.unwrap();
+        // Le relais revient : la reprise envoie le reste du même paquet.
+        *w.owner.outbox.1.lock().unwrap() = None;
+        rs_night(&w, &[0, 1, 2]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE packet_id = ?1", vec![packet]).await, 1, "pas de nouveau paquet");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets", vec![]).await, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL", vec![]).await, 3);
+        for i in 0..3 {
+            assert_eq!(frag_rows(&w.guards[i], &alice, &gx(i)).await, 1, "un seul fragment chez le gardien {i}");
+        }
+        assert_eq!(rs_night(&w, &[0, 1, 2]).await, 0);
+        for n in std::iter::once(&w.owner).chain(&w.guards) {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    /// Cinq gardiens présents 29 jours sur 30 : codage 3 sur 5 ; puis la station d'Alice brûle et une nouvelle station
+    /// la rétablit avec les gardiens joignables `alive`. Rend la nouvelle station et les fichiers.
+    async fn rs_burn(w: &mut World, tag: &str, alive: &[usize]) -> (Node, Vec<String>) {
+        const DAY: i64 = 86_400;
+        let alice = hex(&ALICE);
+        let files = rs_files(&w.owner, &["a.jpg", "b.jpg", "c.jpg"], 10).await;
+        manifest::publish(&w.owner.db, &*w.owner.blobs, &*w.owner.backup.keys, &alice).await.unwrap();
+        let t = now();
+        for i in 0..5 {
+            rs_pact(w, i, 4_000_000, true).await;
+            for d in 0..29 {
+                w.owner.db.writer().execute("INSERT OR IGNORE INTO guardian_presence(hex, day) VALUES (?1, ?2)", vec![gx(i).into(), (t / DAY - d).into()]).await.unwrap();
+            }
+        }
+        w.owner.db.writer().execute("UPDATE backup_pacts SET decided_at = ?1", vec![(t - 29 * DAY).into()]).await.unwrap();
+        rs_night(w, &[0, 1, 2, 3, 4]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE k = 3", vec![]).await, 1, "3 sur 5");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL", vec![]).await, 5);
+        let manifest_event = w.owner.backup.latest_event(&alice, kind::APP_DATA, Some(manifest::D_TAG)).await.unwrap();
+
+        // La station d'Alice brûle ; certains gardiens sont éteints.
+        w.mesh.lock().unwrap().remove(OWNER_PEER);
+        for i in 0..5 {
+            if !alive.contains(&i) {
+                w.mesh.lock().unwrap().remove(&guard_peer(i));
+            }
+        }
+        let emails: Vec<String> = (0..5).map(guard_email).collect();
+        let remote: Vec<(&[u8; 32], &str)> = (0..5).map(|i| (guard(i), emails[i].as_str())).collect();
+        let mut new = node(tag, &[(&ALICE, "alice@example.org")], &remote, "12D3KooWNewStation", None, None).await;
+        new.backup = new.backup.with_prefetch(mesh_prefetch(w.mesh.clone(), new.blobs.clone()));
+        w.mesh.lock().unwrap().insert("12D3KooWNewStation".to_owned(), new.blobs.clone());
+        for i in 0..5 {
+            mutual_friends(&new, &ALICE, guard(i)).await;
+            new.db.writer().execute("UPDATE identities SET home_station = ?2 WHERE hex = ?1", vec![gx(i).into(), guard_home(i).into()]).await.unwrap();
+        }
+        give(&new.db, did_of(&ALICE, "alice@example.org")).await;
+        give(&new.db, manifest_event).await;
+        new.backup.kv_put("restore", &alice, "pending", now()).await;
+
+        // Demande à chaque proche ; seuls les gardiens allumés répondent : manifeste et index d'abord.
+        assert_eq!(new.backup.restore_step(now()).await, 5);
+        for &i in alive {
+            pump_for(&new, &w.guards[i], &gx(i)).await;
+            w.guards[i].backup.poll_once(now()).await;
+            while w.guards[i].backup.serve_restores().await > 0 {}
+            pump_for(&w.guards[i], &new, &alice).await;
+        }
+        new.outbox.0.lock().unwrap().clear();
+        new.backup.poll_once(now()).await;
+        assert_eq!(new.backup.kv_get("restore", &alice).await.map(|v| v.0), Some("done".to_owned()), "le manifeste est revenu");
+        assert!(new.backup.kv_get(rs::RESTORE_INDEX, &format!("{alice}:{}", hex(&GUARDS[alive[0]]))).await.is_some(), "l'index est revenu");
+        (new, files)
+    }
+
+    #[tokio::test]
+    async fn five_guardians_two_off_the_new_station_pulls_and_decodes_everything() {
+        let mut w = rs_world("rs5", 5).await;
+        let alice = hex(&ALICE);
+        let (new, files) = rs_burn(&mut w, "rs5-new", &[0, 2, 4]).await;
+        for cid in &files {
+            assert!(new.blobs.open(cid).await.is_err());
+        }
+        // Le passage suivant tire 3 fragments chez les gardiens joignables, décode, revérifie chaque blob.
+        new.backup.restore_step(now()).await;
+        for cid in &files {
+            assert!(new.blobs.open(cid).await.is_ok(), "le blob {cid} est revenu");
+        }
+        let st: Value = serde_json::from_str(&new.backup.kv_get(rs::RESTORE_RS, &alice).await.unwrap().0).unwrap();
+        assert_eq!(st["state"], "done");
+        // Les tables locales sont reprises de l'index : rien ne repartira en paquet, l'accord k-sur-n est connu.
+        assert_eq!(scalar(&new.db, "SELECT COUNT(*) FROM backup_blobs WHERE owner_hex = ?1", vec![alice.clone()]).await, 3);
+        assert_eq!(scalar(&new.db, "SELECT COUNT(*) FROM backup_frags WHERE owner_hex = ?1", vec![alice.clone()]).await, 5);
+        assert_eq!(scalar(&new.db, "SELECT COUNT(*) FROM ucloud_entries WHERE owner_hex = ?1 AND type = 'file'", vec![alice.clone()]).await, 3);
+        assert!(new.backup.pending_raw(&alice, now()).await.is_empty());
+        // Aucun fragment ne traîne dans le magasin de la nouvelle station.
+        let frags: Vec<String> = new.db.readers().read(|c| Ok(c.prepare("SELECT cid FROM backup_frags")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)).await.unwrap();
+        for f in frags {
+            assert!(new.blobs.open(&f).await.is_err());
+        }
+        for n in std::iter::once(&w.owner).chain(&w.guards).chain(std::iter::once(&new)) {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    async fn rs_state(n: &Node, owner: &str) -> Value {
+        serde_json::from_str(&n.backup.kv_get(rs::RESTORE_RS, owner).await.unwrap().0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn three_guardians_off_in_three_of_five_fails_cleanly_retries_and_finishes_when_one_comes_back() {
+        const H: i64 = 3600;
+        let mut w = rs_world("rs5off", 5).await;
+        let alice = hex(&ALICE);
+        let (new, files) = rs_burn(&mut w, "rs5off-new", &[1, 3]).await;
+        let t = now();
+        new.backup.restore_step(t).await;
+        for cid in &files {
+            assert!(new.blobs.open(cid).await.is_err(), "deux fragments sur trois : rien n'est inventé");
+        }
+        assert_eq!((rs_state(&new, &alice).await["rounds"].as_u64(), rs_state(&new, &alice).await["state"].as_str()), (Some(1), None));
+        // Repli : les gardiens injoignables sont priés de renvoyer eux-mêmes leur fragment.
+        let frag_cids: Vec<String> = new.db.readers().read(|c| Ok(c.prepare("SELECT cid FROM backup_frags")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)).await.unwrap();
+        let asked: Vec<String> = new
+            .outbox
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(to, wrap)| {
+                let g = GUARDS.iter().find(|g| hex(g) == *to)?;
+                let r = nip59::unwrap(g, wrap).ok()?.rumor;
+                (tag(&r.tags, "op") == Some("restore") && r.tags.iter().any(|x| x.first().map(String::as_str) == Some("cid") && x.get(1).is_some_and(|c| frag_cids.contains(c)))).then(|| to.clone())
+            })
+            .collect();
+        for i in [0, 2, 4] {
+            assert!(asked.contains(&gx(i)), "gardien {i} relancé");
+        }
+        let (log, _) = new.backup.activity.subscribe(0);
+        assert!(log.iter().any(|a| a.message.contains("en attente de gardiens")), "le Capitaine le sait");
+        // Pas de nouvel essai avant 6 h ; puis un nouvel essai, toujours sans succès.
+        new.backup.restore_step(t + 60).await;
+        assert_eq!(rs_state(&new, &alice).await["rounds"].as_u64(), Some(1));
+        new.backup.restore_step(t + 6 * H + 1).await;
+        assert_eq!(rs_state(&new, &alice).await["rounds"].as_u64(), Some(2));
+        // Le gardien 4 se rallume : au passage suivant, tout revient.
+        w.mesh.lock().unwrap().insert(guard_peer(4), w.guards[4].blobs.clone());
+        new.backup.restore_step(t + 12 * H + 2).await;
+        for cid in &files {
+            assert!(new.blobs.open(cid).await.is_ok(), "le blob {cid} est revenu");
+        }
+        assert_eq!(rs_state(&new, &alice).await["state"], "done");
+        for n in std::iter::once(&w.owner).chain(&w.guards).chain(std::iter::once(&new)) {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    fn mesh_probe(mesh: Mesh) -> Probe {
+        Arc::new(move |cids: Vec<String>, peer: String| {
+            let mesh = mesh.clone();
+            Box::pin(async move {
+                let store = mesh.lock().unwrap().get(&peer).cloned().ok_or_else(|| "station éteinte".to_owned())?;
+                let mut out = Vec::new();
+                for c in &cids {
+                    out.push(store.open(c).await.is_ok());
+                }
+                Ok(out)
+            })
+        })
+    }
+
+    async fn copy_blob(from: &FsBlobStore, to: &FsBlobStore, cid: &str) {
+        use astro_dav::BlobWriter as _;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let (mut r, _) = from.open(cid).await.unwrap();
+        let mut bytes = Vec::new();
+        r.read_to_end(&mut bytes).await.unwrap();
+        let mut w = to.begin().await.unwrap();
+        w.write_all(&bytes).await.unwrap();
+        assert_eq!(w.commit().await.unwrap().cid, cid, "même blob, même CID chez l'ami");
+    }
+
+    /// Un fichier partagé n'est plus exclu d'office : il ne reste hors des paquets que tant que des copies VÉRIFIÉES (sonde
+    /// `HASN` sur notre CID, stations distinctes d'amis réciproques, moins de 7 jours) atteignent la cible.
+    #[tokio::test]
+    async fn a_shared_file_stays_out_of_packets_only_while_enough_verified_copies_exist() {
+        const FRIENDS: [[u8; 32]; 4] = [[0x21; 32], [0x22; 32], [0x23; 32], [0x24; 32]];
+        let mut w = rs_world("copies", 1).await;
+        let alice = hex(&ALICE);
+        w.owner.backup = w.owner.backup.with_probe(mesh_probe(w.mesh.clone()));
+        // Quatre amis réciproques : deux sur la station A (une seule copie possible), un sur B, un sur C.
+        let stations = ["12D3KooWFriendA", "12D3KooWFriendA", "12D3KooWFriendB", "12D3KooWFriendC"];
+        let mut stores = std::collections::HashMap::new();
+        for (n, (secret, peer)) in FRIENDS.iter().zip(stations).enumerate() {
+            let home = format!("{peer}:{}", format!("{:02x}", 0x60 + n).repeat(32));
+            w.owner.db.writer().execute("INSERT INTO identities(hex, role, email, hosted, home_station) VALUES (?1, 'multipass', ?2, 0, ?3)", vec![hex(secret).into(), format!("f{n}@example.org").into(), home.into()]).await.unwrap();
+            mutual_friends(&w.owner, &ALICE, secret).await;
+            if !stores.contains_key(peer) {
+                let store = Arc::new(FsBlobStore::open(w.owner.dir.join(format!("station-{n}"))).unwrap());
+                w.mesh.lock().unwrap().insert(peer.to_owned(), store.clone());
+                stores.insert(peer, store);
+            }
+        }
+        rs_pact(&w, 0, 40_000_000, true).await;
+        let files = rs_files(&w.owner, &["x.jpg", "y.jpg", "z.jpg"], 10).await;
+        let (x, y, z) = (files[0].clone(), files[1].clone(), files[2].clone());
+        astro_dav::adopt::mark_shared(&w.owner.db, &alice, vec![x.clone(), y.clone()], "friend").await;
+        astro_dav::adopt::mark_shared(&w.owner.db, &alice, vec![z.clone()], "link").await;
+        // x chez les deux amis de A ; y chez A, B et C ; z (lien /s/ : rechiffré, aucun ami ne tient notre CID) nulle part.
+        copy_blob(&w.owner.blobs, &stores["12D3KooWFriendA"], &x).await;
+        for peer in ["12D3KooWFriendA", "12D3KooWFriendB", "12D3KooWFriendC"] {
+            copy_blob(&w.owner.blobs, &stores[peer], &y).await;
+        }
+        rs_night(&w, &[0]).await;
+        let seen = w.owner.backup.file_copies(&alice, &files, now()).await;
+        assert_eq!((seen[0].copies, seen[0].packed), (1, true), "deux amis sur la même station = une copie, insuffisante : en paquet");
+        assert_eq!((seen[1].copies, seen[1].packed), (3, false), "trois stations à 90 % : 99,9 %, hors paquet");
+        assert_eq!((seen[2].copies, seen[2].packed), (0, true), "lien sans copie vérifiée : en paquet");
+        assert!(seen[1].verified_at.is_some());
+        // Médiathèque : une lecture groupée, par chemin ; y est assez couvert seul, x n'a qu'une copie (deux amis, une station).
+        let m = w.owner.backup.media_copies(&alice, now()).await.unwrap();
+        assert_eq!(m["files"]["/Docs/y.jpg"]["copies"], 3);
+        assert_eq!(m["files"]["/Docs/y.jpg"]["safe"], true);
+        assert_eq!(m["files"]["/Docs/x.jpg"]["copies"], 1);
+        assert_eq!(m["files"]["/Docs/x.jpg"]["packed"], true);
+        assert_eq!(m["files"]["/Docs/x.jpg"]["safe"], false);
+        assert_eq!(m["files"]["/Docs/x.jpg"]["at"].as_array().map(Vec::len), Some(1));
+
+        // La copie de C disparaît : la nuit suivante, y n'est plus assez couvert et entre au paquet suivant.
+        stores["12D3KooWFriendC"].remove(&y).await.unwrap();
+        rs_night(&w, &[0]).await;
+        let seen = w.owner.backup.file_copies(&alice, std::slice::from_ref(&y), now()).await;
+        assert_eq!((seen[0].copies, seen[0].packed), (2, true));
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets", vec![]).await, 2);
+        for n in std::iter::once(&w.owner).chain(&w.guards) {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    // ───────────────────────── Lot 5 : réparation nocturne ─────────────────────────
+
+    /// Lecture d'une plage chez une station du maillage ; la station `liar` (s'il y en a une) répond des octets faux.
+    fn mesh_sample(mesh: Mesh, liar: Option<String>) -> Sample {
+        Arc::new(move |cid: String, peer: String, off: u64, len: u64, _total: u64| {
+            let (mesh, liar) = (mesh.clone(), liar.clone());
+            Box::pin(async move {
+                use tokio::io::AsyncReadExt as _;
+                let store = mesh.lock().unwrap().get(&peer).cloned().ok_or_else(|| "station éteinte".to_owned())?;
+                let Ok((mut r, _)) = store.open(&cid).await else { return Ok(None) };
+                let mut all = Vec::new();
+                r.read_to_end(&mut all).await.unwrap();
+                let mut part = all[off as usize..(off + len) as usize].to_vec();
+                if liar.as_deref() == Some(peer.as_str()) {
+                    for b in &mut part {
+                        *b ^= 0x5A;
+                    }
+                }
+                Ok(Some(part))
+            })
+        })
+    }
+
+    async fn lost_rows(n: &Node, host: &str) -> i64 {
+        scalar(&n.db, "SELECT COUNT(*) FROM backup_frags WHERE host_hex = ?1 AND lost_at IS NOT NULL", vec![host.to_owned()]).await
+    }
+
+    /// Messages `op` partis de `n` vers `to`.
+    fn sent_ops(n: &Node, to: &str, op: &str) -> usize {
+        let g = GUARDS.iter().find(|g| hex(g) == to).unwrap();
+        n.outbox.0.lock().unwrap().iter().filter(|(t, _)| t == to).filter(|(_, w)| nip59::unwrap(g, w).ok().is_some_and(|u| tag(&u.rumor.tags, "op") == Some(op))).count()
+    }
+
+    fn cleanup(w: &World) {
+        for n in std::iter::once(&w.owner).chain(&w.guards) {
+            let _ = std::fs::remove_dir_all(&n.dir);
+        }
+    }
+
+    /// Un gardien répond « oui » à la sonde de présence puis sert des octets faux : le contrôle de possession (fragment
+    /// recalculé ici) le démasque ; son fragment est perdu, sa disponibilité retombe, il reçoit `frag-drop`, et le paquet
+    /// tombé à `k` fragments sûrs déclenche l'alerte du membre (une seule fois).
+    #[tokio::test]
+    async fn a_guardian_who_says_yes_then_serves_wrong_bytes_loses_his_fragment_and_his_availability() {
+        let mut w = rs_world("liar", 2).await;
+        let alice = hex(&ALICE);
+        rs_files(&w.owner, &["a.jpg", "b.jpg"], 10).await;
+        rs_pact(&w, 0, 4_000_000, true).await;
+        rs_pact(&w, 1, 4_000_000, true).await;
+        rs_night(&w, &[0, 1]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL", vec![]).await, 2);
+        let t = now();
+        for d in 0..10 {
+            w.owner.db.writer().execute("INSERT OR IGNORE INTO guardian_presence(hex, day) VALUES (?1, ?2)", vec![gx(1).into(), (t / 86_400 - d).into()]).await.unwrap();
+        }
+        w.owner.backup = w.owner.backup.with_probe(mesh_probe(w.mesh.clone())).with_sample(mesh_sample(w.mesh.clone(), Some(guard_peer(1))));
+        w.owner.outbox.0.lock().unwrap().clear();
+        // Un fragment contrôlé par nuit (1 % de 2, arrondi au-dessus), tiré au hasard : le menteur finit par l'être.
+        let mut total = RepairStats::default();
+        for _ in 0..64 {
+            let st = w.owner.backup.repair_night(t).await;
+            assert_eq!(st.checked, 1);
+            total.liars += st.liars;
+            total.alerts += st.alerts;
+            if total.liars > 0 {
+                break;
+            }
+        }
+        assert_eq!(total.liars, 1);
+        assert_eq!(lost_rows(&w.owner, &gx(0)).await, 0, "le gardien honnête passe le contrôle");
+        assert_eq!(lost_rows(&w.owner, &gx(1)).await, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM guardian_presence WHERE hex = ?1", vec![gx(1)]).await, 0, "sa disponibilité retombe");
+        assert_eq!(sent_ops(&w.owner, &gx(1), "frag-drop"), 1);
+        assert_eq!(total.alerts, 1, "plus qu'un fragment sûr pour k = 1 : le membre est prévenu");
+        let (log, _) = w.owner.backup.activity.subscribe(0);
+        assert!(log.iter().any(|a| a.message.contains("n'a plus de marge")));
+        assert!(log.iter().any(|a| a.message.contains("a mal répondu")));
+        // Plus de nouvelle alerte les nuits suivantes, et le fragment perdu sort de l'index.
+        assert_eq!(w.owner.backup.repair_night(t + 60).await.alerts, 0);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM kv WHERE scope = 'backup_rs_alert' AND key LIKE ?1 || ':%'", vec![alice]).await, 1);
+        cleanup(&w);
+    }
+
+    /// Absence d'un gardien : 13 jours sans signe de vie ne déclenchent rien ; 15 jours, son fragment est perdu, `frag-drop`
+    /// lui est adressé et un nouveau gardien reçoit un fragment d'indice neuf, recalculé ici, qu'il acquitte.
+    #[tokio::test]
+    async fn an_absence_of_13_days_does_nothing_15_days_triggers_a_repair() {
+        const DAY: i64 = 86_400;
+        let mut w = rs_world("absent", 3).await;
+        let alice = hex(&ALICE);
+        rs_files(&w.owner, &["a.jpg", "b.jpg"], 10).await;
+        rs_pact(&w, 0, 4_000_000, true).await;
+        rs_pact(&w, 1, 4_000_000, true).await;
+        rs_night(&w, &[0, 1]).await;
+        let t = now();
+        w.owner.db.writer().execute("DELETE FROM guardian_presence", vec![]).await.unwrap();
+        w.owner.db.writer().execute("UPDATE backup_frags SET acked_at = ?1", vec![t.into()]).await.unwrap();
+        w.owner.backup = w.owner.backup.with_probe(mesh_probe(w.mesh.clone()));
+        w.mesh.lock().unwrap().remove(&guard_peer(0)); // la station du gardien 0 s'éteint
+        w.owner.outbox.0.lock().unwrap().clear();
+
+        let st = w.owner.backup.repair_night(t + 13 * DAY).await;
+        assert_eq!((st.lost, st.rebuilt), (0, 0), "13 jours : pas de tempête de réparation");
+        assert_eq!(lost_rows(&w.owner, &gx(0)).await, 0);
+        assert_eq!(sent_ops(&w.owner, &gx(0), "frag-drop"), 0);
+        assert_eq!(st.seen, 1, "le gardien 1 répond à la sonde");
+
+        // Le gardien 2 arrive entre-temps ; à 15 jours le fragment du gardien 0 est perdu et refait chez lui.
+        rs_pact(&w, 2, 4_000_000, true).await;
+        let st = w.owner.backup.repair_night(t + 15 * DAY).await;
+        assert_eq!(st.lost, 1);
+        assert_eq!(lost_rows(&w.owner, &gx(0)).await, 1);
+        assert_eq!(sent_ops(&w.owner, &gx(0), "frag-drop"), 1);
+        assert_eq!(st.rebuilt, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT i FROM backup_frags WHERE host_hex = ?1", vec![gx(2)]).await, 2, "indice neuf");
+        rs_night(&w, &[1, 2]).await;
+        assert_eq!(frag_rows(&w.guards[2], &alice, &gx(2)).await, 1, "le remplaçant range et acquitte");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL AND lost_at IS NULL", vec![]).await, 2);
+        cleanup(&w);
+    }
+
+    /// Un gardien qui retire son accord : son fragment ne compte plus, sans attendre 14 jours ; la parité donnée au
+    /// troisième gardien garde la marge (pas d'alerte).
+    #[tokio::test]
+    async fn a_revoked_guardian_is_repaired_elsewhere_at_once() {
+        let w = rs_world("revoke", 3).await;
+        rs_files(&w.owner, &["a.jpg"], 10).await;
+        rs_pact(&w, 0, 4_000_000, true).await;
+        rs_pact(&w, 1, 4_000_000, true).await;
+        rs_night(&w, &[0, 1]).await;
+        rs_pact(&w, 2, 4_000_000, true).await;
+        // Le gardien 2 a reçu sa part par extension ; puis le gardien 0 se retire.
+        w.owner.backup.repair_night(now()).await;
+        rs_night(&w, &[0, 1, 2]).await;
+        w.owner.db.writer().execute("UPDATE backup_pacts SET status = 'revoked' WHERE host_hex = ?1", vec![gx(0).into()]).await.unwrap();
+        let st = w.owner.backup.repair_night(now()).await;
+        assert_eq!(st.lost, 1);
+        assert_eq!(lost_rows(&w.owner, &gx(0)).await, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL AND lost_at IS NULL", vec![]).await, 2);
+        assert_eq!(st.alerts, 0, "deux fragments sûrs pour k = 1 : il reste de la marge");
+        cleanup(&w);
+    }
+
+    /// Un gardien de plus : il reçoit, à la nuit suivante, une parité d'indice neuf de chaque paquet existant, que l'on
+    /// peut décoder seule (k = 1) ; la sûreté estimée monte.
+    #[tokio::test]
+    async fn a_new_guardian_gets_a_fresh_parity_of_every_packet_and_safety_rises() {
+        let w = rs_world("grow", 3).await;
+        let alice = hex(&ALICE);
+        rs_files(&w.owner, &["a.jpg", "b.jpg"], 10).await;
+        rs_pact(&w, 0, 4_000_000, true).await;
+        rs_pact(&w, 1, 4_000_000, true).await;
+        rs_night(&w, &[0, 1]).await;
+        rs_files(&w.owner, &["c.jpg"], 40).await;
+        rs_night(&w, &[0, 1]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets", vec![]).await, 2);
+        let before = crate::guardians::proba_au_moins_k(&[900; 2], 1);
+        rs_pact(&w, 2, 4_000_000, true).await;
+        let st = w.owner.backup.repair_night(now()).await;
+        assert_eq!(st.rebuilt, 2, "une parité par paquet existant");
+        rs_night(&w, &[0, 1, 2]).await;
+        assert_eq!(frag_rows(&w.guards[2], &alice, &gx(2)).await, 2);
+        let per_packet: Vec<i64> = w.owner.db.readers().read(|c| Ok(c.prepare("SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL AND lost_at IS NULL GROUP BY packet_id")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)).await.unwrap();
+        assert_eq!(per_packet, vec![3, 3]);
+        assert!(crate::guardians::proba_au_moins_k(&[900; 3], 1) > before);
+        // La parité neuve, seule, redonne le paquet.
+        let (id, key, len, k, cid, i): (String, String, i64, i64, String, i64) = w
+            .owner
+            .db
+            .readers()
+            .read(|c| Ok(c.query_row("SELECT p.packet_id, p.key_hex, p.len, p.k, f.cid, f.i FROM backup_packets p JOIN backup_frags f ON f.packet_id = p.packet_id WHERE f.i = 2 LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?))
+            .await
+            .unwrap();
+        let bytes = {
+            use tokio::io::AsyncReadExt as _;
+            let (mut r, _) = w.guards[2].blobs.open(&cid).await.unwrap();
+            let mut v = Vec::new();
+            r.read_to_end(&mut v).await.unwrap();
+            v
+        };
+        let entry = astro_dav::backup_pack::PacketEntry { id, key, len: len as u64, k: k as u8, frags: vec![astro_dav::backup_pack::FragEntry { i: i as u8, cid, host: None }] };
+        assert!(astro_dav::backup_pack::open_packet(&entry, &[bytes.as_slice()]).await.is_ok());
+        // Rien de plus la nuit suivante : chacun tient déjà sa part.
+        assert_eq!(w.owner.backup.repair_night(now()).await.rebuilt, 0);
+        cleanup(&w);
+    }
+
+    /// Coupure en plein encodage : des fragments écrits mais jamais inscrits sont ramassés ; ce qui est inscrit et en
+    /// attente reste ; un second passage ne trouve plus rien.
+    #[tokio::test]
+    async fn fragments_left_by_a_cut_are_collected_once() {
+        let w = rs_world("orphans", 1).await;
+        rs_files(&w.owner, &["a.jpg"], 10).await;
+        let orphan = blob_in(&w.owner, b"fragment orphelin").await;
+        let kept = blob_in(&w.owner, b"fragment en attente").await;
+        for cid in [&orphan, &kept] {
+            w.owner.backup.kv_put(rs::SPOOL, cid, &hex(&ALICE), now()).await;
+        }
+        w.owner.db.writer().execute("INSERT INTO backup_frags(owner_hex, host_hex, packet_id, i, cid, size) VALUES (?1, ?2, ?3, 0, ?4, 19)", vec![hex(&ALICE).into(), gx(0).into(), "ab".repeat(16).into(), kept.clone().into()]).await.unwrap();
+        assert_eq!(w.owner.backup.collect_orphans().await, 1);
+        assert!(w.owner.blobs.open(&orphan).await.is_err());
+        assert!(w.owner.blobs.open(&kept).await.is_ok(), "inscrit et pas encore acquitté : il reste");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM kv WHERE scope = 'backup_spool'", vec![]).await, 0);
+        assert_eq!(w.owner.backup.collect_orphans().await, 0, "idempotent");
+        // Le passage ordinaire ne laisse aucune ligne de journal derrière lui.
+        rs_pact(&w, 0, 4_000_000, true).await;
+        rs_night(&w, &[0]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM kv WHERE scope = 'backup_spool'", vec![]).await, 0);
+        cleanup(&w);
+    }
+
+    /// Côté gardien : au-delà du plafond de fragments rangés par 24 h et par propriétaire, le message attend, sans rien
+    /// rapatrier ; il est repris quand la fenêtre glisse.
+    #[tokio::test]
+    async fn a_guardian_takes_a_bounded_number_of_fragments_per_night_and_owner() {
+        let w = rs_world("cap", 1).await;
+        let (alice, g0) = (hex(&ALICE), gx(0));
+        rs_pact(&w, 0, 40_000_000, true).await;
+        let g = &w.guards[0];
+        for p in 0..rs::NIGHT_FRAGS {
+            g.db.writer().execute("INSERT INTO backup_frags(owner_hex, host_hex, packet_id, i, cid, size, sent_at, acked_at) VALUES (?1, ?2, ?3, 0, ?4, 100, ?5, ?5)", vec![alice.clone().into(), g0.clone().into(), format!("{p:032x}").into(), format!("bafkreifake{p}").into(), now().into()]).await.unwrap();
+        }
+        let forged = blob_in(&w.owner, &[0x41; 4096]).await;
+        inject(g, frag_wrap(&g0, vec![vec!["cid".into(), forged.clone()], vec!["size".into(), "4096".into()], vec!["packet".into(), "ef".repeat(16)], vec!["i".into(), "0".into()]])).await;
+        let st = g.backup.poll_once(now()).await;
+        assert_eq!((st.deferred, st.ignored), (1, 0));
+        assert!(g.blobs.open(&forged).await.is_err(), "rien n'est rapatrié au-delà du plafond");
+        // Un jour plus tard, le message est repris (et refusé ici : ce n'est pas un fragment).
+        g.db.writer().execute("UPDATE backup_frags SET acked_at = acked_at - 90000", vec![]).await.unwrap();
+        let st = g.backup.poll_once(now()).await;
+        assert_eq!((st.deferred, st.ignored), (0, 1));
+        cleanup(&w);
+    }
+
+    /// Restauration : un blob qu'une station amie tient en entier (`held_whole`) revient directement, sans paquet.
+    #[tokio::test]
+    async fn restoration_fetches_a_blob_held_whole_by_a_friend_directly() {
+        let mut w = rs_world("whole", 1).await;
+        let files = rs_files(&w.owner, &["film.mp4"], 10).await;
+        copy_blob(&w.owner.blobs, &w.guards[0].blobs, &files[0]).await;
+        w.owner.blobs.remove(&files[0]).await.unwrap();
+        w.owner.backup = w.owner.backup.with_prefetch(mesh_prefetch(w.mesh.clone(), w.owner.blobs.clone()));
+        let mut index = astro_dav::backup_pack::PackIndex::new(&hex(&ALICE), 3);
+        index.packets.push(astro_dav::backup_pack::PacketEntry { id: "00".repeat(16), key: "11".repeat(32), len: 1 << 20, k: 1, frags: Vec::new() });
+        index.blobs.push(astro_dav::backup_pack::BlobEntry { cid: files[0].clone(), packet: 0, off: 0, len: 200_000, held_whole: vec![gx(0)] });
+        assert_eq!(w.owner.backup.pull_whole(&index).await, 1);
+        assert!(w.owner.blobs.open(&files[0]).await.is_ok(), "rapatrié de chez l'ami, CID vérifié");
+        assert_eq!(w.owner.backup.pull_whole(&index).await, 0, "déjà là : rien à refaire");
+        cleanup(&w);
+    }
+
+    /// Q5 : un très gros blob tenu en entier par deux stations amies vérifiées reste hors des paquets ; une seule copie ne
+    /// suffit pas.
+    #[tokio::test]
+    async fn a_very_big_blob_held_whole_by_two_friend_stations_stays_out_of_packets() {
+        const FRIENDS: [[u8; 32]; 2] = [[0x31; 32], [0x32; 32]];
+        let mut w = rs_world("big", 1).await;
+        let alice = hex(&ALICE);
+        w.owner.backup = w.owner.backup.with_probe(mesh_probe(w.mesh.clone()));
+        let mut stores = Vec::new();
+        for (n, secret) in FRIENDS.iter().enumerate() {
+            let peer = format!("12D3KooWBig{n}");
+            let home = format!("{peer}:{}", format!("{:02x}", 0x70 + n).repeat(32));
+            w.owner.db.writer().execute("INSERT INTO identities(hex, role, email, hosted, home_station) VALUES (?1, 'multipass', ?2, 0, ?3)", vec![hex(secret).into(), format!("b{n}@example.org").into(), home.into()]).await.unwrap();
+            mutual_friends(&w.owner, &ALICE, secret).await;
+            let store = Arc::new(FsBlobStore::open(w.owner.dir.join(format!("big-{n}"))).unwrap());
+            w.mesh.lock().unwrap().insert(peer, store.clone());
+            stores.push(store);
+        }
+        rs_pact(&w, 0, 40_000_000, true).await;
+        let size = BIG_BLOB as usize + 1;
+        let (one, two) = (blob_in(&w.owner, &vec![1u8; size]).await, blob_in(&w.owner, &vec![2u8; size]).await);
+        for (name, cid) in [("un.mkv", &one), ("deux.mkv", &two)] {
+            w.owner.db.writer().execute("INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, data) VALUES (?1, ?2, '/Films', 'file', ?3, 'video/x-matroska', ?4, 1, '{}')", vec![alice.clone().into(), format!("/Films/{name}").into(), cid.clone().into(), (size as i64).into()]).await.unwrap();
+        }
+        copy_blob(&w.owner.blobs, &stores[0], &one).await;
+        copy_blob(&w.owner.blobs, &stores[0], &two).await;
+        copy_blob(&w.owner.blobs, &stores[1], &two).await;
+        rs_night(&w, &[0]).await;
+        let seen = w.owner.backup.file_copies(&alice, &[one.clone(), two.clone()], now()).await;
+        assert_eq!((seen[0].copies, seen[0].packed), (1, true), "une seule copie : en paquet");
+        assert_eq!((seen[1].copies, seen[1].packed), (2, false), "deux stations amies : hors paquet");
+        cleanup(&w);
+    }
+
+    // ───────────────── Correction du lot 5 : une plage fausse ne condamne pas ─────────────────
+
+    /// Lecture scriptée : `Some(true)` octets justes, `Some(false)` octets faux, `None` pas de réponse ; le dernier se répète.
+    fn scripted_sample(mesh: Mesh, script: Vec<Option<bool>>) -> Sample {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        Arc::new(move |cid: String, peer: String, off: u64, len: u64, _total: u64| {
+            let (mesh, script, calls) = (mesh.clone(), script.clone(), calls.clone());
+            Box::pin(async move {
+                use tokio::io::AsyncReadExt as _;
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let step = script[n.min(script.len() - 1)];
+                let Some(honest) = step else { return Err("station injoignable".to_owned()) };
+                let store = mesh.lock().unwrap().get(&peer).cloned().ok_or_else(|| "station éteinte".to_owned())?;
+                let (mut r, _) = store.open(&cid).await.map_err(|e| e.to_string())?;
+                let mut all = Vec::new();
+                r.read_to_end(&mut all).await.unwrap();
+                let mut part = all[off as usize..(off + len) as usize].to_vec();
+                if !honest {
+                    part.iter_mut().for_each(|b| *b ^= 0x5A);
+                }
+                Ok(Some(part))
+            })
+        })
+    }
+
+    async fn suspects(n: &Node) -> i64 {
+        scalar(&n.db, "SELECT COUNT(*) FROM kv WHERE scope = 'backup_rs_suspect'", vec![]).await
+    }
+
+    /// Une plage fausse puis une juste : pas condamné. Une plage fausse puis plus de réponse : suspect, repris une autre
+    /// nuit (une erreur de transport n'est jamais une preuve). Deux plages fausses : condamné.
+    #[tokio::test]
+    async fn one_wrong_range_is_retried_on_another_two_wrong_ranges_condemn() {
+        let mut w = rs_world("retry", 1).await;
+        rs_files(&w.owner, &["a.jpg"], 10).await;
+        rs_pact(&w, 0, 4_000_000, true).await;
+        rs_night(&w, &[0]).await;
+        let t = now();
+        // Faux une fois, puis juste.
+        w.owner.backup.sample = Some(scripted_sample(w.mesh.clone(), vec![Some(false), Some(true)]));
+        let st = w.owner.backup.repair_night(t).await;
+        assert_eq!((st.checked, st.liars, st.lost), (1, 0, 0), "une plage fausse puis juste : pas condamné");
+        assert_eq!(suspects(&w.owner).await, 0);
+        // Faux, puis la station ne répond plus : suspect, rien de perdu.
+        w.owner.backup.sample = Some(scripted_sample(w.mesh.clone(), vec![Some(false), None]));
+        let st = w.owner.backup.repair_night(t).await;
+        assert_eq!((st.liars, st.lost), (0, 0));
+        assert_eq!(suspects(&w.owner).await, 1, "contrôle à finir une autre nuit");
+        // La nuit suivante, la station ne répond pas du tout : toujours rien de conclu.
+        w.owner.backup.sample = Some(scripted_sample(w.mesh.clone(), vec![None]));
+        assert_eq!(w.owner.backup.repair_night(t + 86_400).await.liars, 0);
+        assert_eq!(suspects(&w.owner).await, 1);
+        // Puis elle répond juste : le soupçon est levé.
+        w.owner.backup.sample = Some(scripted_sample(w.mesh.clone(), vec![Some(true)]));
+        assert_eq!(w.owner.backup.repair_night(t + 2 * 86_400).await.liars, 0);
+        assert_eq!(suspects(&w.owner).await, 0);
+        // Deux plages fausses : condamné.
+        w.owner.backup.sample = Some(scripted_sample(w.mesh.clone(), vec![Some(false)]));
+        let st = w.owner.backup.repair_night(t + 3 * 86_400).await;
+        assert_eq!((st.liars, st.lost), (1, 1));
+        assert_eq!(lost_rows(&w.owner, &gx(0)).await, 1);
+        assert_eq!(suspects(&w.owner).await, 0);
+        cleanup(&w);
+    }
+
+    // ───────────────────────── Lot 6 : compactage et migration ─────────────────────────
+
+    /// Ce que tient chaque gardien permet-il de tout retrouver ? Prend l'index de plus haute révision détenu par les
+    /// gardiens (comme une station neuve), puis, pour chaque fichier vivant, décode son paquet depuis `k` fragments réellement
+    /// présents chez les gardiens et revérifie le blob par son CID.
+    async fn restorable(w: &World, live: &[String]) -> bool {
+        use sha2::Digest as _;
+        use tokio::io::AsyncReadExt as _;
+        let alice = hex(&ALICE);
+        let key = astro_dav::backup_pack::index_key(&w.owner.backup.keys.secret(&alice).unwrap());
+        let read = |store: Arc<FsBlobStore>, cid: String| async move {
+            let (mut r, _) = store.open(&cid).await.ok()?;
+            let mut v = Vec::new();
+            r.read_to_end(&mut v).await.ok()?;
+            Some(v)
+        };
+        let mut best: Option<astro_dav::backup_pack::PackIndex> = None;
+        for (i, g) in w.guards.iter().enumerate() {
+            let Some((cid, _)) = g.backup.kv_get(rs::INDEX_HELD, &format!("{}:{alice}", gx(i))).await else { continue };
+            let Some(bytes) = read(g.blobs.clone(), cid).await else { continue };
+            if let Ok(index) = astro_dav::backup_pack::PackIndex::open(&bytes, &key, &alice).await
+                && best.as_ref().is_none_or(|b| index.rev > b.rev)
+            {
+                best = Some(index);
+            }
+        }
+        let Some(index) = best else { return false };
+        for cid in live {
+            let Some(b) = index.blobs.iter().find(|b| &b.cid == cid) else { return false };
+            let entry = &index.packets[b.packet as usize];
+            let mut frags = Vec::new();
+            for f in &entry.frags {
+                let Some(i) = (0..w.guards.len()).find(|&i| Some(gx(i)) == f.host) else { continue };
+                if let Some(v) = read(w.guards[i].blobs.clone(), f.cid.clone()).await {
+                    frags.push(v);
+                }
+            }
+            if frags.len() < usize::from(entry.k) {
+                return false;
+            }
+            let refs: Vec<&[u8]> = frags.iter().map(Vec::as_slice).collect();
+            let Ok(plain) = astro_dav::backup_pack::open_packet(entry, &refs).await else { return false };
+            let Some(slice) = plain.get(b.off as usize..(b.off + b.len) as usize) else { return false };
+            if &astro_dav::blob::cid_raw_sha256(&sha2::Sha256::digest(slice).into()) != cid {
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn delete_file(n: &Node, cid: &str) {
+        n.db.writer().execute("DELETE FROM ucloud_entries WHERE cid = ?1", vec![cid.to_owned().into()]).await.unwrap();
+    }
+
+    /// Trois fichiers sur quatre supprimés : passé le délai de grâce, le paquet (25 % vivant) est réécrit. Une coupure en
+    /// pleine construction reprend sans rien refaire ; à chaque étape (construction, envoi, accusés, bascule, nouvel index,
+    /// retrait) un gardien peut toujours tout rendre ; à la fin chaque gardien ne tient plus que le paquet neuf.
+    #[tokio::test]
+    async fn a_mostly_dead_packet_is_compacted_step_by_step_and_nothing_is_ever_lost() {
+        let w = rs_world("compact", 3).await;
+        let alice = hex(&ALICE);
+        let files = rs_files(&w.owner, &["a.jpg", "b.jpg", "c.jpg", "d.jpg"], 10).await;
+        for i in 0..3 {
+            rs_pact(&w, i, 8_000_000, true).await;
+        }
+        rs_night(&w, &[0, 1, 2]).await;
+        rs_night(&w, &[0, 1, 2]).await;
+        let live = vec![files[3].clone()];
+        assert!(restorable(&w, &files).await, "tout est retrouvable au départ");
+        let old: String = w.owner.db.readers().read(|c| Ok(c.query_row("SELECT packet_id FROM backup_packets", [], |r| r.get(0))?)).await.unwrap();
+        for cid in &files[..3] {
+            delete_file(&w.owner, cid).await;
+        }
+        let t = now();
+        // Avant le délai de grâce : rien ne bouge.
+        w.owner.backup.compact_step(&alice, t).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE staged = 1", vec![]).await, 0);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_blobs WHERE gone_at IS NOT NULL", vec![]).await, 3);
+        // Après : un paquet neuf, en attente ; les blobs restent rattachés à l'ancien.
+        w.owner.backup.compact_step(&alice, t + GRACE_SECS + 1).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE staged = 1", vec![]).await, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_compact", vec![]).await, 1);
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_blobs WHERE seq = (SELECT seq FROM backup_packets WHERE packet_id = ?1)", vec![old.clone()]).await, 4);
+        assert!(restorable(&w, &live).await, "construction : l'ancien paquet suffit");
+        // Coupure puis reprise : rien n'est reconstruit deux fois.
+        w.owner.backup.compact_step(&alice, t + GRACE_SECS + 2).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets", vec![]).await, 2, "idempotent");
+        // Envoi et accusés : les fragments neufs partent ; la bascule attend les accusés.
+        rs_night(&w, &[0, 1, 2]).await;
+        assert!(restorable(&w, &live).await, "envoi : rien de perdu");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL", vec![]).await, 6);
+        // Nuit suivante : bascule, puis index neuf envoyé ; les anciens fragments attendent dans la file de retrait.
+        rs_night(&w, &[0, 1, 2]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE packet_id = ?1", vec![old.clone()]).await, 0, "bascule faite");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_blobs", vec![]).await, 1, "les morts sortent, le vivant change de paquet");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM kv WHERE scope = 'backup_rs_drop'", vec![]).await, 3);
+        for i in 0..3 {
+            assert_eq!(frag_rows(&w.guards[i], &alice, &gx(i)).await, 2, "gardien {i} : l'ancien et le neuf, le temps de la bascule");
+        }
+        assert!(restorable(&w, &live).await, "bascule : l'index neuf et le paquet neuf suffisent");
+        // Nuit suivante : l'index neuf est chez tous, les anciens fragments sont retirés.
+        rs_night(&w, &[0, 1, 2]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM kv WHERE scope = 'backup_rs_drop'", vec![]).await, 0);
+        for i in 0..3 {
+            assert_eq!(frag_rows(&w.guards[i], &alice, &gx(i)).await, 1, "gardien {i} : seul le paquet neuf reste");
+        }
+        assert!(restorable(&w, &live).await, "retrait : rien de perdu");
+        assert_eq!(rs_night(&w, &[0, 1, 2]).await, 0, "plus rien à faire");
+        cleanup(&w);
+    }
+
+    /// Un paquet repris d'une restauration (sans en-tête local) est réécrit : il redevient contrôlable et réparable.
+    #[tokio::test]
+    async fn a_packet_back_from_a_restoration_is_rewritten_and_becomes_checkable_again() {
+        let mut w = rs_world("headless", 2).await;
+        let alice = hex(&ALICE);
+        let files = rs_files(&w.owner, &["a.jpg", "b.jpg"], 10).await;
+        rs_pact(&w, 0, 8_000_000, true).await;
+        rs_pact(&w, 1, 8_000_000, true).await;
+        rs_night(&w, &[0, 1]).await;
+        // Comme après `import_index` : l'en-tête du paquet n'est pas connu ici.
+        w.owner.db.writer().execute("UPDATE backup_packets SET head_hex = NULL", vec![]).await.unwrap();
+        assert!(w.owner.backup.rebuild(&alice, &scalar_text(&w.owner, "SELECT packet_id FROM backup_packets").await, &[0]).await.is_err());
+        for _ in 0..4 {
+            rs_night(&w, &[0, 1]).await;
+            assert!(restorable(&w, &files).await, "à chaque nuit, tout reste retrouvable");
+        }
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets WHERE head_hex IS NULL OR staged = 1", vec![]).await, 0, "réécrit");
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_packets", vec![]).await, 1);
+        w.owner.backup = w.owner.backup.with_sample(mesh_sample(w.mesh.clone(), None));
+        let st = w.owner.backup.repair_night(now()).await;
+        assert_eq!((st.checked, st.liars), (1, 0), "le paquet neuf se contrôle de nouveau");
+        cleanup(&w);
+    }
+
+    async fn scalar_text(n: &Node, sql: &'static str) -> String {
+        n.db.readers().read(move |c| Ok(c.query_row(sql, [], |r| r.get(0))?)).await.unwrap()
+    }
+
+    /// Des copies complètes d'avant le codage : retirées seulement une fois leurs blobs dans des paquets sûrs depuis le délai
+    /// de grâce, jamais quand un paquet n'a plus de marge.
+    #[tokio::test]
+    async fn full_copies_are_dropped_once_packets_are_safe_and_never_without_margin() {
+        let w = rs_world("legacy", 3).await;
+        let alice = hex(&ALICE);
+        let files = rs_files(&w.owner, &["a.jpg", "b.jpg"], 10).await;
+        for i in 0..3 {
+            rs_pact(&w, i, 8_000_000, false).await;
+        }
+        rs_night(&w, &[0, 1, 2]).await;
+        for i in 0..3 {
+            assert!(w.guards[i].blobs.open(&files[0]).await.is_ok(), "copie complète chez le gardien {i}");
+        }
+        // Les trois stations passent à une version qui sait garder des fragments ; elles sont présentes chaque jour.
+        let today = now() / 86_400;
+        for i in 0..3 {
+            for d in today - 2..=today + 8 {
+                w.owner.db.writer().execute("INSERT OR IGNORE INTO guardian_presence(hex, day) VALUES (?1, ?2)", vec![gx(i).into(), d.into()]).await.unwrap();
+            }
+            w.owner.backup.kv_put(rs::RS, &format!("{alice}:{}", gx(i)), "1", now()).await;
+        }
+        rs_night(&w, &[0, 1, 2]).await;
+        assert_eq!(scalar(&w.owner.db, "SELECT COUNT(*) FROM backup_frags WHERE acked_at IS NOT NULL", vec![]).await, 3);
+        let items = "SELECT COUNT(*) FROM backup_items WHERE owner_hex = ?1 AND cid LIKE 'bafkrei%' AND cid IN (SELECT cid FROM backup_blobs)";
+        assert_eq!(scalar(&w.owner.db, items, vec![alice.clone()]).await, 6);
+        w.owner.outbox.0.lock().unwrap().clear();
+        // Avant le délai de grâce : rien.
+        assert_eq!(w.owner.backup.compact_step(&alice, now()).await, 0);
+        // Plus de marge (un seul fragment sûr pour k = 1) : rien, même après le délai.
+        w.owner.db.writer().execute("UPDATE backup_frags SET lost_at = 1 WHERE host_hex IN (?1, ?2)", vec![gx(0).into(), gx(1).into()]).await.unwrap();
+        assert_eq!(w.owner.backup.compact_step(&alice, now() + GRACE_SECS + 1).await, 0);
+        assert_eq!(scalar(&w.owner.db, items, vec![alice.clone()]).await, 6);
+        // Marge revenue, cible atteinte : `drop` à chaque gardien, les copies disparaissent chez eux.
+        w.owner.db.writer().execute("UPDATE backup_frags SET lost_at = NULL", vec![]).await.unwrap();
+        assert_eq!(w.owner.backup.compact_step(&alice, now() + GRACE_SECS + 1).await, 3);
+        assert_eq!(scalar(&w.owner.db, items, vec![alice.clone()]).await, 0);
+        for i in 0..3 {
+            assert_eq!(sent_ops(&w.owner, &gx(i), "drop"), 1);
+            pump_for(&w.owner, &w.guards[i], &gx(i)).await;
+            w.guards[i].backup.poll_once(now()).await;
+            for f in &files {
+                assert!(w.guards[i].blobs.open(f).await.is_err(), "copie complète retirée chez le gardien {i}");
+            }
+        }
+        assert!(restorable(&w, &files).await, "les paquets suffisent");
+        // Ma sécurité : 1 paquet, 3 gardiens dont 1 suffit, place prise ≈ 3 fois (miroir k = 1), cible atteinte.
+        let v = w.owner.backup.coded_view(&alice, now()).await.unwrap();
+        assert_eq!((v["packets"].as_i64(), v["holders"].as_i64(), v["need"].as_i64()), (Some(1), Some(3), Some(1)));
+        assert!(v["safety_permille"].as_u64().unwrap() >= 999);
+        assert!(v["ratio_pct"].as_i64().unwrap() >= 300, "trois miroirs : au moins 3 fois");
+        let st = w.owner.backup.status(&alice).await.unwrap();
+        assert_eq!(st["coded"]["need"], 1);
+        // Espace Capitaine : le résumé de la station.
+        let sum = w.owner.db.readers().read(|c| Ok(captain_summary(c)?)).await.unwrap();
+        assert_eq!((sum["packets"].as_i64(), sum["frags_acked"].as_i64(), sum["frags_lost"].as_i64()), (Some(1), Some(3), Some(0)));
+        cleanup(&w);
     }
 }

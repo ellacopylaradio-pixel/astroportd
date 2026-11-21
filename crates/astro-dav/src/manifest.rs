@@ -17,7 +17,7 @@ use astro_crypto::{KeySource, UencKey, nip44};
 use astro_db::events::{InsertOutcome, insert_event};
 use astro_db::{Db, DbError, Statement};
 use astro_nostr_proto::{Event, UnsignedEvent, kind};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -146,6 +146,11 @@ pub struct Manifest {
     pub entries: Vec<ManifestEntry>,
     /// Trousseau.
     pub keyring: Vec<KeyringEntry>,
+    /// CID de l'index chiffré des paquets de la sauvegarde k-sur-n ([`crate::backup_pack`],
+    /// `docs/design/SAUVEGARDE_RS.md` § 4.3). Optionnel : absent des anciens manifestes (`VERSION` reste 1)
+    /// et jamais écrit quand il est vide, pour que les manifestes sans sauvegarde restent identiques octet pour octet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_index: Option<String>,
 }
 
 fn now_secs() -> u64 {
@@ -188,7 +193,9 @@ pub fn load_manifest(conn: &Connection, owner: &str, rev: u64, created_at: u64) 
         let rows = s.query_map([owner], |r| Ok(KeyringEntry { cid: r.get(0)?, key_hex: r.get(1)?, enc: r.get(2)? }))?;
         rows.collect::<Result<Vec<_>, _>>()?
     };
-    Ok(Manifest { v: VERSION, owner: owner.to_owned(), rev, created_at, entries, keyring })
+    // CID courant de l'index des paquets de la sauvegarde k-sur-n, s'il y en a un (table d'état local `backup_index`).
+    let backup_index = tx.query_row("SELECT index_cid FROM backup_index WHERE owner_hex = ?1", [owner], |r| r.get::<_, String>(0)).optional()?;
+    Ok(Manifest { v: VERSION, owner: owner.to_owned(), rev, created_at, entries, keyring, backup_index })
 }
 
 /// Publication terminée.
@@ -333,17 +340,8 @@ pub fn restore_statements(manifest: &Manifest, src_cid: &str) -> Result<Vec<Stat
         Statement::new("DELETE FROM ucloud_entries WHERE owner_hex = ?1", vec![owner.clone()]),
         Statement::new("DELETE FROM ucloud_keyring WHERE owner_hex = ?1", vec![owner.clone()]),
     ];
-    let mut seen = HashSet::new();
+    validate(manifest)?;
     for e in &manifest.entries {
-        if normalize_path(&e.path).map_err(|_| ManifestError::Invalid("chemin invalide"))? != e.path || e.path == "/" {
-            return Err(ManifestError::Invalid("chemin non normalisé"));
-        }
-        if !seen.insert(e.path.as_str()) {
-            return Err(ManifestError::Invalid("chemin en double"));
-        }
-        if !matches!(e.kind.as_str(), "file" | "dir") || (e.kind == "dir" && e.cid.is_some()) {
-            return Err(ManifestError::Invalid("type d'entrée invalide"));
-        }
         let opt = |v: &Option<String>| v.clone().map_or(Value::Null, Value::Text);
         out.push(Statement::new(
             "INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, taken_at, sha_orig, sha_plain, faceid_status, origin, phash, lat, lon, desc_text, data, src_cid) \
@@ -372,15 +370,172 @@ pub fn restore_statements(manifest: &Manifest, src_cid: &str) -> Result<Vec<Stat
         ));
     }
     for k in &manifest.keyring {
-        if k.key_hex.len() != 64 || !k.key_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(ManifestError::Invalid("clé de fichier invalide"));
-        }
         out.push(Statement::new(
             "INSERT INTO ucloud_keyring(owner_hex, cid, key_hex, enc, src_cid) VALUES (?1, ?2, ?3, ?4, ?5)",
             vec![owner.clone(), Value::Text(k.cid.clone()), Value::Text(k.key_hex.clone()), Value::Text(k.enc.clone()), Value::Text(src_cid.to_owned())],
         ));
     }
     Ok(out)
+}
+
+/// Revalide un manifeste reçu : chemins normalisés et uniques, types connus, pas de dossier avec CID, clés de 64 hexadécimaux.
+fn validate(manifest: &Manifest) -> Result<(), ManifestError> {
+    let mut seen = HashSet::new();
+    for e in &manifest.entries {
+        if normalize_path(&e.path).map_err(|_| ManifestError::Invalid("chemin invalide"))? != e.path || e.path == "/" {
+            return Err(ManifestError::Invalid("chemin non normalisé"));
+        }
+        if !seen.insert(e.path.as_str()) {
+            return Err(ManifestError::Invalid("chemin en double"));
+        }
+        if !matches!(e.kind.as_str(), "file" | "dir") || (e.kind == "dir" && e.cid.is_some()) {
+            return Err(ManifestError::Invalid("type d'entrée invalide"));
+        }
+    }
+    if manifest.keyring.iter().any(|k| k.key_hex.len() != 64 || !k.key_hex.bytes().all(|b| b.is_ascii_hexdigit())) {
+        return Err(ManifestError::Invalid("clé de fichier invalide"));
+    }
+    Ok(())
+}
+
+/// Bilan d'une fusion ([`merge_into`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Merged {
+    /// Fichiers ajoutés à leur place d'origine.
+    pub added: u64,
+    /// Fichiers (ou dossiers) ajoutés sous un autre nom, parce que leur place était prise.
+    pub renamed: u64,
+    /// Fichiers déjà présents à l'identique (même contenu) : rien à faire.
+    pub already: u64,
+}
+
+/// Parent d'un chemin normalisé.
+fn parent_path(path: &str) -> String {
+    match path.rfind('/') {
+        Some(0) | None => "/".to_owned(),
+        Some(i) => path[..i].to_owned(),
+    }
+}
+
+/// `n`-ième nom de rechange pour un élément revenu dont la place est prise : `photo (ancien).jpg`, `photo (ancien 2).jpg`…
+fn alt_name(path: &str, is_file: bool, n: u32) -> String {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let mark = if n == 1 { " (ancien)".to_owned() } else { format!(" (ancien {n})") };
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if is_file && i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    format!("{dir}/{stem}{mark}{ext}")
+}
+
+/// **Fusionne** un manifeste revenu tard dans le VFS actuel de son propriétaire, sans jamais rien écraser ni supprimer :
+/// un chemin libre reçoit l'entrée d'origine ; un fichier déjà là avec le même contenu (même CID) est laissé tel quel ; un
+/// conflit (autre contenu, ou un fichier là où le manifeste a un dossier, et l'inverse) garde les deux, l'élément revenu étant
+/// renommé « (ancien) » (avec tout son contenu pour un dossier). Le trousseau ne fait qu'ajouter les clés manquantes (une clé
+/// est liée au CID de son blob : elle ne peut pas différer). Rejouer la même fusion ne change plus rien (le fichier renommé est
+/// retrouvé à l'identique). À appeler dans une transaction unique.
+pub fn merge_into(conn: &Connection, manifest: &Manifest, src_cid: &str) -> Result<Merged, ManifestError> {
+    validate(manifest)?;
+    let owner = manifest.owner.as_str();
+    let mut entries: Vec<&ManifestEntry> = manifest.entries.iter().collect();
+    entries.sort_by(|a, b| a.path.cmp(&b.path)); // chaque dossier avant son contenu
+    // Dossiers revenus renommés : (chemin d'origine, nouveau chemin), appliqué à tout ce qu'ils contiennent.
+    let mut moved: Vec<(String, String)> = Vec::new();
+    let mut out = Merged::default();
+    let current = |path: &str| -> Result<Option<(String, Option<String>)>, rusqlite::Error> {
+        rusqlite::OptionalExtension::optional(conn.query_row("SELECT type, cid FROM ucloud_entries WHERE owner_hex = ?1 AND path = ?2", rusqlite::params![owner, path], |r| Ok((r.get(0)?, r.get(1)?))))
+    };
+    for e in entries {
+        let mut path = e.path.clone();
+        if let Some((from, to)) = moved.iter().filter(|(from, _)| path.starts_with(&format!("{from}/"))).max_by_key(|(from, _)| from.len()) {
+            path = format!("{to}{}", &path[from.len()..]);
+        }
+        let is_file = e.kind == "file";
+        let same = |found: &(String, Option<String>)| if is_file { found.0 == "file" && found.1 == e.cid } else { found.0 == "dir" };
+        let mut target = None;
+        let mut n = 0;
+        loop {
+            let candidate = if n == 0 { path.clone() } else { alt_name(&path, is_file, n) };
+            match current(&candidate).map_err(DbError::from)? {
+                None => {
+                    target = Some(candidate);
+                    break;
+                }
+                Some(found) if same(&found) => {
+                    if is_file {
+                        out.already += 1;
+                    }
+                    if n > 0 && !is_file {
+                        moved.push((path.clone(), candidate)); // dossier déjà renommé par une fusion précédente
+                    }
+                    break;
+                }
+                Some(_) if n >= 100 => return Err(ManifestError::Invalid("trop de conflits de nom")),
+                Some(_) => n += 1,
+            }
+        }
+        let Some(target) = target else { continue };
+        if n > 0 {
+            out.renamed += 1;
+            if !is_file {
+                moved.push((path.clone(), target.clone()));
+            }
+        } else if is_file {
+            out.added += 1;
+        }
+        let opt = |v: &Option<String>| v.clone().map_or(Value::Null, Value::Text);
+        let parent = parent_path(&target);
+        conn.execute(
+            "INSERT INTO ucloud_entries(owner_hex, path, parent, type, cid, mime, size, mtime, taken_at, sha_orig, sha_plain, faceid_status, origin, phash, lat, lon, desc_text, data, src_cid) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            rusqlite::params_from_iter([
+                Value::Text(owner.to_owned()),
+                Value::Text(target),
+                Value::Text(parent),
+                Value::Text(e.kind.clone()),
+                opt(&e.cid),
+                opt(&e.mime),
+                e.size.map_or(Value::Null, Value::Integer),
+                e.mtime.map_or(Value::Null, Value::Integer),
+                e.taken_at.map_or(Value::Null, Value::Integer),
+                opt(&e.sha_orig),
+                opt(&e.sha_plain),
+                opt(&e.faceid_status),
+                opt(&e.origin),
+                e.phash.map_or(Value::Null, Value::Integer),
+                e.lat.map_or(Value::Null, Value::Real),
+                e.lon.map_or(Value::Null, Value::Real),
+                opt(&e.desc_text),
+                Value::Text(e.data.clone()),
+                Value::Text(src_cid.to_owned()),
+            ]),
+        )
+        .map_err(DbError::from)?;
+    }
+    for k in &manifest.keyring {
+        conn.execute(
+            "INSERT OR IGNORE INTO ucloud_keyring(owner_hex, cid, key_hex, enc, src_cid) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![owner, k.cid, k.key_hex, k.enc, src_cid],
+        )
+        .map_err(DbError::from)?;
+    }
+    Ok(out)
+}
+
+/// Fusionne (sans rien écraser, voir [`merge_into`]) le VFS d'un événement de manifeste revenu tard, en une transaction.
+pub async fn merge_from_event<B: BlobStore>(db: &Db, blobs: &B, keys: &dyn KeySource, event: &Event) -> Result<(Pointer, Merged), ManifestError> {
+    let pointer = open_pointer(event, keys)?;
+    let manifest = fetch_manifest(blobs, &pointer, &event.pubkey).await?;
+    validate(&manifest)?;
+    let src = pointer.manifest_cid.clone();
+    let merged = db
+        .writer()
+        .transaction(move |tx| merge_into(tx, &manifest, &src).map_err(|e| match e {
+            ManifestError::Db(d) => d,
+            other => DbError::Corrupt(other.to_string()),
+        }))
+        .await?;
+    Ok((pointer, merged))
 }
 
 /// Restaure d'un coup le VFS d'un événement de manifeste : pointeur → blob → requêtes SQL.

@@ -28,11 +28,16 @@ def make_faces():
 
 COOP = dict(exists=True, updated_at=1790000000, did='did:nostr:' + 'ab' * 32, unmanaged=['ZZ_LEGACY'], sections=[dict(title='Règle 3×1/3', fields=[dict(key=k, value=v, secret=False) for k, v in [('TREASURY_PERCENT', '33.33'), ('RND_PERCENT', '33.33'), ('ASSETS_PERCENT', '33.33'), ('CAPTAIN_BONUS_PERCENT', '1')]]), dict(title='OpenCollective', fields=[dict(key='OCSLUG', value='uplanet', secret=False), dict(key='OCAPIKEY', secret=True, set=True, readable=True)]),
     dict(id='ovh', title='DNSLink OVH', level='essential', fields=[dict(key=k, secret=True, set=True, readable=True) for k in ('OVH_APP_KEY', 'OVH_APP_SECRET', 'OVH_CONSUMER_KEY')] + [dict(key='OVH_ZONE', value='coop.example', secret=False)])])
+ROUTE = dict(mesh=True, stations=[
+    dict(peer='12D3KooWAmiLyon', name='Station de Marie', power_score=40, distance_km=3, services=[dict(name='ssh', local=None), dict(name='ollama', local=None)]),
+    dict(peer='12D3KooWAmiNantes', name='Atelier Nantes', power_score=80, distance_km=520, services=[dict(name='ollama', local=None), dict(name='comfyui', local=None)]),
+    dict(peer='12D3KooWAmiFerme', name='La Ferme', power_score=10, distance_km=40, services=[]),
+    dict(peer='12D3KooWAmiLoin', name='Station éteinte', power_score=5, distance_km=None, services=dict(error='délai dépassé'))])
 ADMIN = dict(face=dict(mode='off', label=None, locked=None, onnx_compiled=True, models='/m', library=None, pending=3, failed=0),
              kinds=dict(kinds=[dict(kind=1, label='Note publique', read='public', write='circle', project=True, default='read=public write=circle project=on', source='défaut'), dict(kind=7, label='Réaction (+N = Ẑen)', read='circle', write='circle', project=True, default='read=circle write=circle project=on', source='défaut')],
                         choices=dict(read=['public', 'addressed', 'friends', 'circle', 'deny'], write=['circle', 'open', 'deny']), fixed={'1059': 'x', '22242': 'y'}))
-ADMIN.update(tunnels=None, tasks=None, assist=dict(services=['ssh'], friends=[], incoming=[], outgoing=[]))  # réglages facultatifs de m-options.js : absents, l'écran s'en passe sans erreur
-ADMIN['locks'] = dict(mode='village', plane=dict(origin=True, kubo=True, pool_peers=1, p2p=True), gates=dict(register=True, register_cli=True, crawl=True, n2=True, mutual_only=False, photos_auto=True, open_writes=[]), people=dict(hosted=4, n1=9, n1_mutual=5, n2=37, n2_known=37), faces=dict(auto_off_members=1), public=dict(files=12, gps=2, sensitive=1, members=1))
+ADMIN.update(route=ROUTE, tunnels=None, tasks=None, assist=dict(services=['ssh'], friends=[], incoming=[], outgoing=[]))  # réglages facultatifs de m-options.js : absents, l'écran s'en passe sans erreur
+ADMIN['locks'] = dict(mode='village', plane=dict(origin=True, kubo=True, pool_peers=1, p2p=True), gates=dict(register=True, register_cli=True, crawl=True, n2=True, mutual_only=False, photos_auto=True, open_writes=[]), people=dict(hosted=4, n1=9, n1_mutual=5, n2=37, n2_known=37), faces=dict(auto_off_members=1), public=dict(files=12, unserved=0, sensitive=3, members=1))
 ACCOUNT = dict(hex='aa' * 32, npub='npub1test', email='alice@example.org', role='multipass', g1pub='G1TEST', home_station='Qm:ab', lang='fr', langs=['fr', 'en', 'es'], profile=dict(name='Alice', about='Bonjour', picture=None),
                dav=dict(url='/dav', login='alice@example.org'), token_generation=0, keys_exportable=True, has_g1_key=True, relays=[dict(url='wss://s.example', read=True, write=True)])
 CONTACTS = dict(contacts=[dict(path='/Contacts/Lea.vcf', name='Léa Martin', emails=['lea@example.org'], pubkey='ab' * 32, via='vcard', g1pub=None, warning=None, hosted_here=None, friends=True, faces=12, faces_linked=12),
@@ -196,7 +201,9 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/organize': return self.send(200, dict(folders=[], job=None, runs=[dict(run_id='r1', at=1790000000, moved=7, undone=False, options={})]))
         if p == '/api/v1/pull': return self.send(200, dict(sources=[dict(id='s1', label='Mon Nextcloud', url='https://nc.example/remote.php/dav/files/fred', username='fred', remote_path='Photos', dest_prefix='/Imports/Mon Nextcloud', private_ok=False,
             job=dict(state='running', dry_run=False, started=1, finished=None, progress=dict(done=40, total=100, imported=30, skipped=8, errors=2), report=None, error=None), last=None)]))
-        if p == '/api/v1/backup': return self.send(200, dict(mine=None, friends=[], hosting=[], share=None))
+        if p == '/api/v1/dashboard': return self.send(200, STATE.get('dashboard') or dict(sovereignty=dict(encrypted_files=12)))  # accueil d'un membre (m-home.js) ; Détails techniques : smoke_backup_rs.py
+        if p == '/api/v1/ucloud/media/safety': return self.send(200, STATE.get('safety') or dict(files={}))  # copies des fichiers partagés : smoke_backup_rs.py
+        if p == '/api/v1/backup': return self.send(200, STATE.get('backup') or dict(mine=None, friends=[], hosting=[], share=None))  # gardiens : smoke_guardians.py
         if p == '/api/v1/faces/pending-shares': return self.send(200, dict(pending=[], auto_share=True))
         if p == '/api/v1/activity': return self.send(200, b': ok\n\n', 'text/event-stream')
         if p == '/api/v1/ucloud/media': return self.send(200, dict(items=MEDIA, pending=0))
@@ -262,6 +269,21 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/restart': return self.send(200, dict(restarting=True))
         if p == '/api/v1/station/planes/service': STATE['unit'] = 'planes'; return self.send(200, dict(state='switched', unit='/h/u', command='x', backup='/h/u.bak-1', carried=[], carried_to=None, to_carry=[], unreadable=False))
         if p == '/api/v1/station/admin/locks': ADMIN['locks']['mode'] = body['mode']; return self.send(200, ADMIN['locks'])
+        if p == '/api/v1/station/admin/route':  # services ouverts par la constellation : ouvrir (station précise ou la plus puissante), fermer
+            rows = ADMIN['route']['stations']
+            if 'connect' in body:
+                c = body['connect']; peer = c.get('peer') or max((r for r in rows if isinstance(r['services'], list) and any(x['name'] == c['service'] for x in r['services'])), key=lambda r: r['power_score'])['peer']
+                if c['service'] == 'comfyui': return self.send(400, dict(error='la station amie refuse ce flux'))
+                # Comme la station : port habituel (Ollama, ComfyUI), sinon port stable de la plage 24000–24999.
+                STATE['last_connect'] = c; port = c.get('port') or {'ollama': 11434, 'comfyui': 8188}.get(c['service']) or 24000 + len(c['service'])
+                for r in rows:
+                    for x in (r['services'] if r['peer'] == peer and isinstance(r['services'], list) else []):
+                        if x['name'] == c['service']: x['local'] = dict(addr=f'127.0.0.1:{port}', until=1791000000)
+                return self.send(200, dict(peer=peer, service=c['service'], addr=f'127.0.0.1:{port}', until=1791000000, route=None))
+            for r in rows:
+                for x in (r['services'] if isinstance(r['services'], list) else []):
+                    if x['name'] == body['disconnect']['service'] and r['peer'] == body['disconnect'].get('peer', r['peer']): x['local'] = None
+            return self.send(200, dict(closed=1))
         if p == '/api/v1/station/admin/index':
             ix = ADMIN['index']
             for k in ('enabled', 'default'):
@@ -280,7 +302,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, READING)
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/register': return self.send(200, dict(email='lea-x7k2p9@uplanet.local', token='JT', pass_='123456', salt='S', pepper='P', nsec='nsec1x', npub='npub1x', hex='cd' * 32, g1pub='G', nostrns='/ipns/k', constellation='ORIGIN', lang='fr', guest=True, card=CARD, card_svg=QR, **{'pass': '123456'}))
-        if p == '/api/v1/restore/ask': return self.send(200, dict(status='none'))  # secours par les gardiens : rien à attendre dans ce scénario
+        if p == '/api/v1/restore/ask': return self.send(200, STATE.get('rescue') or dict(status='none'))  # secours par les gardiens : rien à attendre, sauf scénario (smoke_guardians.py)
         if p == '/api/v1/restore': return self.send(200, dict(email='alice@example.org', token='JT2', hex='ab' * 32, constellation='ORIGIN', restoring=True, **{'pass': '654321'}))
         if p == '/api/v1/invites': return self.send(200, dict(token=TOKEN, count=3, label=body.get('label'), expires_at=1791000000, url='https://s.example/i/' + TOKEN, qr_svg=QR))
         if p == '/api/v1/invites/remote-accept': return self.send(200, dict(**{'from': 'alice'}, origin=body['origin'], sent=4, warnings=[]))

@@ -795,6 +795,9 @@ async fn admin_sections_are_for_the_captain_and_report_errors_properly() {
     assert_eq!(b.get("/api/v1/station/admin/face", &bob).await, (StatusCode::OK, json!({ "mode": "off" })));
     assert_eq!(b.post("/api/v1/station/admin/face", &bob, json!({ "mode": "local" })).await, (StatusCode::OK, json!({ "mode": "local" })));
     assert_eq!(b.post("/api/v1/station/admin/face", &bob, json!({ "mode": "gpu" })).await.0, StatusCode::BAD_REQUEST, "une erreur de validation est un 400");
+    // Services ouverts par la constellation : réservés au Capitaine, en lecture comme en action.
+    assert_eq!(b.get("/api/v1/station/admin/route", &alice).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(b.post("/api/v1/station/admin/route", &alice, json!({ "connect": { "service": "ssh" } })).await.0, StatusCode::FORBIDDEN);
     assert_eq!(b.get("/api/v1/station/admin/inconnue", &bob).await.0, StatusCode::NOT_FOUND);
     assert_eq!(b.get("/api/v1/station/admin/Bad-Name", &bob).await.0, StatusCode::NOT_FOUND);
 }

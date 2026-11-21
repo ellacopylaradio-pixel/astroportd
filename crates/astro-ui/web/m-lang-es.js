@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire es, phrases communes. Les écrans de `parts` ont aussi m-lang-es-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account billets call contacts coop files locks media mesh options planes reading sync';
+export const parts = 'account billets call contacts coop files guard locks media mesh options planes reading sync';
 export default {
 "trouvée par ce qu’elle montre": "encontrada por lo que muestra",
 "vers {0}": "hacia {0}",
@@ -358,7 +358,7 @@ export default {
 "Options et tunnels": "Opciones y túneles",
 "Pour vous": "Para usted",
 "{0} photo(s) de {1} attendent votre accord pour lui être envoyées": "{0} foto(s) de {1} esperan su permiso para enviárselas",
-"{0} fichier(s) de Public en disent trop (lieu, mot de passe, contacts…)": "{0} archivo(s) de Public revelan demasiado (lugar, contraseña, contactos…)",
+"{0} fichier(s) de Public en disent trop (mot de passe, contacts, papiers…)": "{0} archivo(s) de Public revelan demasiado (contraseña, contactos, documentos…)",
 "Voir": "Ver",
 "{0} visage(s) à confirmer": "{0} rostro(s) por confirmar",
 "{0} visage(s) à nommer": "{0} rostro(s) por nombrar",
@@ -453,4 +453,18 @@ export default {
 "Aucun fichier dans cette période.": "Ningún archivo en este periodo.",
 "Peut-être :": "Quizás:",
 "Essayez un autre mot, moins de mots, ou retirez un filtre.": "Pruebe otra palabra, menos palabras o quite un filtro.",
+"Aucun gardien : si votre station tombe, votre compte est perdu.": "Ningún guardián: si su estación cae, su cuenta se pierde.",
+"Vos fichiers reviennent : {0} ami(s) ont renvoyé, {1} attendu(s)": "Sus archivos están volviendo: {0} amigo(s) los han devuelto, {1} pendiente(s)",
+"Choisir un gardien": "Elegir un guardián",
+"Sauvegarde k-sur-n": "Copia k-de-n",
+"Paquets": "Paquetes",
+"en compactage": "en compactación",
+"Fragments": "Fragmentos",
+"acquittés": "confirmados",
+"perdus": "perdidos",
+"Réparations en cours": "Reparaciones en curso",
+"Retraits en file": "Retiradas en cola",
+"Gardiens fautifs": "Guardianes fallidos",
+"contrôle(s) à finir": "control(es) por terminar",
+"Fragments gardés pour des amis": "Fragmentos guardados para amigos",
 };

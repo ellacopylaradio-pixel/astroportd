@@ -201,6 +201,8 @@ pub struct BackupFns {
     pub rescue_answer: RescueAnswerFn,
     /// Secours : part rendue (`false`), ou effacement après restauration (`true`).
     pub rescue_share: RescueShareFn,
+    /// Médiathèque : copies vérifiées des fichiers partagés, en une lecture.
+    pub media_copies: FriendsFn,
 }
 
 /// Envoi de fichiers d'un titulaire à des proches : `(titulaire, chemins, proches)`.

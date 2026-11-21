@@ -408,6 +408,24 @@ async fn fetch_segment(handle: &P2pHandle, peer: PeerId, cid: &str, offset: u64,
     tokio::time::timeout(deadline, work).await.unwrap_or_else(|_| Err(SegmentError::transient("débit trop faible")))
 }
 
+/// Plus grande plage qu'accepte [`fetch_range`] : un contrôle de possession, pas un rapatriement.
+pub const MAX_RANGE: u64 = 1 << 20;
+
+/// Lit `[offset, offset + len)` du blob `cid` (de taille connue `total`) chez `peer`, sans rien écrire dans le magasin :
+/// contrôle de possession d'un fragment de sauvegarde. `len` est plafonné à [`MAX_RANGE`]. `Ok(None)` : le pair a répondu
+/// mais ne sert pas la plage demandée (blob absent, refusé, autre taille annoncée, plage incomplète) ; `Err` : pas de
+/// réponse exploitable (pair injoignable, silence), rien à en conclure.
+pub async fn fetch_range(handle: &P2pHandle, peer: PeerId, cid: &str, offset: u64, len: u64, total: u64, idle: Duration) -> Result<Option<Vec<u8>>, String> {
+    if !exchangeable(cid) || len == 0 || len > MAX_RANGE || offset.checked_add(len).is_none_or(|end| end > total) {
+        return Err("plage invalide".into());
+    }
+    match fetch_segment(handle, peer, cid, offset, len, total, idle).await {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.fatal => Ok(None),
+        Err(e) => Err(e.why),
+    }
+}
+
 /// Pair qui détient le blob, avec sa charge et ses échecs.
 struct Holder {
     peer: PeerId,

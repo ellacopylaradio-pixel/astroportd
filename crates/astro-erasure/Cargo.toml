@@ -1,0 +1,17 @@
+[package]
+name = "astro-erasure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Corps GF(2⁸) (0x11B), code d'effacement de Cauchy systématique et fragments ARSF v1 pour la sauvegarde entre amis"
+
+[dependencies]
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+
+[lints]
+workspace = true

@@ -106,7 +106,10 @@ impl<B: BlobStore> StationApi for StationBackend<B> {
             Some(h) => json!({ "enabled": true, "peers": h.connected_peers().len(), "listen": h.listen_addrs().len(), "score": (svc.hardware.score() * 10.0).round() / 10.0, "tier": svc.hardware.tier().label() }),
             None => json!({ "enabled": false, "score": (svc.hardware.score() * 10.0).round() / 10.0, "tier": svc.hardware.tier().label() }),
         };
+        // Sauvegarde k-sur-n de toute la station (Capitaine seulement) : une lecture groupée.
+        let backup_rs = if who.captain { svc.db.readers().read(|c| Ok(crate::private_backup::captain_summary(c)?)).await.ok() } else { None };
         Ok(json!({
+            "backup_rs": backup_rs,
             "station": { "node": svc.info.node_hex.chars().take(12).collect::<String>(), "peer_id": svc.info.peer_id, "domain": svc.info.domain, "version": env!("CARGO_PKG_VERSION"), "uptime_secs": svc.info.started.elapsed().as_secs(), "captain": who.captain },
             "relay": { "events": events, "last_event_at": (last_event > 0).then_some(last_event), "db_bytes": size },
             "p2p": p2p,

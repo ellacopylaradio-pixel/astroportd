@@ -67,4 +67,12 @@ export default {
 "Copié par : {0}": "Copied by: {0}",
 "Personne ne l'a encore copié.": "Nobody has copied it yet.",
 "Repartagé par : {0}": "Shared again by: {0}",
+"vérifié il y a {0} h": "checked {0} h ago",
+"vérifié il y a {0} j": "checked {0} d ago",
+"🟢 En sécurité : {0} copies chez vos amis": "🟢 Safe: {0} copies with your friends",
+"🟡 {0} copies chez {1}": "🟡 {0} copies with {1}",
+"🟡 1 copie chez {0}": "🟡 1 copy with {0}",
+"+ votre sauvegarde": "+ your backup",
+"🟡 Gardé par votre sauvegarde, pas encore de copie vérifiée chez vos amis": "🟡 Kept by your backup, no checked copy with your friends yet",
+"⏳ Pas encore à l'abri : il part cette nuit chez vos gardiens": "⏳ Not safe yet: it goes to your guardians tonight",
 };

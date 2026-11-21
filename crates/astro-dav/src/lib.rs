@@ -4,6 +4,7 @@
 
 pub mod adopt;
 pub mod auth;
+pub mod backup_pack;
 pub mod blob;
 pub mod caldav;
 pub mod devices;

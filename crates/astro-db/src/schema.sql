@@ -511,6 +511,15 @@ CREATE TABLE IF NOT EXISTS backup_pacts (
   PRIMARY KEY (owner_hex, host_hex)
 ) STRICT, WITHOUT ROWID;
 
+-- Présence des gardiens (état LOCAL, non rejouable : c'est ce que CETTE station a vu) : un jour (`day` = secondes UNIX / 86 400)
+-- où le gardien `hex` s'est montré (message de sauvegarde reçu, événement publié, balise 30850 de sa station). Fenêtre
+-- glissante de 30 jours pour estimer sa disponibilité (`guardians`) ; au-delà de 60 jours, purgé.
+CREATE TABLE IF NOT EXISTS guardian_presence (
+  hex TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  PRIMARY KEY (hex, day)
+) STRICT, WITHOUT ROWID;
+
 -- Blobs chiffrés déjà envoyés (côté propriétaire) ou rangés (côté hébergeur) ; `size` en octets de clair. Un blob dont le
 -- fichier a disparu chez le propriétaire est retiré de chez l'ami après 7 jours (nettoyage de 20h12).
 CREATE TABLE IF NOT EXISTS backup_items (
@@ -521,6 +530,89 @@ CREATE TABLE IF NOT EXISTS backup_items (
   at        INTEGER NOT NULL,
   missing_since INTEGER,                    -- côté propriétaire : depuis quand le fichier n'existe plus chez lui
   PRIMARY KEY (owner_hex, host_hex, cid)
+) STRICT, WITHOUT ROWID;
+
+-- Sauvegarde k-sur-n (codage à effacement, docs/design/SAUVEGARDE_RS.md). Toutes ces tables sont de l'état LOCAL, des
+-- caches de l'index chiffré des paquets (copié chez chaque gardien, clé dérivée du secret du compte) : une station qui
+-- restaure le compte les reconstruit depuis l'index (`import_index`), rien n'y vit seul.
+-- Paquets scellés du propriétaire : `seq` = rang dans le flux, `key_hex` = clé UENC du paquet, `len` = longueur chiffrée.
+CREATE TABLE IF NOT EXISTS backup_packets (
+  owner_hex TEXT NOT NULL,
+  packet_id TEXT NOT NULL,                  -- 32 hex : packet_id ARSF
+  seq       INTEGER NOT NULL,
+  key_hex   TEXT NOT NULL,
+  len       INTEGER NOT NULL,
+  k         INTEGER NOT NULL,
+  at        INTEGER NOT NULL,
+  head_hex  TEXT,                           -- en-tête UENC du paquet chiffré (28 hex) : recalcul d'un fragment (lot 5) ; jamais dans l'index
+  staged    INTEGER NOT NULL DEFAULT 0,     -- 1 : paquet neuf d'un compactage en cours (lot 6), ses blobs sont dans `backup_compact`
+  PRIMARY KEY (owner_hex, packet_id),
+  UNIQUE (owner_hex, seq)
+) STRICT, WITHOUT ROWID;
+
+-- Blobs entrés dans le flux de paquets (un CID n'y entre qu'une fois, tous gardiens confondus) : premier paquet (`seq`),
+-- décalage dans son clair, longueur.
+CREATE TABLE IF NOT EXISTS backup_blobs (
+  owner_hex TEXT NOT NULL,
+  cid       TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  off       INTEGER NOT NULL,
+  len       INTEGER NOT NULL,
+  at        INTEGER NOT NULL,
+  gone_at   INTEGER,                        -- depuis quand le fichier n'existe plus chez le propriétaire (place « morte » après 7 jours)
+  PRIMARY KEY (owner_hex, cid)
+) STRICT, WITHOUT ROWID;
+
+-- Compactage en cours (lot 6, état LOCAL) : position de chaque blob vivant dans les paquets neufs (`staged = 1`). Les blobs
+-- restent rattachés à leur ancien paquet (`backup_blobs`) tant que les paquets neufs ne sont pas acquittés par assez de
+-- gardiens : la restauration reste possible à chaque instant. Vidée, en une transaction, à la bascule.
+CREATE TABLE IF NOT EXISTS backup_compact (
+  owner_hex TEXT NOT NULL,
+  cid       TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  off       INTEGER NOT NULL,
+  len       INTEGER NOT NULL,
+  PRIMARY KEY (owner_hex, cid)
+) STRICT, WITHOUT ROWID;
+
+-- Fragments ARSF, tenue des deux côtés comme `backup_items` : chez le propriétaire, ce qui est parti (`sent_at`) et acquitté
+-- (`acked_at`, après quoi le fragment local est effacé) ; chez le gardien, ce qu'il garde (`acked_at` = rangé). La clé
+-- impose un seul fragment par paquet et par gardien (Q9). `size` = octets du fragment, en-tête compris (quota).
+CREATE TABLE IF NOT EXISTS backup_frags (
+  owner_hex TEXT NOT NULL,
+  host_hex  TEXT NOT NULL,
+  packet_id TEXT NOT NULL,
+  i         INTEGER NOT NULL,
+  cid       TEXT NOT NULL,
+  size      INTEGER NOT NULL,
+  sent_at   INTEGER,
+  acked_at  INTEGER,
+  seen_at   INTEGER,                        -- propriétaire : dernière sonde `HASN` qui l'a trouvé chez le gardien (lot 5)
+  lost_at   INTEGER,                        -- propriétaire : tenu pour perdu (réponse fausse, absent de chez un gardien joignable,
+                                            -- gardien muet depuis 14 jours) ; hors de l'index, remplacé ailleurs par un indice neuf
+  PRIMARY KEY (owner_hex, host_hex, packet_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS backup_frags_cid ON backup_frags(cid);
+
+-- Copies VÉRIFIÉES d'un blob partagé (état LOCAL, non rejouable : c'est ce que CETTE station a sondé) : la station
+-- `station_peer` d'un ami réciproque a répondu « oui » à une sonde `HASN` sur NOTRE CID à `verified_at`. Une station = une
+-- copie, quel que soit le nombre d'amis qu'elle héberge. Un fichier partagé ne reste hors des paquets k-sur-n que si ces
+-- copies, vérifiées depuis moins de 7 jours, suffisent à la cible de sûreté ; réévalué chaque nuit.
+CREATE TABLE IF NOT EXISTS blob_copies (
+  owner_hex    TEXT NOT NULL,
+  cid          TEXT NOT NULL,
+  station_peer TEXT NOT NULL,
+  verified_at  INTEGER NOT NULL,
+  PRIMARY KEY (owner_hex, cid, station_peer)
+) STRICT, WITHOUT ROWID;
+
+-- Index courant des paquets d'un compte hébergé ici (blob UENC v2, `index_cid` : le `CidGate` le laisse sortir) et sa
+-- révision ; reporté dans le manifeste (`Manifest::backup_index`).
+CREATE TABLE IF NOT EXISTS backup_index (
+  owner_hex TEXT PRIMARY KEY,
+  rev       INTEGER NOT NULL,
+  index_cid TEXT NOT NULL,
+  at        INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
 
 -- Journaux bornés (activité, audit ARBOR, requêtes d'outils).

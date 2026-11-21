@@ -67,4 +67,12 @@ export default {
 "Copié par : {0}": "Copiado por: {0}",
 "Personne ne l'a encore copié.": "Nadie lo ha copiado todavía.",
 "Repartagé par : {0}": "Recompartido por: {0}",
+"vérifié il y a {0} h": "comprobado hace {0} h",
+"vérifié il y a {0} j": "comprobado hace {0} d",
+"🟢 En sécurité : {0} copies chez vos amis": "🟢 A salvo: {0} copias en casa de tus amigos",
+"🟡 {0} copies chez {1}": "🟡 {0} copias en casa de {1}",
+"🟡 1 copie chez {0}": "🟡 1 copia en casa de {0}",
+"+ votre sauvegarde": "+ tu copia de seguridad",
+"🟡 Gardé par votre sauvegarde, pas encore de copie vérifiée chez vos amis": "🟡 Guardado por tu copia de seguridad, aún sin copia comprobada en casa de tus amigos",
+"⏳ Pas encore à l'abri : il part cette nuit chez vos gardiens": "⏳ Aún no está a salvo: sale esta noche hacia tus guardianes",
 };

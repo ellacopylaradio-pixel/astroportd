@@ -28,13 +28,13 @@ with sync_playwright() as pw:
     check(page.locator('a[href="#/media"]').count() >= 1, 'la Médiathèque est un sous-onglet de Fichiers')
     page.screenshot(path=str(OUT / 'media-grid.png'))
 
-    page.fill('input[type=search]', 'miyazaki'); page.wait_for_timeout(200)
+    page.fill('input[type=search][aria-label*="médiathèque" i]', 'miyazaki'); page.wait_for_timeout(200)
     check(page.locator('.mm-card').count() == 1 and 'Chihiro' in page.locator('.mm-card').inner_text(), 'la recherche trouve un film par son réalisateur')
-    page.fill('input[type=search]', 'esprits fantastique'); page.wait_for_timeout(200)
+    page.fill('input[type=search][aria-label*="médiathèque" i]', 'esprits fantastique'); page.wait_for_timeout(200)
     check(page.locator('.mm-card').count() == 1, 'plusieurs mots : mot-clé ET genre')
-    page.fill('input[type=search]', 'tartes'); page.wait_for_timeout(200)
+    page.fill('input[type=search][aria-label*="médiathèque" i]', 'tartes'); page.wait_for_timeout(200)
     check(page.locator('.mm-card').count() == 1 and 'Kaamelott' in page.locator('.mm-card').inner_text(), 'un épisode retrouvé par son titre mène à sa série')
-    page.fill('input[type=search]', ''); page.click('button[data-k=music]'); page.wait_for_timeout(200)
+    page.fill('input[type=search][aria-label*="médiathèque" i]', ''); page.click('button[data-k=music]'); page.wait_for_timeout(200)
     check(page.locator('.mm-card').count() == 1 and page.locator('button[data-k=music]').get_attribute('aria-pressed') == 'true', 'filtre Musique')
     page.click('button[data-k=""]')
 

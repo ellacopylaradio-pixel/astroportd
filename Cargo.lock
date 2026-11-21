@@ -332,6 +332,7 @@ version = "1.6.1"
 dependencies = [
  "astro-crypto",
  "astro-db",
+ "astro-erasure",
  "astro-nostr-proto",
  "axum",
  "base64 0.22.1",
@@ -340,6 +341,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "hex",
+ "hkdf",
  "hmac 0.12.1",
  "http-body-util",
  "hyper",
@@ -407,6 +409,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "astro-erasure"
+version = "1.6.1"
+dependencies = [
+ "hex",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "astro-facecloud"
 version = "1.6.1"
 dependencies = [
@@ -470,6 +481,7 @@ dependencies = [
  "astro-core",
  "astro-crypto",
  "astro-db",
+ "astro-erasure",
  "astro-nostr-proto",
  "base64 0.22.1",
  "bech32",

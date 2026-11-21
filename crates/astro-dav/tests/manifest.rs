@@ -172,3 +172,42 @@ async fn hostile_manifests_are_refused() {
     let none: Option<astro_crypto::SecretBytes> = astro_crypto::StaticKeySource::new().secret(&hex(&ALICE));
     assert!(none.is_none());
 }
+
+/// Un manifeste revenu tard (restauration après 3 jours) est fusionné au uCloud actuel : rien n'est écrasé ni supprimé, un
+/// conflit garde les deux (l'élément revenu renommé « (ancien) »), et rejouer la fusion ne change plus rien.
+#[tokio::test]
+async fn a_late_manifest_is_merged_without_overwriting_and_replays_to_the_same_state() {
+    let b = bench("merge").await;
+    let (a, owner) = (alice(), hex(&ALICE));
+    for (m, p, body) in [("MKCOL", "/dav/Docs", ""), ("PUT", "/dav/Docs/note.txt", "version d'origine"), ("PUT", "/dav/Docs/a.txt", "seulement dans l'ancien"), ("MKCOL", "/dav/Photos", ""), ("PUT", "/dav/Photos/x.txt", "photo")] {
+        assert!(call(&b.app, m, p, Some(&a), &[], Body::from(body)).await.status().is_success(), "{m} {p}");
+    }
+    assert!(b.publisher.flush().await.is_empty());
+    let ev = manifest_events(&b, &owner).await.remove(0);
+    let old = manifest::fetch_manifest(b.blobs.as_ref(), &manifest::open_pointer(&ev, keys().as_ref()).unwrap(), &owner).await.unwrap();
+    // Le compte a vécu sans ses fichiers : note.txt réécrite, a.txt absente, un fichier « Photos » à la place du dossier.
+    for (m, p, body) in [("PUT", "/dav/Docs/note.txt", "version récente"), ("DELETE", "/dav/Docs/a.txt", ""), ("DELETE", "/dav/Photos", ""), ("PUT", "/dav/Photos", "un fichier")] {
+        assert!(call(&b.app, m, p, Some(&a), &[], Body::from(body)).await.status().is_success(), "{m} {p}");
+    }
+    let before = dump_vfs(&b).await;
+    let cid_of = |vfs: &(Vec<String>, Vec<String>), path: &str| vfs.0.iter().find(|l| l.split('|').nth(1) == Some(path)).map(|l| l.split('|').nth(4).unwrap().to_owned());
+    let recent = cid_of(&before, "/Docs/note.txt").unwrap();
+    let merge = |m: manifest::Manifest| b.db.writer().transaction(move |tx| manifest::merge_into(tx, &m, "bafkreisrc").map_err(|e| astro_db::DbError::Corrupt(e.to_string())));
+    let first = merge(old.clone()).await.unwrap();
+    assert_eq!((first.added, first.renamed), (2, 2), "a.txt revient à sa place, x.txt dans le dossier renommé ; note.txt et le dossier Photos sous un autre nom");
+    let after = dump_vfs(&b).await;
+    assert_eq!(cid_of(&after, "/Docs/note.txt").unwrap(), recent, "la version récente n'est pas écrasée");
+    let old_note = old.entries.iter().find(|e| e.path == "/Docs/note.txt").unwrap().cid.clone().unwrap();
+    assert_eq!(cid_of(&after, "/Docs/note (ancien).txt").unwrap(), old_note);
+    assert!(cid_of(&after, "/Docs/a.txt").is_some());
+    assert_eq!(cid_of(&after, "/Photos").unwrap(), cid_of(&before, "/Photos").unwrap(), "le fichier Photos reste");
+    assert!(cid_of(&after, "/Photos (ancien)/x.txt").is_some(), "le dossier revenu est renommé avec son contenu");
+    for line in &before.0 {
+        assert!(after.0.contains(line), "rien de l'état actuel n'est modifié : {line}");
+    }
+    assert!(old.keyring.iter().all(|k| after.1.iter().any(|l| l.contains(&k.key_hex))), "les clés des fichiers revenus sont là");
+    // Rejeu (le même blob relivré, ou un redémarrage pendant la fusion) : aucun changement.
+    let again = merge(old).await.unwrap();
+    assert_eq!((again.added, again.renamed, again.already), (0, 0, 3));
+    assert_eq!(dump_vfs(&b).await, after);
+}

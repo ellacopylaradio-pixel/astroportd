@@ -32,37 +32,8 @@ pub const DIR: &str = ".ssss";
 
 // ───────────────────────────── Shamir sur GF(2⁸) ─────────────────────────────
 
-/// Produit dans GF(2⁸) modulo x⁸ + x⁴ + x³ + x + 1 (le corps d'AES).
-fn mul(mut a: u8, mut b: u8) -> u8 {
-    let mut p = 0;
-    while b != 0 {
-        if b & 1 == 1 {
-            p ^= a;
-        }
-        let carry = a & 0x80;
-        a <<= 1;
-        if carry != 0 {
-            a ^= 0x1b;
-        }
-        b >>= 1;
-    }
-    p
-}
-
-/// Inverse de `a` (≠ 0) : a²⁵⁴.
-fn inv(a: u8) -> u8 {
-    let mut r = 1;
-    let mut base = a;
-    let mut e = 254u16;
-    while e > 0 {
-        if e & 1 == 1 {
-            r = mul(r, base);
-        }
-        base = mul(base, base);
-        e >>= 1;
-    }
-    r
-}
+// `mul` et `inv` (corps d'AES, `0x11B`) viennent du module commun, partagé avec le code d'effacement de la sauvegarde.
+use astro_erasure::gf::{inv, mul};
 
 /// Découpe `secret` en `n` parts d'abscisses 1..=n dont `k` suffisent. Chaque octet reçoit son propre polynôme aléatoire.
 fn split(secret: &[u8], k: usize, n: u8) -> Result<Vec<(u8, Vec<u8>)>, MultipassError> {

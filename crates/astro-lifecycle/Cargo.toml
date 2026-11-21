@@ -9,6 +9,7 @@ license.workspace = true
 astro-core.workspace = true
 astro-crypto.workspace = true
 astro-db.workspace = true
+astro-erasure.workspace = true
 astro-nostr-proto.workspace = true
 base64.workspace = true
 bech32.workspace = true

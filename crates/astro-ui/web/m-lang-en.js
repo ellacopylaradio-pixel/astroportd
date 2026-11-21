@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire en, phrases communes. Les écrans de `parts` ont aussi m-lang-en-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account billets call contacts coop files locks media mesh options planes reading sync';
+export const parts = 'account billets call contacts coop files guard locks media mesh options planes reading sync';
 export default {
 "trouvée par ce qu’elle montre": "found by what it shows",
 "vers {0}": "around {0}",
@@ -357,7 +357,7 @@ export default {
 "Options et tunnels": "Options and tunnels",
 "Pour vous": "For you",
 "{0} photo(s) de {1} attendent votre accord pour lui être envoyées": "{0} photo(s) of {1} await your consent to be sent to them",
-"{0} fichier(s) de Public en disent trop (lieu, mot de passe, contacts…)": "{0} Public file(s) reveal too much (place, password, contacts…)",
+"{0} fichier(s) de Public en disent trop (mot de passe, contacts, papiers…)": "{0} Public file(s) reveal too much (password, contacts, ID papers…)",
 "Voir": "See",
 "{0} visage(s) à confirmer": "{0} face(s) to confirm",
 "{0} visage(s) à nommer": "{0} face(s) to name",
@@ -452,4 +452,18 @@ export default {
 "Aucun fichier dans cette période.": "No files in this period.",
 "Peut-être :": "Maybe:",
 "Essayez un autre mot, moins de mots, ou retirez un filtre.": "Try another word, fewer words, or remove a filter.",
+"Aucun gardien : si votre station tombe, votre compte est perdu.": "No guardian: if your station fails, your account is lost.",
+"Vos fichiers reviennent : {0} ami(s) ont renvoyé, {1} attendu(s)": "Your files are coming back: {0} friend(s) sent theirs, {1} awaited",
+"Choisir un gardien": "Choose a guardian",
+"Sauvegarde k-sur-n": "k-of-n backup",
+"Paquets": "Packets",
+"en compactage": "being compacted",
+"Fragments": "Fragments",
+"acquittés": "acknowledged",
+"perdus": "lost",
+"Réparations en cours": "Repairs under way",
+"Retraits en file": "Queued removals",
+"Gardiens fautifs": "Faulty guardians",
+"contrôle(s) à finir": "check(s) to finish",
+"Fragments gardés pour des amis": "Fragments kept for friends",
 };

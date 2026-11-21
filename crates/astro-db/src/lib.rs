@@ -234,7 +234,17 @@ fn apply_schema(conn: &Connection) -> Result<(), DbError> {
 
 /// Colonnes ajoutées après la première version du schéma : `(table, colonne, définition)`.
 /// `CREATE TABLE IF NOT EXISTS` ne modifie pas une table existante ; une base créée avant l'ajout reçoit la colonne ici.
-const ADDED_COLUMNS: [(&str, &str, &str); 4] = [("identities", "peer_id", "TEXT"), ("capital_assets", "node_hex", "TEXT"), ("faces", "contact_uid", "TEXT"), ("faces", "suggest_contact_uid", "TEXT")];
+const ADDED_COLUMNS: [(&str, &str, &str); 9] = [
+    ("identities", "peer_id", "TEXT"),
+    ("capital_assets", "node_hex", "TEXT"),
+    ("faces", "contact_uid", "TEXT"),
+    ("faces", "suggest_contact_uid", "TEXT"),
+    ("backup_packets", "head_hex", "TEXT"),
+    ("backup_frags", "seen_at", "INTEGER"),
+    ("backup_frags", "lost_at", "INTEGER"),
+    ("backup_packets", "staged", "INTEGER NOT NULL DEFAULT 0"),
+    ("backup_blobs", "gone_at", "INTEGER"),
+];
 
 /// Ajoute à une base ancienne les colonnes apparues depuis (idempotent).
 fn migrate(conn: &Connection) -> Result<(), DbError> {
