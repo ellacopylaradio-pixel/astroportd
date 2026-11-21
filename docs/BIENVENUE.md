@@ -24,7 +24,9 @@ C'est le code de votre compte, comme celui d'une carte bancaire. Ne le donnez à
 - La clé est en trois morceaux, et **deux suffisent** : la carte, votre station, et des amis qui gardent une part.
 - Si la station tombe en panne, la carte et un ami retrouvent tout.
 - Carte perdue ? Votre compte marche toujours : demandez au Capitaine de la réimprimer.
-- Dans **Moi › Ma sécurité**, demandez à un proche d'héberger votre sauvegarde : c'est ce qui complète la clé.
+- Dans **Moi › Ma sécurité**, demandez à un proche d'héberger votre sauvegarde : il devient votre **gardien**, et c'est ce qui complète la clé. Deux gardiens, c'est bien ; la page vous dit vos chances d'être retrouvé.
+- Tant que vous n'avez aucun gardien, l'accueil vous le rappelle : si la station tombe, le compte serait perdu.
+- Après une panne, vos fichiers reviennent de chez vos gardiens. Un gardien absent est relancé chaque jour pendant un mois ; ce qui revient s'ajoute sans rien écraser.
 
 ## 4. Mettre vos photos à l'abri
 
