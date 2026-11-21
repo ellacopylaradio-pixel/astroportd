@@ -6,18 +6,18 @@ const lang = (() => { const l = (navigator.language || 'fr').slice(0, 2); return
 const T = {
   en: { skip: 'Skip to content', title: 'Restore my account here', label: 'Your rescue card (and, if your friend reads it to you, their share: one per line)', ask: 'Alert my guardians',
     manual: 'No answer? Your friend can also read you their share (My account › My security › “Show their rescue share”): paste it under your card, one per line.',
-    p1: 'Scan or paste your printed rescue card first.', searching: 'Looking for your contacts on the network… (a few minutes)', waiting: '{0} contact(s) alerted. Call the friend who keeps your backup: as soon as they confirm, your account comes back here by itself. Keep this page open (or come back with your card within 24 h).', denied: 'Did not recognise the request: {0}.', ready: '{0} confirmed: restoring…', scan: 'Scan the QR with the camera', go: 'Restore my account', done: 'Your account is restored', open: 'Open my space',
+    p1: 'Scan or paste your printed rescue card first.', searching: 'Looking for your contacts on the network… (a few minutes)', waiting: 'Call the friend who keeps your backup: as soon as they confirm, your account comes back here by itself. Keep this page open (or come back with your card within 24 h).', asked: 'alerted', offline: 'station unreachable since {0}', confirmed: 'confirmed', refused: 'did not recognise the request', anon: 'A contact without a public name', note: 'Only the friends who hosted your backup keep a share: other contacts see nothing and will not answer.', nobody: 'Nobody could be found to alert: this station sees no contact of this account on the network, so no guardian can give your share back. The only other way: if your old station still works, log in there (its Captain can give you a rescue code).', ready: '{0} confirmed: restoring…', scan: 'Scan the QR with the camera', go: 'Restore my account', done: 'Your account is restored', open: 'Open my space',
     lead: 'Your old station is down, or you are moving? Scan your <strong>rescue card</strong> (the printed QR), then <strong>alert your guardians</strong>: the friend who keeps your backup gets your request, you call each other, and they confirm with one tap. Your account then comes back here by itself; your friends, contacts and files return on their own.',
-    after: '<strong>Write down your new PASS code</strong>: the old one cannot be recovered. Change nothing until the restoration is over: the station finds your friends, then your files, which come back from them over the next hours. You will be told.',
+    after: '<strong>Write down your new PASS code</strong>: the old one cannot be recovered. Your space is usable right away. Your files come back from your friends over the next hours; if one of them is offline, the station asks again every day for 30 days and whatever comes back is added without overwriting anything. Follow it in My account › My security.',
     pass: 'New PASS code', email: 'Login (email)', token: 'Web token', busy: 'Restoring…', cam: 'Camera unavailable: paste the codes instead.', down: 'Station unreachable.', fail: 'Restoration failed.' },
   es: { skip: 'Ir al contenido', title: 'Restablecer mi cuenta aquí', label: 'Su tarjeta de rescate (y, si su amigo se la lee, su parte: una por línea)', ask: 'Avisar a mis guardianes',
     manual: '¿Sin respuesta? Su amigo también puede leerle su parte (Mi cuenta › Mi seguridad › «Mostrar su parte de rescate»): péguela bajo su tarjeta, una por línea.',
-    p1: 'Primero escanee o pegue su tarjeta de rescate impresa.', searching: 'Buscando sus contactos en la red… (unos minutos)', waiting: '{0} contacto(s) avisado(s). Llame al amigo que guarda su copia: en cuanto confirme, su cuenta renace aquí sola. Mantenga esta página abierta (o vuelva con su tarjeta en 24 h).', denied: 'No reconoció la solicitud: {0}.', ready: '{0} confirmó: restableciendo…', scan: 'Escanear el QR con la cámara', go: 'Restablecer mi cuenta', done: 'Su cuenta está restablecida', open: 'Abrir mi espacio',
+    p1: 'Primero escanee o pegue su tarjeta de rescate impresa.', searching: 'Buscando sus contactos en la red… (unos minutos)', waiting: 'Llame al amigo que guarda su copia: en cuanto confirme, su cuenta renace aquí sola. Mantenga esta página abierta (o vuelva con su tarjeta en 24 h).', asked: 'avisado', offline: 'estación inaccesible desde las {0}', confirmed: 'ha confirmado', refused: 'no reconoció la solicitud', anon: 'Un contacto sin nombre público', note: 'Solo los amigos que alojaban su copia guardan una parte: los demás contactos no ven nada y no responderán.', nobody: 'No se encontró a nadie a quien avisar: esta estación no ve ningún contacto de esta cuenta en la red, así que ningún guardián puede devolverle su parte. Única otra vía: si su antigua estación aún funciona, conéctese allí (su Capitán puede darle un código de rescate).', ready: '{0} confirmó: restableciendo…', scan: 'Escanear el QR con la cámara', go: 'Restablecer mi cuenta', done: 'Su cuenta está restablecida', open: 'Abrir mi espacio',
     lead: '¿Su antigua estación está averiada o se muda? Escanee su <strong>tarjeta de rescate</strong> (el QR impreso) y luego <strong>avise a sus guardianes</strong>: el amigo que guarda su copia recibe su solicitud, se llaman y él confirma con un gesto. Su cuenta renace aquí sola; sus amigos, contactos y archivos vuelven por sí mismos.',
-    after: '<strong>Anote su nuevo código PASS</strong>: el anterior no se puede recuperar. No cambie nada hasta que termine la restauración: la estación encuentra a sus amigos y luego sus archivos, que vuelven de ellos a lo largo de las horas. Se le avisará.',
+    after: '<strong>Anote su nuevo código PASS</strong>: el anterior no se puede recuperar. Su espacio se puede usar enseguida. Sus archivos vuelven de sus amigos a lo largo de las horas; si uno está sin conexión, la estación se lo vuelve a pedir cada día durante 30 días y lo que vuelva se añade sin sobrescribir nada. Siga el progreso en Mi cuenta › Mi seguridad.',
     pass: 'Nuevo código PASS', email: 'Identificador (correo)', token: 'Token web', busy: 'Restableciendo…', cam: 'Cámara no disponible: pegue los códigos.', down: 'Estación inaccesible.', fail: 'Error al restablecer.' },
 };
-const fr = { p1: 'Scannez ou collez d’abord votre carte de secours imprimée.', searching: 'Recherche de vos contacts sur le réseau… (quelques minutes)', waiting: '{0} contact(s) prévenu(s). Appelez l’ami qui garde votre sauvegarde : dès qu’il confirme, votre compte renaît ici, tout seul. Gardez cette page ouverte (ou revenez avec votre carte dans les 24 h).', denied: 'N’a pas reconnu la demande : {0}.', ready: '{0} a confirmé : rétablissement…', pass: 'Nouveau code PASS', email: 'Identifiant de connexion (email)', token: 'Jeton de connexion web', busy: 'Rétablissement…', cam: 'Caméra indisponible : collez les codes.', down: 'Station injoignable.', fail: 'Échec du rétablissement.' };
+const fr = { p1: 'Scannez ou collez d’abord votre carte de secours imprimée.', searching: 'Recherche de vos contacts sur le réseau… (quelques minutes)', waiting: 'Appelez l’ami qui garde votre sauvegarde : dès qu’il confirme, votre compte renaît ici, tout seul. Gardez cette page ouverte (ou revenez avec votre carte dans les 24 h).', asked: 'prévenu', offline: 'station injoignable depuis {0}', confirmed: 'a confirmé', refused: 'n’a pas reconnu la demande', anon: 'Un contact sans nom public', note: 'Seuls les amis qui hébergeaient votre sauvegarde gardent une part : les autres contacts ne voient rien et ne répondront pas.', nobody: 'Personne n’a été trouvé à prévenir : cette station ne voit aucun contact de ce compte sur le réseau, donc aucun gardien ne peut vous rendre votre part. Seule autre voie : si votre ancienne station fonctionne encore, connectez-vous-y (son Capitaine peut vous donner un code de secours).', ready: '{0} a confirmé : rétablissement…', pass: 'Nouveau code PASS', email: 'Identifiant de connexion (email)', token: 'Jeton de connexion web', busy: 'Rétablissement…', cam: 'Caméra indisponible : collez les codes.', down: 'Station injoignable.', fail: 'Échec du rétablissement.' };
 const t = (k, ...a) => a.reduce((s, v, i) => s.replace(`{${i}}`, v), (T[lang] || fr)[k] ?? fr[k]);
 if (lang !== 'fr') {
   document.documentElement.lang = lang;
@@ -60,7 +60,7 @@ $('#f').onsubmit = async ev => {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { $('#err').textContent = j.error || t('fail'); return; }
     result = j;
-    clearInterval(poll); poll = 0; $('#rs').textContent = '';
+    clearInterval(poll); poll = 0; $('#rs').textContent = ''; $('#who').replaceChildren(); $('#note').hidden = true;
     $('#card').value = '';
     const dl = $('#out');
     dl.replaceChildren();
@@ -83,8 +83,11 @@ const ask = async send => {
     const r = await fetch('/api/v1/restore/ask', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ card, send }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { if (send) $('#err').textContent = j.error || t('fail'); return; }
-    const denied = j.denied?.length ? ' ' + t('denied', j.denied.join(', ')) : '';
     if (j.status === 'none') return;
+    // Les contacts prévenus, nommés par leur seul nom public, et ce que cette station en sait (rien de plus).
+    const st = { asked: t('asked'), confirmed: t('confirmed'), denied: t('refused') };
+    $('#who').replaceChildren(...(j.contacts || []).map(c => Object.assign(document.createElement('li'), { textContent: `${c.name || t('anon')} — ${c.state === 'offline' ? t('offline', new Date(c.since * 1000).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' })) : st[c.state] || ''}` })));
+    $('#note').hidden = !(j.contacts || []).length;
     if (!poll) poll = setInterval(() => ask(false), 10000);
     if (j.status === 'ready') {
       clearInterval(poll); poll = 0;
@@ -92,7 +95,7 @@ const ask = async send => {
       $('#f').requestSubmit(); // la station joint d'elle-même la part rendue à la carte
       return;
     }
-    $('#rs').textContent = (j.status === 'searching' ? t('searching') : t('waiting', j.sent)) + denied;
+    $('#rs').textContent = { searching: t('searching'), nobody: t('nobody') }[j.status] || t('waiting');
   } catch { if (send) $('#err').textContent = t('down'); }
 };
 $('#ask').onclick = async () => { const b = $('#ask'); stopCam(); b.disabled = true; $('#err').textContent = ''; await ask(true); b.disabled = false; };

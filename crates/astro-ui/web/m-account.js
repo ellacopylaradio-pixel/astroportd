@@ -227,8 +227,9 @@ export default async function account(root, K) {
   // ── Sauvegarde privée chez un ami ──
   const gb = n => n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(1)} Go` : `${(n / 2 ** 20).toFixed(0)} Mo`;
   const backup = h('section', { class: 'card' }, h('h2', {}, 'Sauvegarde privée'));
+  let bk = null;
   try {
-    const b = await K.api('/api/v1/backup'), post = (path, body) => K.api(path, { method: 'POST', body }).then(() => account(root, K), e => K.toast(e.message));
+    const b = bk = await K.api('/api/v1/backup'), post = (path, body) => K.api(path, { method: 'POST', body }).then(() => account(root, K), e => K.toast(e.message));
     const mine = b.mine, friend = h('select', { id: 'bk-friend', 'aria-label': 'Ami qui héberge' }, b.friends.map(f => h('option', { value: f.hex, selected: mine && f.hex === mine.host }, f.label)));
     backup.append(h('p', { class: 'muted' }, 'Vos fichiers et contacts non partagés sont copiés, déjà chiffrés, chez un ami qui l\'accepte : il ne peut rien lire et la copie compte dans son quota. Envoi une fois par nuit (20h12 solaire).'));
     if (!b.friends.length && !mine) backup.append(h('p', { class: 'muted' }, 'Aucun proche réciproque : suivez-vous mutuellement pour choisir un hébergeur.'));
@@ -237,10 +238,6 @@ export default async function account(root, K) {
       mine.status === 'accepted' ? h('p', {}, `${mine.files} fichier(s) · ${gb(mine.backed_up_bytes)} / ${gb(mine.quota_bytes)}`) : null,
       h('p', {}, h('button', { class: 'ghost', onclick: () => post('/api/v1/backup', { enabled: false }) }, 'Suspendre')));
     else backup.append(h('label', { for: 'bk-friend' }, 'Ami qui héberge ma sauvegarde'), friend, h('p', {}, h('button', { onclick: () => post('/api/v1/backup', { enabled: true, host: friend.value }) }, 'Demander à cet ami')));
-    // Clé de secours : la part P3 est confiée automatiquement aux amis qui hébergent la sauvegarde.
-    if (mine && mine.status === 'accepted') backup.append(h('p', { class: b.rescue_friends ? 'muted' : 'warn' }, b.rescue_friends
-      ? `Clé de secours : la part de vos amis est confiée à ${b.rescue_friends} ami(s). Si vous perdez votre compte, appelez l'un d'eux : avec votre QR imprimé, sa part rétablit votre compte.`
-      : 'Clé de secours : la part de vos amis n\'est pas encore confiée (envoi en cours).'));
     // Côté hébergeur : demandes reçues et sauvegardes hébergées.
     for (const r of b.hosting) {
       const size = h('input', { type: 'number', min: 1, step: 1, value: Math.max(1, Math.round(r.quota_bytes / 2 ** 30)) || 5, 'aria-label': 'Volume en Go' });
@@ -270,6 +267,9 @@ export default async function account(root, K) {
     }
   } catch (e) { backup.append(h('p', { class: 'muted' }, e.message)); }
 
+  // ── Mes gardiens et retour des fichiers après un rétablissement (écran m-guard.js).
+  const [back, guard] = bk?.guardians ? (await K.mod('m-guard.js')).default(bk, K, () => account(root, K)) : [];
+
   // Compte invité : l'adresse a été générée par la station. On ne promet pas une fonction qui n'existe pas (changer d'adresse).
   const guest = a.guest ? h('p', { class: 'warn', role: 'note' }, h('strong', {}, 'Compte invité. '), 'Votre adresse a été créée par la station : c\'est votre identifiant UPlanet, pas une boîte aux lettres. Gardez la clé de secours imprimée à la création et votre code PASS : sans email, ce sont vos seuls moyens de récupérer le compte.') : null;
   // Bandeau d'identité (comme « Mon compte » d'UPlanet). `replaceChildren` écrirait le texte « null » pour un nœud absent : on filtre.
@@ -287,7 +287,7 @@ export default async function account(root, K) {
       h('li', {}, t('Dès qu\'il confirme, votre compte renaît tout seul. Notez le nouveau code PASS affiché.')),
       h('li', {}, t('Vos amis, vos contacts et vos fichiers reviennent d\'eux-mêmes au fil des heures.')))));
   // Trois onglets plutôt qu'une colonne de dix cartes : l'onglet ouvert se garde dans l'adresse (#/account?tab=securite).
-  const TABS = [['moi', t('Moi'), [profile, pics, reading, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), rescue, backup, idCard, keys]]];
+  const TABS = [['moi', t('Moi'), [profile, pics, reading, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), back, guard, rescue, backup, idCard, keys].filter(Boolean)]];
   const want = new URLSearchParams(location.hash.split('?')[1] || '').get('tab'), cur = TABS.some(x => x[0] === want) ? want : 'moi';
   const panels = TABS.map(([k, , cards]) => h('div', { class: 'grid', role: 'tabpanel', id: 'ac-p-' + k, 'aria-labelledby': 'ac-t-' + k, hidden: k !== cur }, cards));
   const tabs = TABS.map(([k, label], i) => h('button', { type: 'button', class: 'link', role: 'tab', id: 'ac-t-' + k, 'aria-controls': 'ac-p-' + k, 'aria-selected': String(k === cur), tabIndex: k === cur ? 0 : -1, onclick: () => pick(i),

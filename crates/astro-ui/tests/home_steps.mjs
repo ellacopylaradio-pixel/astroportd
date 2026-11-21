@@ -42,7 +42,20 @@ assert.deepEqual(news({ faces: { suggestions: [], unknown: 4 } })[0].text, ['{0}
 n = news({ faces: { suggestions: [{}], unknown: 0 }, shares: { pending: [] }, backup: { hosting: [{ label: 'Léa', rescue: { station: 'x' } }, { label: 'Max' }] } });
 assert.deepEqual(n.map(x => x.icon), ['🆘', '🫂']); assert.equal(n[0].href, '#/account?tab=securite'); assert.deepEqual(n[0].text[1], 'Léa');
 // Vigie de Public : un fichier qui en dit trop passe avant les photos et les visages ; rien à signaler = rien d'affiché.
-n = news({ faces: { suggestions: [{}] }, shares: { pending: [{ count: 1, name: 'Fred' }] }, fp: { privacy: { gps: 2, sensitive: 1 } } });
+// Une photo HEIC non servie n'en dit pas trop (les autres photos partent nettoyées) : elle n'alarme pas l'accueil.
+n = news({ faces: { suggestions: [{}] }, shares: { pending: [{ count: 1, name: 'Fred' }] }, fp: { privacy: { unserved: 2, sensitive: 3 } } });
 assert.deepEqual(n.map(x => x.icon), ['🔒', '📸', '🫂']); assert.equal(n[0].text[1], 3); assert.equal(n[0].href, '#/cloud?p=%2FPublic');
-assert.deepEqual(news({ fp: { privacy: { gps: 0, sensitive: 0 } } }), []);
+assert.deepEqual(news({ fp: { privacy: { unserved: 2, sensitive: 0 } } }), []);
 console.log('accueil : « Pour vous » OK');
+
+// Gardiens : aucun hors de cette station = alerte tant qu'il n'y en a pas ; un gardien d'ailleurs la fait taire.
+n = news({ backup: { hosting: [], guardians: [] } });
+assert.deepEqual(n.map(x => x.icon), ['⚠️']); assert.equal(n[0].href, '#/account?tab=securite');
+assert.deepEqual(news({ backup: { guardians: [{ label: 'Bob', same_station: true }] } }).map(x => x.icon), ['⚠️'], 'un gardien sur la même station ne protège pas');
+assert.deepEqual(news({ backup: { guardians: [{ label: 'Léa', same_station: false }] } }), []);
+assert.deepEqual(news({ backup: { mine: null } }), [], 'ancienne réponse sans gardiens : pas d\'alerte inventée');
+// Restauration en cours : le suivi du retour des fichiers, après un secours éventuel ; terminée = plus rien.
+n = news({ backup: { hosting: [{ label: 'Léa', rescue: {} }], guardians: [{ same_station: false }], restore: { state: 'late', returned: ['Léa'], waiting: [{ label: 'Paul', seen_days: 4 }] } } });
+assert.deepEqual(n.map(x => x.icon), ['🆘', '📦']); assert.deepEqual(n[1].text.slice(1), [1, 1]);
+assert.deepEqual(news({ backup: { guardians: [{ same_station: false }], restore: { state: 'done', returned: ['Léa'], waiting: [] } } }), []);
+console.log('accueil : gardiens et retour des fichiers OK');

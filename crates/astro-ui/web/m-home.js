@@ -19,9 +19,14 @@ export function news({ faces, shares, backup, fp }) {
   const list = [], sug = (faces?.suggestions || []).length, unk = faces?.unknown || 0, pv = fp?.privacy;
   // Un ami qui a perdu sa station attend ma confirmation : toujours en tête.
   for (const r of (backup?.hosting || []).filter(x => x.rescue).slice(0, 2)) list.push({ icon: '🆘', text: ['{0} a perdu sa station et vous demande de l\'aide', r.label], label: 'Répondre', href: '#/account?tab=securite' });
+  // Après un rétablissement : les fichiers reviennent de chez les amis.
+  const rs = backup?.restore;
+  if (rs && rs.state !== 'done') list.push({ icon: '📦', text: ['Vos fichiers reviennent : {0} ami(s) ont renvoyé, {1} attendu(s)', rs.returned.length, rs.waiting.length], label: 'Voir', href: '#/account?tab=securite' });
+  // Aucun gardien hors de cette station : une panne de la station emporterait le compte.
+  if (backup?.guardians && !backup.guardians.some(g => !g.same_station)) list.push({ icon: '⚠️', text: ['Aucun gardien : si votre station tombe, votre compte est perdu.'], label: 'Choisir un gardien', href: '#/account?tab=securite' });
   // Vigie de Public (lisible par tous).
-  const pvn = (pv?.gps || 0) + (pv?.identity || 0) + (pv?.sensitive || 0);
-  if (pvn) list.push({ icon: '🔒', text: ['{0} fichier(s) de Public en disent trop (lieu, mot de passe, contacts…)', pvn], label: 'Voir', href: '#/cloud?p=%2FPublic' });
+  const pvn = pv?.sensitive || 0; // les photos partent déjà sans lieu ni appareil
+  if (pvn) list.push({ icon: '🔒', text: ['{0} fichier(s) de Public en disent trop (mot de passe, contacts, papiers…)', pvn], label: 'Voir', href: '#/cloud?p=%2FPublic' });
   for (const b of (shares?.pending || []).slice(0, 2)) list.push({ icon: '📸', text: ['{0} photo(s) de {1} attendent votre accord pour lui être envoyées', b.count, b.name], label: 'Décider', href: '#/people/tri' });
   if (sug) list.push({ icon: '🫂', text: ['{0} visage(s) à confirmer', sug], label: 'Trier en 1 clic', href: '#/people/tri?grand' });
   else if (unk) list.push({ icon: '🫂', text: ['{0} visage(s) à nommer', unk], label: 'Trier en 1 clic', href: '#/people/tri?grand' });
