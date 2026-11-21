@@ -252,8 +252,12 @@ class H(BaseHTTPRequestHandler):
         if p.startswith('/api/v1/book'): return self.send(200, dict(path='/Contacts/Lea.vcf', taken=body.get('keys'), imported=2, duplicates=1, rejected=[], merged=True, removed=1, changed=1, fields=body.get('fields') or body))
         if p == '/api/v1/me/links': return self.send(200, dict(linked=[dict(plane='zen1', key='ee' * 32)], skipped=[]))
         if p == '/api/v1/chat/send':
-            m = dict(id=str(len(STATE['chat'])), mine=True, at=1790000000 + len(STATE['chat']) * 60, text=body['text'], state='ok'); STATE['chat'].append(m); return self.send(200, m)
+            q = next((x for x in STATE['chat'] if x['id'] == body.get('reply')), None)
+            m = dict(id=str(len(STATE['chat'])), mine=True, at=1790000000 + len(STATE['chat']) * 60, text=body['text'], state='ok', seen=False, reply=body.get('reply'), quote=q and dict(text=q['text'], mine=q['mine']), files=body.get('files', []))
+            STATE['chat'].append(m); return self.send(200, m)
         if p == '/api/v1/chat/read': STATE['chat_read'] = True; return self.send(200, dict(read=1))
+        if p == '/api/v1/chat/delete': STATE['chat'] = [m for m in STATE['chat'] if m['id'] != body['id']]; return self.send(200, dict(deleted=True))
+        if p == '/api/v1/me/zen/recipients': return self.send(200, dict(recipients=[dict(to='cash', label='cash'), dict(to='ab' * 32, label='lea@example.org')], max_zen=10000))
         if p == '/api/v1/faces/delete-photos': return self.send(200, dict(deleted=len({f['path'] for f in STATE['faces'] if f['id'] in body['ids']}), missing=0, bytes=0))
         if p == '/api/v1/faces/assign':
             for f in STATE['faces']:

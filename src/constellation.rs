@@ -305,14 +305,19 @@ impl<C: Chain> Constellation<C> {
             // Le portefeuille maître finance les autres : il n'a pas de transaction primale. Pour les autres, ce que **la chaîne**
             // dit (primale confirmée par les indexeurs) prime sur le marqueur local « envoyée » : `verified` = reçue de
             // UPLANETNAME_G1, `foreign` = premier virement venu d'ailleurs (ce n'est pas un portefeuille officiel), `done` = envoyée
-            // mais pas encore vérifiée, `pending` = pas encore envoyée.
+            // mais pas encore vérifiée, `unknown` = envoi interrompu (marqueur `sending` : peut-être partie, peut-être pas — voir
+            // les alertes du Capitaine), `pending` = pas encore envoyée.
             let primal = if name == "UPLANETNAME_G1" {
                 "master"
             } else {
                 match self.primal(&ss58, false).await {
                     Ok(Some(p)) if p == master => "verified",
                     Ok(Some(_)) => "foreign",
-                    _ => markers.get(&name).map_or("pending", |m| if matches!(m.as_str(), "paid" | "sending") { "done" } else { "pending" }),
+                    _ => markers.get(&name).map_or("pending", |m| match m.as_str() {
+                        "paid" => "done",
+                        "sending" => "unknown",
+                        _ => "pending",
+                    }),
                 }
             };
             out.push(json!({ "name": name, "address": ss58, "g1_cents": g1, "zen_cents": g1.map(zen_of_g1), "primal": primal }));
@@ -707,6 +712,14 @@ mod tests {
         assert!(o["charter"]["text"].as_str().unwrap().contains("trois tiers"), "charte type par défaut");
         assert_eq!(o["wallets"][0]["primal"], "master");
         assert!(o["wallets"].as_array().unwrap().iter().skip(1).all(|w| w["primal"] == "pending"));
+        // Marqueur local seul (sans indexeur) : un envoi interrompu n'est jamais présenté comme fait.
+        let (a, b) = (o["wallets"][1]["name"].as_str().unwrap().to_owned(), o["wallets"][2]["name"].as_str().unwrap().to_owned());
+        for (name, m) in [(&a, "paid"), (&b, "sending")] {
+            c.db.writer().execute("INSERT INTO kv(scope, key, value, updated_at) VALUES (?1, ?2, ?3, 0)", vec![crate::primal_init::SCOPE.to_owned().into(), name.clone().into(), m.to_owned().into()]).await.unwrap();
+        }
+        c.balances.lock().unwrap().take();
+        let o = c.overview("").await.unwrap();
+        assert_eq!((o["wallets"][1]["primal"].as_str(), o["wallets"][2]["primal"].as_str()), (Some("done"), Some("unknown")));
         let _ = std::fs::remove_dir_all(dir);
     }
 

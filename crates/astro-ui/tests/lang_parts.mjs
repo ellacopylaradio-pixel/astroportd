@@ -40,6 +40,17 @@ for (const lg of langs) {
   }
 }
 for (const p of declared) assert.deepEqual(keys.es[p], keys.en[p], `part ${p} : mêmes clés en anglais et en espagnol`);
+// Le chat (c-*.js) a son dictionnaire, c-lang-<lg>.js : mêmes règles (utilisée, pas en double avec les phrases communes).
+const chatSrc = readdirSync(web).filter(f => /^c-(?!lang).*\.js$/.test(f)).map(f => readFileSync(join(web, f), 'utf8')).join('\n');
+for (const lg of langs) {
+  const c = await load(`c-lang-${lg}.js`);
+  keys[lg].chat = new Set(Object.keys(c));
+  for (const k of Object.keys(c)) {
+    assert.ok(!keys[lg].common.has(k), `${lg} : « ${k} » est à la fois commune et dans le dictionnaire du chat`);
+    assert.ok(forms(k).some(x => chatSrc.includes(x)), `${lg} : « ${k} » est dans c-lang mais aucun c-*.js ne l'utilise`);
+  }
+}
+assert.deepEqual(keys.es.chat, keys.en.chat, 'chat : mêmes clés en anglais et en espagnol');
 const onlyEs = [...keys.es.common].filter(k => !keys.en.common.has(k)), onlyEn = [...keys.en.common].filter(k => !keys.es.common.has(k));
 assert.ok(onlyEn.length === 0 && onlyEs.length <= 1, `parts communes : en seul ${onlyEn}, es seul ${onlyEs}`);
 console.log(`dictionnaires : ${langs.length} langues, ${declared.size} parts d'écran, ${keys.en.common.size} phrases communes`);

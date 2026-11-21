@@ -49,6 +49,18 @@ pub trait CoopApi: Auth {
     fn zen_credit(&self, _who: &Principal, _op: &'static str, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("versement de Ẑen non disponible sur cette station")) }
     }
+    /// Alertes ouvertes de la station et opérations restées en suspens (Capitaine) : `{ alerts: [...], pending: [...] }`.
+    fn captain_alerts(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("alertes non disponibles sur cette station")) }
+    }
+    /// Le Capitaine marque une alerte traitée.
+    fn captain_alert_done(&self, _who: &Principal, _id: i64) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("alertes non disponibles sur cette station")) }
+    }
+    /// Le Capitaine efface une alerte (`Some(id)`) ou toutes (`None`).
+    fn captain_alert_delete(&self, _who: &Principal, _id: Option<i64>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("alertes non disponibles sur cette station")) }
+    }
     /// Autorise (ou retire) un MULTIPASS hébergé à créer des Ğ1Billets (Capitaine).
     fn account_billet_issuer(&self, _who: &Principal, _hex: String, _allowed: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("Ğ1Billets non disponibles sur cette station")) }
@@ -96,6 +108,10 @@ pub(super) fn routes<B: CoopApi>() -> Router<Arc<UiState<B>>> {
         .route("/UPLANET/HEX", get(uplanet_hex::<B>))
         .route("/UPLANET/G1HEX", get(uplanet_g1hex::<B>))
         .route("/api/v1/station/coop", get(coop_get::<B>).post(coop_set::<B>))
+.route("/api/v1/station/alerts", get(alerts_get::<B>))
+.route("/api/v1/station/alerts/{id}/done", post(alert_done::<B>))
+.route("/api/v1/station/alerts/{id}/delete", post(alert_delete::<B>))
+.route("/api/v1/station/alerts/clear", post(alerts_clear::<B>))
         .route("/api/v1/constellation", get(constellation_get::<B>))
         .route("/api/v1/constellation/ledger", get(constellation_ledger::<B>))
         .route("/api/v1/constellation/charter/accept", post(charter_accept::<B>))
@@ -190,6 +206,22 @@ async fn set_hosting_defaults<B: CoopApi>(State(st): State<Arc<UiState<B>>>, hea
         },
         Err(r) => r,
     }
+}
+
+async fn alerts_get<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    reply(st.backend.captain_alerts(&p).await)
+}
+
+async fn alert_done<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain, Path(id): Path<i64>) -> Response {
+    reply(st.backend.captain_alert_done(&p, id).await)
+}
+
+async fn alert_delete<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain, Path(id): Path<i64>) -> Response {
+    reply(st.backend.captain_alert_delete(&p, Some(id)).await)
+}
+
+async fn alerts_clear<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    reply(st.backend.captain_alert_delete(&p, None).await)
 }
 
 async fn coop_get<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {

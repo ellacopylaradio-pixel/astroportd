@@ -25,7 +25,7 @@ for (const to of Object.values(ALIASES)) assert.ok(ROUTES.some(r => r.path === t
 // Liens écrits dans le code (hors dictionnaires et table).
 const cap = { captain: true }, mem = { captain: false };
 const seen = new Set();
-for (const f of readdirSync(web).filter(f => /\.js$/.test(f) && !/^m-lang|^m-routes|^scan|^jsqr|^invite|^claim|^register|^restore|^stations/.test(f))) {
+for (const f of readdirSync(web).filter(f => /\.js$/.test(f) && !/^m-lang|^c-lang|^m-routes|^scan|^jsqr|^invite|^claim|^register|^restore|^stations/.test(f))) {
   const src = readFileSync(join(web, f), 'utf8');
   for (const [, p] of src.matchAll(/#(\/[a-z]*(?:\/[a-z]+)?)(?=[?'"`#\s)]|$)/g)) {
     if (p === '/' && !/href: '#\/'/.test(src)) continue;

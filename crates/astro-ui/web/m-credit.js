@@ -22,6 +22,8 @@ export default async function credit(K, opts = {}) {
   try { list = await K.api(`${base}/recipients`, { method: 'POST', body: {} }); }
   catch (e) { body.replaceChildren(h('p', { class: 'err', role: 'alert' }, e.message)); return; }
   const max = list.max_zen;
+  // Le chat propose d'envoyer à un MULTIPASS hors de cette liste (constellation) : il s'y ajoute, le serveur vérifie.
+  if (member && opts.to && !list.recipients.some(r => r.to === opts.to)) list.recipients.push({ to: opts.to, label: opts.label || opts.to.slice(0, 8) });
   if (!list.recipients.length) { body.replaceChildren(h('p', { class: 'muted' }, t('Aucun destinataire sur cette station.'))); return; }
 
   let id = newId(), key = '';
@@ -46,6 +48,7 @@ export default async function credit(K, opts = {}) {
       const send = () => K.api(`${base}/send`, { method: 'POST', body: { ...req, credit_id: id, confirm: true } }).then(r => {
         K.toast(t('{0} Ẑen envoyés à {1}', req.amount_zen, who), 1);
         body.replaceChildren(h('p', { class: 'ok', role: 'status' }, '✅ ', t('{0} Ẑen envoyés à {1}', req.amount_zen, who)), h('menu', {}, h('button', { type: 'button', onclick: () => dlg.close() }, t('Fermer'))));
+        opts.done?.(req.amount_zen); // le chat annonce le versement dans la conversation
         return r;
       }, e => { err.textContent = e.message; });
       step.replaceChildren(

@@ -75,4 +75,9 @@ assert.equal(analyze({ ...ok, en: { state: 'fresh', consumption: { power_w: 8 } 
 const stale = analyze({ ...ok, en: { state: 'stale', age_secs: 7200 } });
 assert.equal(stale.floors.machine, 'degraded'); assert.match(stale.todos[0].why, /energy-collect\.timer/);
 assert.equal(analyze({ ...ok, en: { state: 'invalid', error: 'format energy/v2' } }).todos[0].why, 'format energy/v2');
+// Alertes enregistrées : une alerte ouverte colore la station ; un virement à l'issue inconnue est une intervention.
+const al = analyze({ ...healthy, al: { alerts: [{ id: 1, source: 'hosting', message: 'issue inconnue', count: 2 }], pending: [{ scope: 'hosting_fee', key: 'x:1', since: 5 }] } });
+assert.equal(al.level, 'down'); assert.equal(al.floors.economy, 'down'); assert.equal(al.floors.station, 'degraded');
+assert.ok(al.todos.every(x => x.href === '#/alerts')); assert.equal(al.todos[1].why, 'issue inconnue');
+assert.equal(analyze({ ...healthy, al: { alerts: [], pending: [] } }).level, 'ok');
 console.log('cockpit : règles OK');

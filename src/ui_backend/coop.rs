@@ -49,6 +49,37 @@ impl<B: BlobStore> CoopApi for CoopBackend<B> {
         let keys = self.stations.as_ref().ok_or_else(|| ApiError::unavailable("clé de l'UPlanet non disponible"))?.public_keys().await.map_err(ApiError::internal)?;
         Ok(if g1 { keys.g1hex.clone() } else { keys.hex.clone() })
     }
+    async fn captain_alerts(&self, _who: &Principal) -> Result<Value, ApiError> {
+        crate::captain_alerts::CaptainAlerts::new(self.services.db.clone(), None).open().await.map_err(|e| {
+            eprintln!("interface : alertes : {e}");
+            ApiError::internal("alertes illisibles")
+        })
+    }
+    async fn captain_alert_done(&self, who: &Principal, id: i64) -> Result<Value, ApiError> {
+        let alerts = crate::captain_alerts::CaptainAlerts::new(self.services.db.clone(), None);
+        match alerts.done(id, &who.hex).await {
+            Ok(true) => Ok(json!({ "id": id, "done": true })),
+            Ok(false) => Err(ApiError::not_found("alerte inconnue ou déjà traitée")),
+            Err(e) => {
+                eprintln!("interface : alerte {id} : {e}");
+                Err(ApiError::internal("alerte non enregistrée"))
+            }
+        }
+    }
+    async fn captain_alert_delete(&self, _who: &Principal, id: Option<i64>) -> Result<Value, ApiError> {
+        let alerts = crate::captain_alerts::CaptainAlerts::new(self.services.db.clone(), None);
+        let fail = |e: String| {
+            eprintln!("interface : effacement d'alerte : {e}");
+            ApiError::internal("alerte non effacée")
+        };
+        match id {
+            Some(id) => match alerts.delete(id).await.map_err(fail)? {
+                true => Ok(json!({ "deleted": 1 })),
+                false => Err(ApiError::not_found("alerte inconnue")),
+            },
+            None => Ok(json!({ "deleted": alerts.clear().await.map_err(fail)? })),
+        }
+    }
     async fn coop_config(&self, _who: &Principal) -> Result<Value, ApiError> {
         let (get, _) = self.coop.as_ref().ok_or_else(|| ApiError::unavailable("configuration coopérative non activée"))?;
         get().await.map_err(|e| {

@@ -9,7 +9,7 @@
 //! | `satellite`, `constellation` | Capitaine, OpenCollective | maître → `SOCIETY` → MULTIPASS 33 % · R&D 33 % · ASSETS 33 % · Capitaine (le reste), **sans** étape par la ZenCard |
 //! | `labo` | OpenCollective | maître → R&D (dons fléchés) |
 //! | `cash` | tout membre, pour lui-même | MULTIPASS → TREASURY (liquidité apportée à la coopérative) |
-//! | `member` | tout membre | MULTIPASS → MULTIPASS d'un proche réciproque hébergé ici |
+//! | `member` | tout membre | MULTIPASS → n'importe quel MULTIPASS de la constellation (hébergé ici, ou ailleurs si son portefeuille a le primal de cette UPlanet) |
 //!
 //! **Garde-fous** : montant plafonné à [`MAX_ZEN_PER_CREDIT`] ẑ ; l'écran montre d'abord le devis (`preview`) puis exige une
 //! confirmation explicite (`send` avec `confirm`) ; un seul mouvement à la fois ; refusé si le portefeuille débité ne couvre pas
@@ -35,6 +35,9 @@ use crate::coop_wallets::Wallets;
 use crate::station::{RESERVE_G1_CENTS, zen_of_g1};
 
 const SCOPE: &str = "zen_credit";
+
+/// Primal d'un portefeuille (`Ok(None)` : il n'a jamais rien reçu) : contrôle d'origine d'un destinataire hébergé ailleurs.
+pub type PrimalFn = Arc<dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>, String>> + Send>> + Send + Sync>;
 /// Plafond d'un mouvement, en ẑ entiers (même borne que `MAX_ZEN_PER_BILLET` et `MAX_WEEKLY_ZEN`).
 pub const MAX_ZEN_PER_CREDIT: u64 = 10_000;
 const MAX_ZEN_CENTS: u64 = MAX_ZEN_PER_CREDIT * 100;
@@ -129,6 +132,7 @@ pub struct ZenCredit<C: Chain> {
     activity: ActivityBus,
     gate: tokio::sync::Mutex<()>,
     retry_delay: Duration,
+    primal: Option<PrimalFn>,
 }
 
 type R<T> = Result<T, BilletError>;
@@ -136,7 +140,13 @@ type R<T> = Result<T, BilletError>;
 impl<C: Chain> ZenCredit<C> {
     /// `accounts_dir` : dossier des comptes (`~/.zen/game/nostr`), où se trouve le `.secret.dunikey` de chaque MULTIPASS.
     pub fn new(db: Arc<Db>, chain: Arc<C>, wallets: Arc<Wallets>, accounts_dir: PathBuf, activity: ActivityBus) -> Self {
-        Self { db, chain, wallets, accounts_dir, activity, gate: tokio::sync::Mutex::new(()), retry_delay: Duration::from_secs(15) }
+        Self { db, chain, wallets, accounts_dir, activity, gate: tokio::sync::Mutex::new(()), retry_delay: Duration::from_secs(15), primal: None }
+    }
+
+    /// Contrôle primal : sans lui, un membre ne peut payer qu'un MULTIPASS hébergé ici.
+    pub fn with_primal(mut self, primal: PrimalFn) -> Self {
+        self.primal = Some(primal);
+        self
     }
 
     #[cfg(test)]
@@ -188,11 +198,7 @@ impl<C: Chain> ZenCredit<C> {
         let (kind, to) = if target == "cash" {
             (Kind::Cash, None)
         } else {
-            let h = Self::hex_of(body)?;
-            if !self.friends(hex).await?.iter().any(|(f, _)| *f == h) {
-                return Err(BilletError::Refused("zen_credit_not_friend", "ce destinataire n'est pas un proche réciproque hébergé ici".into()));
-            }
-            (Kind::Member, Some(self.party(&h).await?))
+            (Kind::Member, Some(self.member_party(&Self::hex_of(body)?, true).await?))
         };
         match op {
             "preview" => Ok(self.view(&self.quote(kind, to, Some(me), zc, true).await?)),
@@ -283,6 +289,34 @@ impl<C: Chain> ZenCredit<C> {
             .ok_or_else(|| BilletError::Refused("zen_credit_unknown_recipient", "ce MULTIPASS n'est pas hébergé sur cette station".into()))?;
         let account = self.signer_of_email(&email)?.account();
         Ok(Party { hex: hex.to_owned(), email, account })
+    }
+
+    /// Destinataire d'un membre : un MULTIPASS hébergé ici, ou connu de la constellation (identité DID, portefeuille
+    /// `g1pub_nostr`). Ailleurs, `check` exige que son portefeuille ait reçu sa transaction primale du maître de cette UPlanet :
+    /// sans indexeur pour le vérifier, on ne paie pas.
+    async fn member_party(&self, hex: &str, check: bool) -> R<Party> {
+        let h = hex.to_owned();
+        let row: Option<(i64, Option<String>, Option<String>)> = self
+            .read(move |c| Ok(c.query_row("SELECT hosted, email, g1pub_nostr FROM identities WHERE hex = ?1 AND role IN ('multipass', 'captain')", [&h], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?))
+            .await?;
+        let unknown = || BilletError::Refused("zen_credit_unknown_recipient", "ce compte n'a pas de MULTIPASS Ğ1 connu de cette constellation".into());
+        let (email, wallet) = match row {
+            Some((1, Some(_), _)) => return self.party(hex).await,
+            Some((_, email, Some(w))) => (email, w),
+            _ => return Err(unknown()),
+        };
+        let account = <Account as std::str::FromStr>::from_str(&wallet).map_err(|_| unknown())?;
+        if check {
+            let primal = self.primal.as_ref().ok_or_else(|| BilletError::Unavailable("zen_credit_no_primal", "origine du portefeuille non vérifiable (aucun indexeur Duniter joint) : envoi possible seulement vers un MULTIPASS de cette station".into()))?;
+            let master = self.wallets.master().await.map_err(|e| BilletError::Unavailable("zen_credit_unavailable", format!("portefeuille maître indisponible : {e}")))?.account().ss58();
+            match primal(account.ss58()).await {
+                Ok(Some(p)) if p == master => {}
+                Ok(Some(_)) => return Err(BilletError::Refused("zen_credit_foreign", "ce portefeuille ne vient pas de cette UPlanet (primal différent)".into())),
+                Ok(None) => return Err(BilletError::Refused("zen_credit_not_activated", "ce MULTIPASS n'a encore rien reçu : il doit d'abord être activé par sa station".into())),
+                Err(e) => return Err(BilletError::Unavailable("zen_credit_unavailable", format!("indexeur Duniter : {e}"))),
+            }
+        }
+        Ok(Party { hex: hex.to_owned(), email: email.unwrap_or_else(|| hex[..8].to_owned()), account })
     }
 
     async fn party_by_email(&self, email: &str) -> R<Party> {
@@ -484,6 +518,7 @@ impl<C: Chain> ZenCredit<C> {
             }
         }
         let recipient = match to {
+            Some(h) if kind == Kind::Member => Some(self.member_party(h, fresh).await?),
             Some(h) => Some(self.party(h).await?),
             None => None,
         };
@@ -638,12 +673,6 @@ pub(crate) mod tests {
         let mut b = extra;
         b["_who"] = json!({ "hex": MEMBER, "email": "membre@exemple.org", "captain": false });
         b
-    }
-
-    async fn befriend(r: &Rig, a: &str, b: &str) {
-        for (o, p) in [(a, b), (b, a)] {
-            r.db.writer().execute("INSERT OR REPLACE INTO social_graph(owner_hex, pubkey, level, updated_at) VALUES (?1, ?2, 1, 0)", vec![o.to_owned().into(), p.to_owned().into()]).await.unwrap();
-        }
     }
 
     #[tokio::test]
@@ -818,21 +847,37 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_member_can_only_send_to_a_reciprocal_friend_hosted_here() {
-        let r = rig("friend", 10_000).await;
+    async fn a_member_can_send_to_any_multipass_of_the_constellation_whose_wallet_comes_from_this_uplanet() {
+        let r = rig("anyone", 10_000).await;
+        // Hébergé ici, sans suivi réciproque : accepté.
         let ask = member_body(json!({ "to": OTHER, "amount_zen": 10, "credit_id": "friend-0001", "confirm": true }));
-        assert!(matches!(r.svc.handle_member("send", &ask).await, Err(BilletError::Refused("zen_credit_not_friend", _))), "ni suivi ni suivant");
-        r.db.writer().execute("INSERT INTO social_graph(owner_hex, pubkey, level, updated_at) VALUES (?1, ?2, 1, 0)", vec![MEMBER.to_owned().into(), OTHER.to_owned().into()]).await.unwrap();
-        assert!(matches!(r.svc.handle_member("send", &ask).await, Err(BilletError::Refused("zen_credit_not_friend", _))), "un suivi à sens unique ne suffit pas");
-        befriend(&r, MEMBER, OTHER).await;
-        let list = r.svc.handle_member("recipients", &member_body(json!({}))).await.unwrap();
-        assert_eq!(list["recipients"].as_array().unwrap().len(), 2, "la trésorerie et un proche");
         r.svc.handle_member("send", &ask).await.unwrap();
         let sent = r.chain.sent.lock().unwrap().clone();
         assert_eq!((sent[0].0, sent[0].1, sent[0].2), (r.member, Ed25519Signer::from_seed([0x63; 32]).account(), 100));
         assert!(!sent[0].3.contains('@'), "la chaîne est publique : jamais d'email d'un membre");
         let myself = member_body(json!({ "to": MEMBER, "amount_zen": 10, "credit_id": "friend-0002", "confirm": true }));
         assert!(r.svc.handle_member("send", &myself).await.is_err());
+        // Hébergé ailleurs : connu par son identité (portefeuille `g1pub_nostr`).
+        let far = "77".repeat(32);
+        let wallet = Account([0x77; 32]);
+        r.db.writer().execute("INSERT INTO identities(hex, role, hosted, g1pub_nostr) VALUES (?1, 'multipass', 0, ?2)", vec![far.clone().into(), wallet.ss58().into()]).await.unwrap();
+        let ask = |id: &str| member_body(json!({ "to": far, "amount_zen": 10, "credit_id": id, "confirm": true }));
+        assert!(matches!(r.svc.handle_member("send", &ask("far-0001")).await, Err(BilletError::Unavailable("zen_credit_no_primal", _))), "sans indexeur, pas d'envoi hors de la station");
+        let unknown = member_body(json!({ "to": "88".repeat(32), "amount_zen": 10, "credit_id": "far-0002", "confirm": true }));
+        assert!(matches!(r.svc.handle_member("send", &unknown).await, Err(BilletError::Refused("zen_credit_unknown_recipient", _))));
+        let master = r.master.ss58();
+        let rig_with = |answer: Result<Option<String>, String>| {
+            let answer = answer.clone();
+            ZenCredit::new(r.db.clone(), r.chain.clone(), Arc::new(Wallets::new(UP.into(), r.db.clone())), r.dir.join("nostr"), ActivityBus::new()).with_retry_delay(Duration::ZERO).with_primal(Arc::new(move |_| {
+                let a = answer.clone();
+                Box::pin(async move { a })
+            }))
+        };
+        assert!(matches!(rig_with(Ok(Some(Account([9; 32]).ss58()))).handle_member("send", &ask("far-0003")).await, Err(BilletError::Refused("zen_credit_foreign", _))));
+        assert!(matches!(rig_with(Ok(None)).handle_member("send", &ask("far-0004")).await, Err(BilletError::Refused("zen_credit_not_activated", _))));
+        rig_with(Ok(Some(master))).handle_member("send", &ask("far-0005")).await.unwrap();
+        let last = r.chain.sent.lock().unwrap().last().cloned().unwrap();
+        assert_eq!((last.0, last.1, last.2), (r.member, wallet, 100));
         let _ = std::fs::remove_dir_all(r.dir);
     }
 

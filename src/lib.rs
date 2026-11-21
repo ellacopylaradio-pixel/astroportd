@@ -4,6 +4,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod beacon;
+pub mod captain_alerts;
 pub mod captains;
 pub mod control;
 pub mod account;
@@ -11,6 +12,8 @@ pub mod address_book;
 pub mod agents;
 pub mod assist;
 pub mod chat;
+pub mod link_preview;
+pub mod web_push;
 pub mod coop_config;
 pub mod delegation;
 pub mod doctor;

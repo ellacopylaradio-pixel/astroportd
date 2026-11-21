@@ -92,7 +92,6 @@ export default {
 "Appareil révoqué": "Dispositivo revocado",
 "Révoquer : sa sauvegarde sera supprimée de votre espace.": "Revocar: su copia de seguridad se eliminará de su espacio.",
 "Mes images publiques": "Mis imágenes públicas",
-"Images que vous avez publiées (photo de profil, bandeau, images envoyées depuis un client Nostr). Elles sont lisibles par tout le monde et comptent dans votre espace : {0} utilisés sur {1}. En retirer une libère de la place ; les publications qui la montrent ne l’afficheront plus.": "Imágenes que ha publicado (foto de perfil, banner, imágenes enviadas desde un cliente Nostr). Cualquiera puede verlas y cuentan en su espacio: {0} usados de {1}. Quitar una libera espacio; las publicaciones que la muestran dejarán de mostrarla.",
 "Utilisée comme bandeau": "Usada como banner",
 "Utilisée comme photo de profil": "Usada como foto de perfil",
 "Image retirée": "Imagen quitada",
@@ -100,4 +99,8 @@ export default {
 "Aucune image publiée pour l’instant.": "Ninguna imagen publicada por ahora.",
 "Réglages avancés": "Ajustes avanzados",
 "Protégé par votre station et vos amis.": "Protegido por tu estación y tus amigos.",
+"Votre photo de profil, votre bandeau et les images que vous avez mises dans vos publications. Tout le monde peut les voir.": "Su foto de perfil, su banner y las imágenes que puso en sus publicaciones. Todo el mundo puede verlas.",
+"Espace utilisé : {0} sur {1}.": "Espacio usado: {0} de {1}.",
+"Espace utilisé : {0} (sans limite).": "Espacio usado: {0} (sin límite).",
+"Retirer une image libère de la place, mais elle disparaît aussi des publications où elle apparaît.": "Retirar una imagen libera espacio, pero también desaparece de las publicaciones donde aparece.",
 };

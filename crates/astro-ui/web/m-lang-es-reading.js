@@ -28,7 +28,6 @@ export default {
 "Tout arrêter": "Detener todo",
 "Retirer {0}": "Quitar {0}",
 "{0} ne lit plus vos documents.": "{0} ya no lee sus documentos.",
-"depuis le {0}": "desde el {0}",
 "Vos documents sont lus par ces stations amies, qui se partagent le travail :": "Sus documentos los leen estas estaciones amigas, que se reparten el trabajo:",
 "Vos documents sont lus par cette station amie :": "Sus documentos los lee esta estación amiga:",
 "Chaque document passe par une station le temps d’être lu, chiffré pendant le trajet ; rien n’y est gardé. Si elle est occupée, il attend son tour ou va chez une autre.": "Cada documento pasa por una estación solo el tiempo de ser leído, cifrado durante el trayecto; no se guarda nada allí. Si está ocupada, espera su turno o va a otra.",

@@ -92,7 +92,9 @@ export default async function account(root, K) {
   const picsList = () => K.api('/api/v1/account/images').then(r => {
     pics.hidden = false;
     pics.replaceChildren(h('h2', {}, t('Mes images publiques')),
-      h('p', { class: 'muted' }, t('Images que vous avez publiées (photo de profil, bandeau, images envoyées depuis un client Nostr). Elles sont lisibles par tout le monde et comptent dans votre espace : {0} utilisés sur {1}. En retirer une libère de la place ; les publications qui la montrent ne l’afficheront plus.', K.bytes(r.used), K.bytes(r.quota))),
+      h('p', { class: 'muted' }, t('Votre photo de profil, votre bandeau et les images que vous avez mises dans vos publications. Tout le monde peut les voir.')),
+      h('p', {}, r.quota ? t('Espace utilisé : {0} sur {1}.', K.bytes(r.used), K.bytes(r.quota)) : t('Espace utilisé : {0} (sans limite).', K.bytes(r.used))),
+      h('p', { class: 'muted' }, t('Retirer une image libère de la place, mais elle disparaît aussi des publications où elle apparaît.')),
       r.images.length ? h('div', { class: 'ac-grid' }, r.images.map(im => h('figure', { class: 'ac-img' },
         h('img', { src: `/ipfs/${im.cid}`, alt: '', loading: 'lazy' }),
         h('figcaption', { class: 'muted' }, K.bytes(im.size), ' · ', K.when(im.added_at), im.in_use ? [h('br'), im.in_use === 'banner' ? t('Utilisée comme bandeau') : t('Utilisée comme photo de profil')] : null),

@@ -1,0 +1,58 @@
+.ch-detail{display:flex;flex-direction:column;height:calc(100vh - 9rem);height:calc(100dvh - 9rem);min-height:20rem;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.ch-head{display:flex;gap:.6rem;align-items:center;padding:.6rem .8rem;border-bottom:1px solid var(--line)}
+.ch-thread{flex:1;overflow-y:auto;padding:.8rem;display:flex;flex-direction:column;gap:.35rem}
+.ch-day{align-self:center;font-size:.75rem;color:var(--muted);margin:.5rem 0}
+.ch-msg{max-width:min(34rem,80%);padding:.4rem .7rem;border-radius:14px;background:var(--panel);border:1px solid var(--line)}
+.ch-msg p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.ch-msg small{display:block;text-align:right;font-size:.7rem}
+.ch-msg.mine{align-self:flex-end;background:var(--accent);color:var(--on-accent);border-color:transparent}.ch-msg.mine small{color:inherit;opacity:.8}
+.ch-msg.failed{outline:2px solid var(--bad)}
+.ch-form{display:flex;gap:.5rem;padding:.6rem;border-top:1px solid var(--line)}.ch-form textarea{flex:1;resize:none;max-height:8rem}
+.ch-meta{display:flex;flex-direction:column;align-items:flex-end;gap:.2rem;margin-left:auto}
+.ch-badge{min-width:1.3rem;padding:0 .35rem;border-radius:1rem;background:var(--accent);color:var(--on-accent);font-size:.75rem;text-align:center}
+@media (max-width:52rem){.ch-detail{height:calc(100vh - 15rem);height:calc(100dvh - 15rem)}}
+.ch-planes{display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.15rem}
+.ch-callbtn{margin-left:auto;min-width:48px;min-height:48px;border-radius:50%;font-size:1.3rem;padding:0}
+.ab-av{position:relative}.ch-dot{position:absolute;right:-2px;bottom:-2px;width:.8rem;height:.8rem;border-radius:50%;border:2px solid var(--panel);background:#1f9d55}.ch-dot.visio{background:#d93636}
+.ch-pres{display:block;font-size:.8rem;color:#1f9d55}.ch-pres.visio{color:#d93636}
+.ch-msg.mine button.ghost{color:inherit;border-color:currentColor}
+.ch-clear{min-width:48px;min-height:48px;padding:0}
+.ch-top{display:flex;gap:.4rem;align-items:center}.ch-top input{flex:1;min-width:0}
+.ch-new{min-width:44px;min-height:44px;padding:0;border-radius:50%;font-size:1.2rem}
+.ab-side{position:relative}.ch-pick{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;background:var(--bg,var(--panel))}
+.ch-pin{border-bottom:1px solid var(--line)}.ch-sec{padding:.4rem .8rem;font-size:.8rem}.ch-found{border-bottom:1px solid var(--line)}
+.ch-msg,.ch-card{position:relative}.ch-msg:focus-visible,.ch-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ch-more{position:absolute;top:.1rem;right:.1rem;min-width:32px;min-height:32px;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;opacity:0;font-size:1.1rem}
+.ch-msg:hover .ch-more,.ch-card:hover .ch-more,.ch-more:focus-visible{opacity:.8}@media (pointer:coarse){.ch-more{display:none}}
+.ch-menu{position:absolute;top:100%;right:0;z-index:4;display:flex;flex-direction:column;min-width:12rem;padding:.3rem;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text,inherit);box-shadow:0 6px 24px #0003}
+.ch-msg.theirs .ch-menu{right:auto;left:0}.ch-menu button{justify-content:flex-start;text-align:left;min-height:44px;border:0;background:transparent;color:inherit}.ch-menu button:hover,.ch-menu button:focus-visible{background:var(--line)}
+.ch-quote{display:block;width:100%;margin:0 0 .3rem;padding:.25rem .5rem;border:0;border-left:3px solid currentColor;border-radius:6px;background:#0001;color:inherit;text-align:left;font-size:.85rem}
+.ch-quote strong{display:block;font-size:.75rem}.ch-quote span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;opacity:.85}
+.ch-flash{animation:ch-flash 1.4s ease}@keyframes ch-flash{30%{box-shadow:0 0 0 4px var(--accent)}}
+.ch-tick{letter-spacing:-.15em}.ch-tick.seen{font-weight:700}.ch-fail{color:var(--bad)}.ch-msg.mine .ch-fail{color:inherit;font-weight:700}
+.ch-card{align-self:center;width:min(36rem,100%);padding:.6rem .8rem;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;background:var(--panel)}
+.ch-card p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.ch-card small{display:block;text-align:right;font-size:.7rem}
+.ch-note{margin:0;padding:.8rem;border-top:1px solid var(--line);text-align:center}.ch-warn{align-self:center;max-width:34rem;text-align:center;font-size:.85rem}
+.ch-compose{border-top:1px solid var(--line)}.ch-form{border-top:0;align-items:flex-end}
+.ch-tool{min-width:44px;min-height:44px;padding:0;font-size:1.2rem}.ch-rec{color:var(--bad);font-size:.9rem;font-variant-numeric:tabular-nums}
+.ch-form button[type=submit]{min-width:48px;min-height:44px;padding:0;font-size:1.2rem}
+.ch-replybar{display:flex;align-items:center;gap:.5rem;padding:.4rem .8rem 0;font-size:.85rem}.ch-replybar span{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ch-img{display:block;padding:0;border:0;background:none;margin:.1rem 0 .3rem}.ch-img img{display:block;max-width:min(18rem,100%);max-height:18rem;border-radius:10px}
+.ch-audio audio{max-width:16rem;height:40px}.ch-doc{display:flex;gap:.3rem;align-items:center;margin:.1rem 0 .3rem;color:inherit}.ch-doc span{overflow-wrap:anywhere}
+.ch-file{font-size:.85rem}.ch-msg a{color:inherit;text-decoration:underline}
+.ch-drop{outline:3px dashed var(--accent);outline-offset:-6px}
+@media (max-width:40rem){.ch-e2e{display:none}.ch-head{gap:.3rem;padding:.4rem}.ch-msg{max-width:88%}}
+.ch-form textarea{min-height:44px;height:44px;line-height:1.35}
+body:has(.ab.open .ch-compose) .fab{display:none}
+.ch-author{display:block;font-size:.75rem;color:var(--accent);margin-bottom:.1rem}
+.ch-msg,.ch-pick li,.ab-list li{touch-action:pan-y}.ch-swiping{opacity:.85}.ch-msg{transition:transform .15s}
+.ch-cuts{display:flex;flex-wrap:wrap;gap:.3rem;margin:.2rem 0 .3rem}.ch-cuts .chip{min-height:32px;font-size:.8rem}
+.ch-vr{min-height:36px;padding:0 .5rem;font-size:.9rem}.ch-audio{display:flex;align-items:center;gap:.3rem;flex-wrap:wrap}
+.ch-prev{display:flex;gap:.5rem;margin:.3rem 0;padding:.4rem;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text,inherit);text-decoration:none;max-width:24rem}
+.ch-prev img{width:4.5rem;height:4.5rem;object-fit:cover;border-radius:6px;flex:none}.ch-prev span{display:flex;flex-direction:column;min-width:0;gap:.1rem}
+.ch-prev strong{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.ch-prev small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-msg.mine .ch-prev{color:var(--text,#111)}
+.ch-gtoggle{margin:.3rem .6rem;align-self:flex-start}.ch-gfoot{display:flex;gap:.4rem;padding:.5rem;border-top:1px solid var(--line)}.ch-gfoot input{flex:1;min-width:0}
+.ch-check{width:1.2rem;height:1.2rem;border:2px solid var(--line);border-radius:4px;flex:none}[aria-pressed=true] .ch-check{background:var(--accent);border-color:var(--accent)}
+.ch-bell{min-width:44px}
+.ab.open .ch-detail{display:flex}
+.ch-head{position:relative}.ch-head .ch-menu{top:100%;right:.5rem}.ch-kebab{min-width:44px;min-height:44px;padding:0;font-size:1.3rem}

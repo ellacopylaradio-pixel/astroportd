@@ -28,7 +28,6 @@ export default {
 "Tout arrêter": "Stop everything",
 "Retirer {0}": "Remove {0}",
 "{0} ne lit plus vos documents.": "{0} no longer reads your documents.",
-"depuis le {0}": "since {0}",
 "Vos documents sont lus par ces stations amies, qui se partagent le travail :": "Your documents are read by these friendly stations, which share the work:",
 "Vos documents sont lus par cette station amie :": "Your documents are read by this friendly station:",
 "Chaque document passe par une station le temps d’être lu, chiffré pendant le trajet ; rien n’y est gardé. Si elle est occupée, il attend son tour ou va chez une autre.": "Each document goes through a station just long enough to be read, encrypted on the way; nothing is kept there. If it is busy, the document waits its turn or goes to another one.",

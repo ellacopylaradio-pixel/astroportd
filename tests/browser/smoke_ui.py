@@ -400,6 +400,30 @@ with sync_playwright() as pw:
     page.screenshot(path=str(OUT / 'chat.png'))
     page.goto(f'http://127.0.0.1:{port}/#/chat?peer=' + 'ab' * 32); page.wait_for_selector('.ch-msg'); page.wait_for_timeout(200)
     check('Oui, avec plaisir !' in page.inner_text('.ch-thread'), "le lien depuis une fiche ouvre directement la conversation")
+    # Menu d'un message (clic droit) : citer et répondre ; la réponse part avec la citation ; coche « remis » ; Ẑen vers un proche d'ici.
+    page.click('.ch-msg.theirs', button='right'); page.wait_for_selector('.ch-menu')
+    check([b.inner_text() for b in page.query_selector_all('.ch-menu button')] == ['↩️ Citer et répondre', '📋 Copier', '🗑️ Supprimer pour moi'], 'clic droit : Répondre, Copier, Supprimer pour moi')
+    page.click('.ch-menu button:has-text("Citer et répondre")'); page.wait_for_selector('.ch-replybar:not([hidden])')
+    page.fill('.ch-form textarea', 'Je te le confirme'); page.press('.ch-form textarea', 'Enter'); page.wait_for_selector('.ch-quote'); page.wait_for_timeout(200)
+    sent = [b for p_, b in STATE['posts'] if p_ == '/api/v1/chat/send']
+    check(sent[-1].get('reply') == 'a' and 'Salut, tu viens samedi ?' in page.inner_text('.ch-quote') and page.is_hidden('.ch-replybar'), 'la réponse part avec le message cité, le montre au-dessus, et le bandeau de réponse se ferme')
+    check(page.query_selector('.ch-msg.mine .ch-tick') is not None, 'ses messages portent la coche « remis »')
+    page.click('.ch-kebab'); page.wait_for_selector('.ch-head .ch-menu')
+    check([x.inner_text() for x in page.query_selector_all('.ch-head .ch-menu button')] == ['Ẑ Envoyer des Ẑen à Léa', '🗑️ Effacer la conversation'], 'menu ⋮ : payer et effacer, en toutes lettres')
+    page.keyboard.press('Escape')
+    page.click('.ch-new'); page.wait_for_selector('.ch-pick li button'); page.wait_for_timeout(200)
+    check('Léa' in page.inner_text('.ch-pick') and 'Vous vous suivez' in page.inner_text('.ch-pick'), '« Nouveau message » : les proches, avec ce qui les rend joignables')
+    page.keyboard.press('Escape')
+    page.set_viewport_size(dict(width=400, height=800)); page.wait_for_timeout(300)
+    check(page.evaluate("document.querySelector('main').scrollWidth") <= 400, 'chat à 400 px : aucun débordement horizontal')
+    page.screenshot(path=str(OUT / 'chat-400.png'))
+    page.set_viewport_size(dict(width=1100, height=800))
+    # Hors du chat, un message non lu : lien « 💬 1 » dans l'en-tête, vers la conversation.
+    STATE['chat'].append(dict(id='z', mine=False, at=1790009000, text='Tu as vu ?', state='ok', seen=False)); STATE['chat_read'] = False
+    page.goto(f'http://127.0.0.1:{port}/#/'); page.reload(); page.wait_for_selector('#chat-in'); page.wait_for_timeout(200)
+    check('💬' in page.inner_text('#chat-in') and page.get_attribute('#chat-in', 'href').startswith('#/chat'), "un message non lu : lien d'accès au chat dans l'en-tête")
+    page.click('#chat-in'); page.wait_for_selector('.ab-list li button'); page.wait_for_timeout(200)
+    check(page.url.endswith('#/chat'), "le lien de l'en-tête ouvre le chat")
     # Mes UPlanet : les clés dans les autres plans et l'annonce publique, sur demande seulement.
     page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#announce-links', state='attached'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#announce-links'); page.wait_for_timeout(200)
     check('Mes autres comptes' in page.inner_text('main') and 'zen1' not in page.inner_text('main'), 'Mon compte parle de « mes autres comptes », sans constellation ni clé')

@@ -178,7 +178,8 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
             [("picture", "picture_cid"), ("banner", "banner_cid")].into_iter().find(|(url, cidf)| profile[*cidf].as_str() == Some(cid) || profile[*url].as_str().and_then(crate::profile_image::cid_of) == Some(cid)).map(|(k, _)| k)
         };
         let images: Vec<Value> = rows.iter().map(|(cid, mime, size, at)| json!({ "cid": cid, "mime": mime, "size": size, "added_at": at, "in_use": in_use(cid) })).collect();
-        Ok(json!({ "images": images, "used": used, "quota": quota }))
+        // Espace sans limite (Capitaine) : `null`, jamais `u64::MAX` (l'écran afficherait « 16777216 To »).
+        Ok(json!({ "images": images, "used": used, "quota": (quota != u64::MAX).then_some(quota) }))
     }
     async fn public_image_delete(&self, who: &Principal, cid: String) -> Result<Value, ApiError> {
         if !astro_dav::blob::is_cid(&cid) {

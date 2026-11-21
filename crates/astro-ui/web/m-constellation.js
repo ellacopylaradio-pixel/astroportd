@@ -4,7 +4,7 @@
 import { flow, short } from '/ui/m-flow.js';
 
 const KIND = { wallet: 'portefeuille', master: 'maître', billets: 'billets', members: 'membres', outside: 'extérieur', intrus: 'intrusion' };
-const PRIMAL = { verified: 'reçue du Ğ1 maître ✓', foreign: '✗ venue d\'ailleurs', done: 'envoyée, vérification en cours', pending: 'en attente', master: 'maître' };
+const PRIMAL = { verified: 'reçue du Ğ1 maître ✓', foreign: '✗ venue d\'ailleurs', done: 'envoyée, vérification en cours', unknown: 'envoi interrompu : voir les alertes', pending: 'en attente', master: 'maître' };
 const g1 = c => c == null ? '—' : (c / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // Texte de la charte : titres `#`, **gras**, liens `[texte](adresse)` réduits à leur texte ; jamais d'HTML.
@@ -35,7 +35,7 @@ export default async function constellation(box, K) {
   const total = ov.wallets.reduce((n, w) => n + (w.zen_cents || 0), 0);
 
   const rows = ov.wallets.map(w => h('tr', { class: w.name === 'INTRUSION' && w.g1_cents > 0 ? 'cs-bad' : '' }, h('td', {}, h('strong', {}, w.name)), h('td', { class: 'muted', title: w.address }, `${w.address.slice(0, 6)}…${w.address.slice(-4)}`),
-    h('td', { class: 'n' }, g1(w.g1_cents)), h('td', { class: 'n' }, g1(w.zen_cents)), h('td', { class: w.primal === 'verified' ? 'ok' : w.primal === 'foreign' ? 'down' : '' }, t(PRIMAL[w.primal] || w.primal))));
+    h('td', { class: 'n' }, g1(w.g1_cents)), h('td', { class: 'n' }, g1(w.zen_cents)), h('td', { class: w.primal === 'verified' ? 'ok' : w.primal === 'foreign' || w.primal === 'unknown' ? 'down' : '' }, t(PRIMAL[w.primal] || w.primal))));
   const wallets = h('section', { class: 'card wide' }, h('h2', {}, t('Portefeuilles de la coopérative')),
     h('p', { class: 'muted' }, t('Visibles par tous les membres : l\'argent commun n\'a rien de caché. Soldes lus sur la chaîne Ğ1.')),
     ov.chain ? null : h('p', { class: 'degraded', role: 'status' }, t('Cette station n\'est pas reliée à la chaîne Ğ1 : les soldes ne sont pas disponibles.')),

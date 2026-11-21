@@ -234,7 +234,11 @@ fn apply_schema(conn: &Connection) -> Result<(), DbError> {
 
 /// Colonnes ajoutées après la première version du schéma : `(table, colonne, définition)`.
 /// `CREATE TABLE IF NOT EXISTS` ne modifie pas une table existante ; une base créée avant l'ajout reçoit la colonne ici.
-const ADDED_COLUMNS: [(&str, &str, &str); 9] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 13] = [
+    ("chat_messages", "author", "TEXT"),
+    ("chat_messages", "reply", "TEXT"),
+    ("chat_messages", "meta", "TEXT"),
+    ("chat_messages", "seen", "INTEGER NOT NULL DEFAULT 0"),
     ("identities", "peer_id", "TEXT"),
     ("capital_assets", "node_hex", "TEXT"),
     ("faces", "contact_uid", "TEXT"),

@@ -245,9 +245,23 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   state     TEXT NOT NULL DEFAULT 'ok' CHECK (state IN ('ok','failed')),
   read      INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0,1)),
   n         INTEGER NOT NULL DEFAULT 0,   -- ordre d'insertion : départage deux messages de la même seconde
+  reply     TEXT,                         -- message cité (identifiant de rumeur, balise `e`)
+  meta      TEXT,                         -- pièces jointes (JSON : nom, type, taille ; chemin uCloud côté expéditeur)
+  seen      INTEGER NOT NULL DEFAULT 0,   -- message envoyé que l'autre a lu (accusé de lecture reçu)
+  author    TEXT,                         -- conversation de groupe : qui a écrit (sinon `peer`, ou le titulaire si `mine`)
   PRIMARY KEY (owner_hex, id)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS chat_by_peer ON chat_messages(owner_hex, peer, at);
+
+-- Conversations de groupe (NIP-17 : une rumeur, plusieurs `p`) vues par un titulaire. ÉTAT LOCAL : l'identifiant se recalcule
+-- des participants (empreinte de leurs clés triées), le nom vient de la balise `subject` ; relire les enveloppes les recrée.
+CREATE TABLE IF NOT EXISTS chat_groups (
+  owner_hex TEXT NOT NULL,
+  id        TEXT NOT NULL,             -- 64 hex : sha256("astro-group:" + clés triées, séparées par des virgules)
+  name      TEXT,
+  members   TEXT NOT NULL,             -- JSON : clés des participants, titulaire compris
+  PRIMARY KEY (owner_hex, id)
+) STRICT, WITHOUT ROWID;
 
 -- Partages FaceCloud déjà effectués (un par photo et destinataire) : état LOCAL, évite les doublons au retraitement.
 CREATE TABLE IF NOT EXISTS face_shares (
@@ -895,3 +909,19 @@ CREATE TABLE IF NOT EXISTS kubo_mirror (
   nocopy INTEGER NOT NULL CHECK (nocopy IN (0, 1)),
   at     INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
+
+-- Boîte d'alertes du Capitaine (ÉTAT LOCAL, non rejouable : ce sont des événements de cette station, pas des faits Nostr).
+-- Une alerte reste ouverte (`done_at` nul) jusqu'à ce que le Capitaine la marque traitée ; une alerte identique encore
+-- ouverte n'ajoute pas de ligne (`count`, `last_at`). Voir `src/captain_alerts.rs`.
+CREATE TABLE IF NOT EXISTS captain_alerts (
+  id       INTEGER PRIMARY KEY,
+  source   TEXT NOT NULL,
+  message  TEXT NOT NULL,
+  data     TEXT,
+  first_at INTEGER NOT NULL,
+  last_at  INTEGER NOT NULL,
+  count    INTEGER NOT NULL DEFAULT 1,
+  done_at  INTEGER,
+  done_by  TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS captain_alerts_open ON captain_alerts(source, message) WHERE done_at IS NULL;

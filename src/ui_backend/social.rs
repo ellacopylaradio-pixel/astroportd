@@ -129,8 +129,18 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
         let out = match op {
             ChatOp::List => chat.conversations(o).await,
             ChatOp::Messages(peer, before) => chat.messages(o, &peer, before).await,
-            ChatOp::Send(peer, text) => chat.send(o, &peer, &text).await,
+            ChatOp::Send { peer, text, reply, reply_at, files } => chat.send_full(o, &peer, &text, reply.as_deref(), reply_at, &files).await,
             ChatOp::Read(peer) => chat.mark_read(o, &peer).await,
+            ChatOp::Clear(peer) => chat.clear(o, &peer).await,
+            ChatOp::Delete(id) => chat.delete(o, &id).await,
+            ChatOp::Search(q) => chat.search(o, &q).await,
+            ChatOp::Group(b) => {
+                let members: Vec<String> = b["members"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).take(40).collect()).unwrap_or_default();
+                chat.create_group(o, b["name"].as_str().unwrap_or_default(), &members).await
+            }
+            ChatOp::Preview(url) => chat.preview(&url).await,
+            ChatOp::PushKey => chat.push_key().await,
+            ChatOp::Push(b) => chat.push_subscribe(o, b["endpoint"].as_str().unwrap_or_default(), b["on"].as_bool().unwrap_or(true)).await,
             ChatOp::Signal(sig) => chat.signal(o, sig["peer"].as_str().unwrap_or_default(), &sig).await,
         };
         out.map_err(|e| match e {

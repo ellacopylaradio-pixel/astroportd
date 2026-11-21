@@ -6,13 +6,17 @@ const RANK = { down: 0, degraded: 1, info: 2, ok: 3 };
 const FLOORS = [['machine', '🖥️', 'Machine', '#/machine'], ['station', '📡', 'Station', '#/machine'], ['mesh', '🌐', 'Constellation', '#/planes'], ['services', '🔌', 'Services et accès', '#/options'], ['members', '👥', 'Membres', '#/members'], ['economy', '🪙', 'Économie', '#/coop']];
 const worst = (a, b) => (RANK[a] <= RANK[b] ? a : b);
 
-export function analyze({ health, cs, ec, ac, tun, tk, dash, dns, en }) {
+export function analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al }) {
   const todos = [], add = (level, floor, title, why, label, href, post) => todos.push({ level, floor, title, why, label, href, post });
   const nodes = cs?.nodes || [], me = nodes.find(n => n.self), others = nodes.filter(n => !n.self);
   // Station
   for (const [name, v] of Object.entries(health?.subsystems || {})) {
     if (v.status === 'down' || v.status === 'degraded') add(v.status, 'station', `${name} : ${v.status === 'down' ? 'en panne' : 'dégradé'}`, v.detail || '', 'Voir le détail', '#/machine');
   }
+  // Alertes enregistrées (elles attendent le Capitaine, même absent au moment où elles sont arrivées).
+  const pending = al?.pending?.length || 0, alerts = al?.alerts || [];
+  if (pending) add('down', 'economy', ['{0} virement(s) à l\'issue inconnue', pending], 'La station s\'est arrêtée pendant un envoi : vérifiez le solde avant de rejouer quoi que ce soit.', 'Voir les alertes', '#/alerts');
+  if (alerts.length) add('degraded', 'station', ['{0} alerte(s) à traiter', alerts.length], alerts[0].message, 'Voir les alertes', '#/alerts');
   // Constellation
   if (dash?.p2p && dash.p2p.enabled === false) add('degraded', 'mesh', 'Le maillage P2P est arrêté', 'Sans lui, aucune station ne peut vous joindre ni partager Ollama ou ComfyUI. Démarrez avec --p2p-listen.', 'Voir les constellations', '#/planes');
   else if (cs && !others.length) add('info', 'mesh', 'Vous êtes seul dans l\'essaim', 'Aucune autre station n\'est vue : rejoignez une constellation ou indiquez un dossier de pairs (--swarm-dir).', 'Rejoindre', '#/planes');
@@ -176,8 +180,8 @@ export default async function cockpit(root, K) {
   };
   const welcome = () => { const d = welcomeDialog(K); K.cleanup(() => d.remove()); };
   const draw = async () => {
-    const [dash, health, cs, ec, ac, tun, tk, dns, fuel, en, paf] = await Promise.all([api('/api/v1/dashboard'), fetch('/health').then(r => r.json()).catch(() => null), soft('/api/v1/station/constellation'), soft('/api/v1/station/economy'), soft('/api/v1/station/accounts'), soft('/api/v1/station/admin/tunnels'), soft('/api/v1/station/admin/tasks'), soft('/api/v1/station/admin/dnslink'), soft('/api/v1/station/fuel'), soft('/api/v1/station/energy'), soft('/api/v1/station/paf')]);
-    const a = analyze({ health, cs, ec, ac, tun, tk, dash, dns, en }), st = dash.station, su = setup({ dash, cs, ac, dns });
+    const [dash, health, cs, ec, ac, tun, tk, dns, fuel, en, paf, al] = await Promise.all([api('/api/v1/dashboard'), fetch('/health').then(r => r.json()).catch(() => null), soft('/api/v1/station/constellation'), soft('/api/v1/station/economy'), soft('/api/v1/station/accounts'), soft('/api/v1/station/admin/tunnels'), soft('/api/v1/station/admin/tasks'), soft('/api/v1/station/admin/dnslink'), soft('/api/v1/station/fuel'), soft('/api/v1/station/energy'), soft('/api/v1/station/paf'), soft('/api/v1/station/alerts')]);
+    const a = analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al }), st = dash.station, su = setup({ dash, cs, ac, dns });
     // Tant que la mise en service n'est pas finie, ses étapes disent déjà les informations (station seule, adresses) : pas de doublon.
     const todos = su.left ? a.todos.filter(x => x.level !== 'info') : a.todos;
     const todo = x => h('li', { class: 'ck-todo ' + x.level }, h('div', {}, h('strong', {}, t(...[x.title].flat())), h('p', { class: 'muted' }, t(x.why))), x.post

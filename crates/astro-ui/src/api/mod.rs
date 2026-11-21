@@ -147,10 +147,35 @@ pub enum ChatOp {
     List,
     /// Messages avec un correspondant, avant un horodatage éventuel.
     Messages(String, Option<i64>),
-    /// Envoie un texte à un correspondant.
-    Send(String, String),
+    /// Envoie un texte à un correspondant, en réponse à un message éventuel, avec des pièces jointes déjà partagées.
+    Send {
+        /// Correspondant.
+        peer: String,
+        /// Texte (vide permis s'il y a des pièces jointes).
+        text: String,
+        /// Message cité.
+        reply: Option<String>,
+        /// Réponse à un message vocal : instant de l'original (ms).
+        reply_at: Option<u64>,
+        /// Pièces jointes `{ name, mime, size, path }`.
+        files: Vec<Value>,
+    },
     /// Marque la conversation comme lue.
     Read(String),
+    /// Efface la conversation pour le titulaire seul.
+    Clear(String),
+    /// Efface un message pour le titulaire seul.
+    Delete(String),
+    /// Cherche dans les messages du titulaire.
+    Search(String),
+    /// Crée un groupe `{ name, members }`.
+    Group(Value),
+    /// Aperçu riche d'un lien.
+    Preview(String),
+    /// Clé publique des notifications (VAPID).
+    PushKey,
+    /// Abonne (`on`) ou désabonne un navigateur `{ endpoint, on }`.
+    Push(Value),
     /// Signal d'appel visio `{ peer, type, call, sdp?, video?, missed? }`.
     Signal(Value),
 }

@@ -658,6 +658,7 @@ dependencies = [
  "percent-encoding",
  "quick-xml",
  "rcgen 0.13.2",
+ "ring",
  "rusqlite",
  "rustls",
  "serde",

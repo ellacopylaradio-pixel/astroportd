@@ -16,3 +16,18 @@ self.addEventListener('fetch', e => {
     return hit || (await net) || new Response('Hors ligne : la station est injoignable.', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   }));
 });
+// Réveil du chat (Web Push sans contenu) : la station ne dit rien du message au service de push ; on affiche « Nouveau message »,
+// sauf si l'application est déjà ouverte et visible. Un clic ouvre (ou ramène) les conversations.
+const NEW = { fr: 'Nouveau message', en: 'New message', es: 'Nuevo mensaje' }, OPEN = { fr: 'Touchez pour lire', en: 'Tap to read', es: 'Toque para leer' };
+self.addEventListener('push', e => e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+  if (cs.some(c => c.visibilityState === 'visible')) return;
+  const lg = (self.navigator.language || 'fr').slice(0, 2), l = NEW[lg] ? lg : 'fr';
+  return self.registration.showNotification(NEW[l], { body: OPEN[l], tag: 'chat', renotify: true, icon: '/ui/icon.svg', badge: '/ui/icon.svg', data: { url: '/#/chat' } });
+})));
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    const c = cs.find(x => new URL(x.url).origin === location.origin);
+    return c ? c.focus().then(w => w.navigate?.('/#/chat')) : self.clients.openWindow('/#/chat');
+  }));
+});

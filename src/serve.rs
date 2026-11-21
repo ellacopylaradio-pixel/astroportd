@@ -853,6 +853,8 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         }));
         background.push(tokio::spawn(bus.run(Duration::from_secs(a.bus_poll_secs.max(1)), stop_watch.clone())));
     }
+    // Les alertes du Capitaine survivent à son absence et aux redémarrages : enregistrées, puis message privé.
+    background.push(tokio::spawn(Arc::new(astroportd::captain_alerts::CaptainAlerts::new(db.clone(), notify.clone())).run(activity.clone(), stop_watch.clone())));
     // Publication des événements signés (santé économique, vidéos) : relai local puis relais.
     let event_publisher = {
         let mut client = WsClient::new(Duration::from_secs(30));
@@ -1163,7 +1165,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         // Présence visio (sur option, amis mutuels) : même remise aux stations des amis que le chat.
         let presence = Arc::new(astroportd::presence::Presence::new(db.clone(), chat_keys.clone(), activity.clone(), deliver.clone(), publish_local.clone()));
         background.push(tokio::spawn(presence.clone().run(relay.subscribe(), stop_watch.clone())));
-        let chat = Arc::new(astroportd::chat::Chat::new(db.clone(), chat_keys, deliver, publish_local, activity.clone()).with_people(people.clone()).with_turn_opt(turn));
+        let chat = Arc::new(astroportd::chat::Chat::new(db.clone(), chat_keys, deliver, publish_local, activity.clone()).with_people(people.clone()).with_turn_opt(turn).with_push(Arc::new(astroportd::web_push::WebPush::new(db.clone()))));
         background.push(tokio::spawn(chat.clone().run(Duration::from_secs(3), relay.subscribe(), stop_watch.clone())));
         println!("chat : conversations privées 1 à 1 (NIP-17), réception dès l'arrivée (contrôle toutes les 3 s) ; présence visio sur option");
         (chat, presence)
@@ -1237,7 +1239,16 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     }
     // Versement de Ẑen par le Capitaine (circuit du `UPLANET.official.sh -l`) : il lui faut la chaîne et les comptes hébergés.
     if let (Some(chain), Some(dir)) = (zen_credit_chain, &station.nostr_dir) {
-        let svc = Arc::new(astroportd::zen_credit::ZenCredit::new(db.clone(), chain, ui_wallets.clone(), dir.clone(), activity.clone()));
+        let mut zc = astroportd::zen_credit::ZenCredit::new(db.clone(), chain, ui_wallets.clone(), dir.clone(), activity.clone());
+        // Contrôle primal (indexeur squid) : un membre peut alors payer un MULTIPASS hébergé ailleurs dans la constellation.
+        if !squid_urls.is_empty() {
+            let sp = Arc::new(astroportd::funds::SquidPrimal::new(squid_urls.clone()));
+            zc = zc.with_primal(Arc::new(move |a: String| {
+                let sp = sp.clone();
+                Box::pin(async move { astroportd::funds::PrimalSource::primal_of(&*sp, &a).await })
+            }));
+        }
+        let svc = Arc::new(zc);
         // Dons OpenCollective → Ẑen (l'`oc2uplanet.sh` du legacy) : la station liste, le Capitaine confirme.
         let oc = Arc::new(astroportd::oc_emission::OcEmission::new(db.clone(), uplanet_name.to_string(), svc.clone(), activity.clone()));
         background.push(tokio::spawn(oc.clone().run(stop_watch.clone())));

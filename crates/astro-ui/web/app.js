@@ -198,12 +198,20 @@ grid.append(lazy(btn, () => (kindOf(it.mime) === 'image' ? blobUrl(it.path, !!it
 }
 }
 const feed = [], listeners = new Set(), started = Date.now();
-function badge(n) { const a = $('nav a[data-r=people]'); if (!a) return; let b = a.querySelector('.ch-badge'); if (!n) return b?.remove(); if (!b) a.append(b = h('span', { class: 'ch-badge' })); b.textContent = n; }
+// Messages non lus : pastille sur l'onglet Proches et lien « 💬 N » dans l'en-tête, vers la conversation du dernier message reçu.
+let lastPeer = '';
+function badge(n) {
+const a = $('nav a[data-r=people]'); let b = a?.querySelector('.ch-badge'), l = $('#chat-in');
+if (!n) { b?.remove(); l?.remove(); return; }
+if (a && !b) a.append(b = h('span', { class: 'ch-badge' })); if (b) b.textContent = n;
+if (!l) $('.tools').prepend(l = h('a', { id: 'chat-in', class: 'chat-in' }));
+l.href = '#/chat' + (lastPeer ? '?peer=' + lastPeer : ''); l.replaceChildren('💬 ', h('b', {}, String(n))); l.title = t('{0} message(s) non lu(s)', n); l.setAttribute('aria-label', l.title);
+}
 const refreshBadge = () => api('/api/v1/chat').then(r => badge(r.unread)).catch(() => {}); // sans chat sur cette station : pas de pastille
 function startLive() {
 startLive = () => {};
 live(ev => {
-if (ev.source === 'chat:msg') { refreshBadge(); if (!location.hash.startsWith('#/chat')) toast(t('Nouveau message'), 1); }
+if (ev.source === 'chat:msg') { if (/^[0-9a-f]{64}$/.test(ev.message)) lastPeer = ev.message; refreshBadge(); if (!location.hash.startsWith('#/chat')) toast(t('Nouveau message'), 1); }
 if (ev.kind === 'call') mod('m-call.js').then(m => m.signal(K, ev.data), e => toast(e.message)); // visio
 feed.push(ev); if (feed.length > 200) feed.shift();
 listeners.forEach(l => l(ev));
@@ -240,7 +248,8 @@ await new Promise(ok => setTimeout(ok, wait)); wait = Math.min(wait * 2, 30000);
 let dict = {};
 // Phrases propres à un écran : chargées avec lui (voir m-lang-<lg>.js).
 let PARTS = new Set(); const parts = new Set();
-const mod = async f => { const p = f.slice(2, -3); if (lang !== 'fr' && PARTS.has(p) && !parts.has(p)) { parts.add(p); try { Object.assign(dict, (await import(`/ui/m-lang-${lang}-${p}.js`)).default); tr(document.body); } catch (e) { toast(e.message); } } return import('/ui/' + f); };
+// Le chat (`c-*`) a son propre dictionnaire, `c-lang-<lg>.js`, chargé avec son premier fichier.
+const mod = async f => { const c = f.startsWith('c-'), p = c ? 'c' : f.slice(2, -3); if (lang !== 'fr' && (c || PARTS.has(p)) && !parts.has(p)) { parts.add(p); try { Object.assign(dict, (await import(c ? `/ui/c-lang-${lang}.js` : `/ui/m-lang-${lang}-${p}.js`)).default); tr(document.body); } catch (e) { toast(e.message); } } return import('/ui/' + f); };
 const LANGS = ['fr', 'en', 'es'], lsGet = () => { try { return localStorage.getItem('lang'); } catch { return null; } };
 const lang = LANGS.find(l => l === (lsGet() || navigator.language.slice(0, 2))) || 'fr';
 const t = (s, ...a) => a.reduce((r, v, i) => r.replace(`{${i}}`, v), dict[s] ?? s);
@@ -267,7 +276,7 @@ const sure = (label, run, why, attrs) => {
   } }, label);
   return h('span', {}, b, note);
 };
-const K = { req, auth: authHeader, sure, mod, t, lang, setLang, login: (u, p) => store.set('basic', btoa(`${u}:${p}`)), h, api, toast, when, bytes, span, pill, table, open, blob: blobUrl, tiles, every, enc, del, picker, mark, photos, dav: v => { if (v) dav = v; }, cleanup: f => cleanups.push(f), planeHref: (n, hash) => planeHref && planeHref(n, hash), listen: f => { listeners.add(f); cleanups.push(() => listeners.delete(f)); }, chatUnread: n => badge(n), feed, listeners };
+const K = { req, auth: authHeader, sure, mod, t, lang, setLang, login: (u, p) => store.set('basic', btoa(`${u}:${p}`)), h, api, toast, when, bytes, span, pill, table, open, blob: blobUrl, tiles, every, enc, del, picker, mark, photos, dav: v => { if (v) dav = v; }, davRoot: () => dav, cleanup: f => cleanups.push(f), planeHref: (n, hash) => planeHref && planeHref(n, hash), listen: f => { listeners.add(f); cleanups.push(() => listeners.delete(f)); }, chatUnread: n => badge(n), feed, listeners };
 const lazyView = f => async (root, q) => (await mod(f)).default(root, K, q);
 let me = null, shell = null;
 async function route() {

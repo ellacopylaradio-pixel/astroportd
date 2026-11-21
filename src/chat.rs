@@ -56,6 +56,56 @@ const CALL_TTL: u64 = 600;
 pub const MISSED: &str = "📹 Appel manqué";
 /// Côté appelant : l'ami n'a pas décroché.
 pub const UNANSWERED: &str = "📹 Appel sans réponse";
+/// Pièces jointes au plus par message.
+pub const MAX_FILES: usize = 10;
+/// Accusé de lecture : rumeur kind 14 de service (balise `t`), jamais montrée comme un message ; son contenu est la date du
+/// dernier message lu. Elle voyage dans une enveloppe qui expire.
+pub const RECEIPT_TAG: &str = "astro-read";
+/// Durée de vie d'une enveloppe d'accusé de lecture sur les relais.
+const RECEIPT_TTL: u64 = 7 * 86_400;
+/// Résultats de recherche au plus.
+const SEARCH_MAX: i64 = 50;
+/// Participants d'un groupe au plus, titulaire compris.
+pub const MAX_GROUP: usize = 20;
+
+/// Identifiant d'une conversation de groupe : empreinte des clés des participants (titulaire compris), triées. Chacun le
+/// recalcule de son côté à partir des balises `p` de la rumeur et de son auteur.
+pub fn group_id(members: &[String]) -> String {
+    use sha2::Digest;
+    let mut m: Vec<&str> = members.iter().map(String::as_str).collect();
+    m.sort_unstable();
+    m.dedup();
+    sha2::Sha256::digest(format!("astro-group:{}", m.join(","))).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Une pièce jointe annoncée dans un message : le fichier lui-même voyage par le partage du uCloud (`/Partages/De_…/` chez
+/// l'ami) ; le message n'en porte que le nom, le type et la taille (balise `file`), plus, côté expéditeur seulement, son chemin.
+fn file_of(v: &Value) -> Option<Value> {
+    let name = v["name"].as_str().map(str::trim).filter(|n| !n.is_empty() && n.chars().count() <= 200 && !n.contains('/') && !n.chars().any(char::is_control) && *n != "." && *n != "..")?;
+    let mime = v["mime"].as_str().filter(|m| m.len() <= 100 && m.bytes().all(|b| b.is_ascii_graphic())).unwrap_or("application/octet-stream");
+    let size = v["size"].as_u64().unwrap_or(0);
+    let mut out = json!({ "name": name, "mime": mime, "size": size });
+    if let Some(p) = v["path"].as_str().filter(|p| p.starts_with('/') && p.len() <= 1024 && !p.split('/').any(|s| s == "..")) {
+        out["path"] = json!(p);
+    }
+    Some(out)
+}
+
+/// Un message à ranger.
+struct Row<'a> {
+    id: &'a str,
+    mine: bool,
+    at: i64,
+    text: &'a str,
+    state: &'a str,
+    read: bool,
+    reply: Option<&'a str>,
+    /// Réponse à un message vocal : l'instant de l'original (millisecondes) où la lecture s'est arrêtée pour répondre.
+    reply_at: Option<u64>,
+    files: &'a [Value],
+    /// Groupe : qui a écrit.
+    author: Option<&'a str>,
+}
 
 /// Erreurs d'usage du chat.
 #[derive(Debug, thiserror::Error)]
@@ -103,12 +153,22 @@ pub struct Chat {
     /// Salles d'appel de groupe où un ami a invité le membre : `(membre, salle) → (hôte, participants, échéance)`. Un
     /// participant qui n'est pas un proche du membre ne peut le joindre que dans une telle salle. État en mémoire.
     rooms: std::sync::Mutex<std::collections::HashMap<(String, String), Room>>,
+    /// Réveil des navigateurs du membre à l'arrivée d'un message (Web Push sans contenu).
+    push: Option<Arc<crate::web_push::WebPush>>,
+    /// Aperçus des liens (cache en mémoire).
+    previews: crate::link_preview::Previews,
 }
 
 impl Chat {
     /// `deliver` remet l'enveloppe à l'ami ; `publish_local` la publie sur le relai de cette station (copie de l'expéditeur).
     pub fn new(db: Arc<Db>, keys: Arc<dyn KeySource>, deliver: DeliverFn, publish_local: DeliverFn, activity: ActivityBus) -> Self {
-        Self { db, keys, deliver, publish_local, activity, people: None, turn: None, rooms: std::sync::Mutex::default() }
+        Self { db, keys, deliver, publish_local, activity, people: None, turn: None, rooms: std::sync::Mutex::default(), push: None, previews: crate::link_preview::Previews::default() }
+    }
+
+    /// Réveille les navigateurs abonnés d'un membre quand un message lui arrive.
+    pub fn with_push(mut self, push: Arc<crate::web_push::WebPush>) -> Self {
+        self.push = Some(push);
+        self
     }
 
     /// Relais d'appel : une offre vers un membre de la station ou un ami réciproque emporte des identifiants pour lui seul.
@@ -173,50 +233,237 @@ impl Chat {
 
     /// Envoie `text` à `peer`. Rend le message tel qu'il est rangé (`state` : `ok` ou `failed`, avec `error`).
     pub async fn send(&self, owner: &str, peer: &str, text: &str) -> Result<Value, ChatError> {
+        self.send_full(owner, peer, text, None, None, &[]).await
+    }
+
+    /// Comme [`Self::send`], en réponse au message `reply` (balise `e`, NIP-17) — à l'instant `reply_at` (ms) d'un message
+    /// vocal, balise `offset` — et avec des pièces jointes déjà partagées (`{ name, mime, size, path }`, au plus
+    /// [`MAX_FILES`]). Sans texte, le message dit les noms des fichiers. `peer` peut être un groupe ([`Self::create_group`]) :
+    /// la rumeur porte alors une balise `p` par participant et part, emballée, vers chacun.
+    pub async fn send_full(&self, owner: &str, peer: &str, text: &str, reply: Option<&str>, reply_at: Option<u64>, files: &[Value]) -> Result<Value, ChatError> {
         if !is_hex64(peer) || peer == owner {
             return Err(ChatError::Invalid("destinataire invalide".into()));
         }
-        let text = clean(text);
+        if files.len() > MAX_FILES {
+            return Err(ChatError::Invalid(format!("{MAX_FILES} pièces jointes au plus par message")));
+        }
+        let files: Vec<Value> = files.iter().map(|f| file_of(f).ok_or_else(|| ChatError::Invalid("pièce jointe invalide".into()))).collect::<Result<_, _>>()?;
+        let reply = match reply {
+            Some(r) if !is_hex64(r) => return Err(ChatError::Invalid("message cité invalide".into())),
+            r => r,
+        };
+        let reply_at = reply.and(reply_at);
+        let mut text = clean(text);
+        if text.is_empty() && !files.is_empty() {
+            text = files.iter().map(|f| format!("📎 {}", f["name"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n");
+        }
         if text.is_empty() {
             return Err(ChatError::Invalid("message vide".into()));
         }
         if text.chars().count() > MAX_CHARS {
             return Err(ChatError::Invalid(format!("message trop long (plus de {MAX_CHARS} caractères)")));
         }
-        let peer = self.channel(peer).await?;
+        let group = self.group(owner, peer).await;
+        let peer = if group.is_some() { peer.to_owned() } else { self.channel(peer).await? };
         let peer = peer.as_str();
         let secret = self.keys.secret(owner).ok_or(ChatError::NoKey)?;
         let at = now();
-        let rumor = nip59::Rumor { pubkey: owner.to_owned(), created_at: u64::try_from(at).unwrap_or(0), kind: kind::CHAT, tags: vec![vec!["p".into(), peer.to_owned()]], content: text.clone() };
+        let targets: Vec<String> = match &group {
+            Some((_, members)) => members.iter().filter(|m| *m != owner).cloned().collect(),
+            None => vec![peer.to_owned()],
+        };
+        let mut tags: Vec<Vec<String>> = targets.iter().map(|t| vec!["p".into(), t.clone()]).collect();
+        if let Some(name) = group.as_ref().and_then(|g| g.0.clone()) {
+            tags.push(vec!["subject".into(), name]);
+        }
+        if let Some(r) = reply {
+            tags.push(vec!["e".into(), r.to_owned(), String::new(), "reply".into()]);
+        }
+        if let Some(ms) = reply_at {
+            tags.push(vec!["offset".into(), ms.to_string()]);
+        }
+        // Le chemin reste ici : l'ami ne reçoit que le nom, le type et la taille.
+        tags.extend(files.iter().map(|f| vec!["file".into(), f["name"].as_str().unwrap_or_default().to_owned(), f["mime"].as_str().unwrap_or_default().to_owned(), f["size"].to_string()]));
+        let rumor = nip59::Rumor { pubkey: owner.to_owned(), created_at: u64::try_from(at).unwrap_or(0), kind: kind::CHAT, tags, content: text.clone() };
         let id = rumor.id().map_err(|e| ChatError::Invalid(e.to_string()))?;
-        let to_peer = nip59::gift_wrap(&secret, peer, &rumor, rumor.created_at).map_err(|e| ChatError::Invalid(e.to_string()))?;
-        let to_self = nip59::gift_wrap(&secret, owner, &rumor, rumor.created_at).map_err(|e| ChatError::Invalid(e.to_string()))?;
+        let mut errors = Vec::new();
+        for t in &targets {
+            let wrap = nip59::gift_wrap(&secret, t, &rumor, rumor.created_at).map_err(|e| ChatError::Invalid(e.to_string()))?;
+            if let Err(e) = (self.deliver)(t.clone(), wrap).await {
+                errors.push(e);
+            }
+        }
         // La copie personnelle ne bloque pas la remise : on dit l'échec des deux.
-        let delivered = (self.deliver)(peer.to_owned(), to_peer).await;
+        let to_self = nip59::gift_wrap(&secret, owner, &rumor, rumor.created_at).map_err(|e| ChatError::Invalid(e.to_string()))?;
         let copied = (self.publish_local)(owner.to_owned(), to_self).await;
-        let error = delivered.err().or_else(|| copied.err().map(|e| format!("copie personnelle : {e}")));
+        // Groupe : « non remis » seulement si personne ne l'a reçu ; une remise partielle est dite, sans échec.
+        let error = if group.is_some() && errors.len() < targets.len() { None } else { errors.first().cloned() }.or_else(|| copied.err().map(|e| format!("copie personnelle : {e}")));
+        let partial = (group.is_some() && !errors.is_empty() && errors.len() < targets.len()).then(|| format!("remis à {} participant(s) sur {}", targets.len() - errors.len(), targets.len()));
         let state = if error.is_some() { "failed" } else { "ok" };
-        self.store(owner, peer, &id, true, at, &text, state, true).await?;
-        if let Some(e) = &error {
+        self.store_row(owner, peer, Row { id: &id, mine: true, at, text: &text, state, read: true, reply, reply_at, files: &files, author: None }).await?;
+        if let Some(e) = error.as_ref().or(partial.as_ref()) {
             self.activity.publish_to(Audience::Owner(owner.to_owned()), "alert", "chat:out", format!("message non remis : {e}"), None);
         }
         self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:msg", peer.to_owned(), None);
-        Ok(json!({ "id": id, "peer": peer, "mine": true, "at": at, "text": text, "state": state, "error": error }))
+        Ok(json!({ "id": id, "peer": peer, "mine": true, "at": at, "text": text, "state": state, "error": error, "partial": partial, "reply": reply, "reply_at": reply_at, "files": files }))
+    }
+
+    /// Le groupe `id` du titulaire, s'il existe : `(nom, participants titulaire compris)`.
+    async fn group(&self, owner: &str, id: &str) -> Option<(Option<String>, Vec<String>)> {
+        let (o, i) = (owner.to_owned(), id.to_owned());
+        let row: Option<(Option<String>, String)> = self.db.readers().read(move |c| Ok(c.query_row("SELECT name, members FROM chat_groups WHERE owner_hex = ?1 AND id = ?2", [&o, &i], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)).await.ok().flatten();
+        row.map(|(n, m)| (n, serde_json::from_str(&m).unwrap_or_default()))
+    }
+
+    /// Crée (ou retrouve) le groupe du titulaire avec `members` (2 à [`MAX_GROUP`] − 1 autres personnes) ; rend son identifiant.
+    pub async fn create_group(&self, owner: &str, name: &str, members: &[String]) -> Result<Value, ChatError> {
+        let mut all: Vec<String> = members.iter().filter(|m| *m != owner).cloned().collect();
+        all.sort_unstable();
+        all.dedup();
+        if all.len() < 2 || all.len() >= MAX_GROUP || !all.iter().all(|m| is_hex64(m)) {
+            return Err(ChatError::Invalid(format!("un groupe réunit de 2 à {} autres personnes", MAX_GROUP - 1)));
+        }
+        all.push(owner.to_owned());
+        let name: String = clean(name).chars().take(80).collect();
+        let name = (!name.is_empty()).then_some(name);
+        let id = group_id(&all);
+        self.save_group(owner, &id, name.as_deref(), &all).await?;
+        Ok(json!({ "id": id, "name": name, "members": all }))
+    }
+
+    async fn save_group(&self, owner: &str, id: &str, name: Option<&str>, members: &[String]) -> Result<(), ChatError> {
+        self.db
+            .writer()
+            .execute(
+                "INSERT INTO chat_groups(owner_hex, id, name, members) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(owner_hex, id) DO UPDATE SET name = COALESCE(excluded.name, chat_groups.name)",
+                vec![owner.to_owned().into(), id.to_owned().into(), name.map(str::to_owned).into(), serde_json::to_string(members).unwrap_or_default().into()],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Aperçu riche d'un lien (voir [`crate::link_preview`]).
+    pub async fn preview(&self, url: &str) -> Result<Value, ChatError> {
+        self.previews.get(url).await.map_err(ChatError::Invalid)
+    }
+
+    /// Clé publique VAPID (abonnement des navigateurs aux réveils).
+    pub async fn push_key(&self) -> Result<Value, ChatError> {
+        let p = self.push.as_ref().ok_or_else(|| ChatError::Unreachable("notifications non disponibles sur cette station".into()))?;
+        Ok(json!({ "key": p.public_key().await.map_err(ChatError::Db)? }))
+    }
+
+    /// Abonne ou désabonne un navigateur du titulaire.
+    pub async fn push_subscribe(&self, owner: &str, endpoint: &str, on: bool) -> Result<Value, ChatError> {
+        let p = self.push.as_ref().ok_or_else(|| ChatError::Unreachable("notifications non disponibles sur cette station".into()))?;
+        p.subscribe(owner, endpoint, on).await.map_err(ChatError::Invalid)?;
+        Ok(json!({ "on": on }))
     }
 
     #[allow(clippy::too_many_arguments)]
     async fn store(&self, owner: &str, peer: &str, id: &str, mine: bool, at: i64, text: &str, state: &str, read: bool) -> Result<bool, ChatError> {
-        let r = self
+        self.store_row(owner, peer, Row { id, mine, at, text, state, read, reply: None, reply_at: None, files: &[], author: None }).await
+    }
+
+    async fn store_row(&self, owner: &str, peer: &str, r: Row<'_>) -> Result<bool, ChatError> {
+        let meta = (!r.files.is_empty() || r.reply_at.is_some()).then(|| {
+            let mut m = json!({ "files": r.files });
+            if let Some(ms) = r.reply_at {
+                m["at_ms"] = json!(ms);
+            }
+            m.to_string()
+        });
+        let out = self
             .db
             .writer()
             .execute(
-                "INSERT INTO chat_messages(owner_hex, id, peer, mine, at, text, state, read, n) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, (SELECT COALESCE(MAX(n), 0) + 1 FROM chat_messages WHERE owner_hex = ?1)) \
+                // Une conversation effacée par le titulaire ne revient pas (relecture des enveloppes) : `kv` chat_cleared garde la date ;
+                // un message effacé seul non plus (`kv` chat_deleted).
+                "INSERT INTO chat_messages(owner_hex, id, peer, mine, at, text, state, read, n, reply, meta, author) \
+                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, (SELECT COALESCE(MAX(n), 0) + 1 FROM chat_messages WHERE owner_hex = ?1), ?9, ?10, ?11 \
+                 WHERE NOT EXISTS (SELECT 1 FROM kv WHERE scope = 'chat_cleared' AND key = ?1 || ':' || ?3 AND CAST(value AS INTEGER) >= ?5) \
+                   AND NOT EXISTS (SELECT 1 FROM kv WHERE scope = 'chat_deleted' AND key = ?1 || ':' || ?2) \
                  ON CONFLICT(owner_hex, id) DO UPDATE SET state = excluded.state WHERE excluded.state = 'ok' AND chat_messages.state = 'failed'",
-                vec![owner.to_owned().into(), id.to_owned().into(), peer.to_owned().into(), i64::from(mine).into(), at.into(), text.to_owned().into(), state.to_owned().into(), i64::from(read).into()],
+                vec![
+                    owner.to_owned().into(),
+                    r.id.to_owned().into(),
+                    peer.to_owned().into(),
+                    i64::from(r.mine).into(),
+                    r.at.into(),
+                    r.text.to_owned().into(),
+                    r.state.to_owned().into(),
+                    i64::from(r.read).into(),
+                    r.reply.map(str::to_owned).into(),
+                    meta.into(),
+                    r.author.map(str::to_owned).into(),
+                ],
             )
             .await
             .map_err(db_err)?;
-        Ok(r.changes > 0)
+        Ok(out.changes > 0)
+    }
+
+    /// Efface un message pour le titulaire seul ; il ne revient pas à la relecture des enveloppes.
+    pub async fn delete(&self, owner: &str, id: &str) -> Result<Value, ChatError> {
+        if !is_hex64(id) {
+            return Err(ChatError::Invalid("message invalide".into()));
+        }
+        let (o, i, at) = (owner.to_owned(), id.to_owned(), now());
+        let peer = self
+            .db
+            .writer()
+            .transaction(move |tx| {
+                let peer: Option<String> = tx.query_row("DELETE FROM chat_messages WHERE owner_hex = ?1 AND id = ?2 RETURNING peer", rusqlite::params![o, i], |r| r.get(0)).optional()?;
+                tx.execute("INSERT OR REPLACE INTO kv(scope, key, value, updated_at) VALUES ('chat_deleted', ?1, '1', ?2)", rusqlite::params![format!("{o}:{i}"), at])?;
+                Ok(peer)
+            })
+            .await
+            .map_err(db_err)?;
+        if let Some(p) = &peer {
+            self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", p.clone(), None);
+        }
+        Ok(json!({ "deleted": peer.is_some() }))
+    }
+
+    /// Messages du titulaire qui contiennent `q` (sans tenir compte de la casse), les plus récents d'abord.
+    pub async fn search(&self, owner: &str, q: &str) -> Result<Value, ChatError> {
+        let q = clean(q);
+        if q.chars().count() < 2 || q.chars().count() > 100 {
+            return Err(ChatError::Invalid("recherche : de 2 à 100 caractères".into()));
+        }
+        let o = owner.to_owned();
+        let rows = self
+            .db
+            .readers()
+            .read(move |c| {
+                let mut s = c.prepare("SELECT peer, id, at, text, mine FROM chat_messages WHERE owner_hex = ?1 AND instr(lower(text), lower(?2)) > 0 ORDER BY at DESC LIMIT ?3")?;
+                let out = s
+                    .query_map(rusqlite::params![o, q, SEARCH_MAX], |r| Ok(json!({ "peer": r.get::<_, String>(0)?, "id": r.get::<_, String>(1)?, "at": r.get::<_, i64>(2)?, "text": r.get::<_, String>(3)?.chars().take(200).collect::<String>(), "mine": r.get::<_, i64>(4)? == 1 })))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(out)
+            })
+            .await
+            .map_err(db_err)?;
+        Ok(json!({ "results": rows }))
+    }
+
+    /// Accusé de lecture reçu de `sender` : ses messages jusqu'à `at` sont « lus ».
+    async fn seen(&self, owner: &str, sender: &str, at: i64) {
+        let r = self.db.writer().execute("UPDATE chat_messages SET seen = 1 WHERE owner_hex = ?1 AND peer = ?2 AND mine = 1 AND seen = 0 AND at <= ?3", vec![owner.to_owned().into(), sender.to_owned().into(), at.into()]).await;
+        if r.is_ok_and(|r| r.changes > 0) {
+            self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:seen", sender.to_owned(), None);
+        }
+    }
+
+    /// Envoie l'accusé de lecture à `peer` (sans effet si la remise échoue : ce n'est qu'une indication).
+    async fn send_receipt(&self, owner: &str, peer: &str, at: i64) {
+        let Some(secret) = self.keys.secret(owner) else { return };
+        let created = u64::try_from(now()).unwrap_or(0);
+        let rumor = nip59::Rumor { pubkey: owner.to_owned(), created_at: created, kind: kind::CHAT, tags: vec![vec!["p".into(), peer.to_owned()], vec!["t".into(), RECEIPT_TAG.into()]], content: at.to_string() };
+        if let Ok(wrap) = nip59::gift_wrap_expiring(&secret, peer, &rumor, created, created + RECEIPT_TTL) {
+            let _ = (self.deliver)(peer.to_owned(), wrap).await;
+        }
     }
 
     /// Conversations du titulaire, la plus récente d'abord : `{ peer, label, last, at, mine, unread }`.
@@ -230,7 +477,9 @@ impl Chat {
                     "SELECT m.peer, m.text, m.at, m.mine, \
                             (SELECT COUNT(*) FROM chat_messages u WHERE u.owner_hex = m.owner_hex AND u.peer = m.peer AND u.mine = 0 AND u.read = 0), \
                             COALESCE((SELECT json_extract(f.fields, '$.name') FROM contact_cards f WHERE f.owner_hex = m.owner_hex AND json_extract(f.fields, '$.nostr') = m.peer LIMIT 1), \
-                                     (SELECT json_extract(e.content, '$.name') FROM nostr_events e WHERE e.pubkey = m.peer AND e.kind = 0 ORDER BY e.created_at DESC LIMIT 1)) \
+                                     (SELECT json_extract(e.content, '$.name') FROM nostr_events e WHERE e.pubkey = m.peer AND e.kind = 0 ORDER BY e.created_at DESC LIMIT 1)), \
+                            EXISTS (SELECT 1 FROM identities i WHERE i.hex = m.peer AND i.role = 'node'), \
+                            (SELECT COALESCE(g.name, '') || char(31) || json_array_length(g.members) FROM chat_groups g WHERE g.owner_hex = m.owner_hex AND g.id = m.peer) \
                      FROM chat_messages m WHERE m.owner_hex = ?1 \
                        AND m.at = (SELECT MAX(x.at) FROM chat_messages x WHERE x.owner_hex = m.owner_hex AND x.peer = m.peer) \
                      GROUP BY m.peer ORDER BY m.at DESC LIMIT 200",
@@ -239,8 +488,11 @@ impl Chat {
                     .query_map([&o], |r| {
                         let peer: String = r.get(0)?;
                         let label: Option<String> = r.get(5)?;
-                        Ok(json!({ "peer": peer, "last": r.get::<_, String>(1)?.chars().take(120).collect::<String>(), "at": r.get::<_, i64>(2)?, "mine": r.get::<_, i64>(3)? == 1, "unread": r.get::<_, i64>(4)?,
-                                   "label": label.filter(|l| !l.trim().is_empty()).unwrap_or_else(|| peer.chars().take(8).collect()) }))
+                        // Groupe : son nom, sinon « Groupe (n) » côté interface.
+                        let group: Option<String> = r.get(7)?;
+                        let (gname, gsize) = group.as_deref().and_then(|g| g.split_once('\u{1f}')).map_or((None, 0), |(n, k)| ((!n.is_empty()).then(|| n.to_owned()), k.parse::<i64>().unwrap_or(0)));
+                        Ok(json!({ "group": group.is_some(), "size": gsize, "gname": gname, "peer": peer, "last": r.get::<_, String>(1)?.chars().take(120).collect::<String>(), "at": r.get::<_, i64>(2)?, "mine": r.get::<_, i64>(3)? == 1, "unread": r.get::<_, i64>(4)?,
+                                   "station": r.get::<_, bool>(6)?, "label": label.filter(|l| !l.trim().is_empty()).unwrap_or_else(|| peer.chars().take(8).collect()) }))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(out)
@@ -316,10 +568,38 @@ impl Chat {
             .db
             .readers()
             .read(move |c| {
-                let mut stmt = c.prepare("SELECT id, mine, at, text, state FROM chat_messages WHERE owner_hex = ?1 AND peer IN (SELECT value FROM json_each(?2)) AND at < ?3 ORDER BY at DESC, n DESC LIMIT ?4")?;
-                let out = stmt
-                    .query_map(rusqlite::params![o, peers, before, PAGE as i64 + 1], |r| Ok(json!({ "id": r.get::<_, String>(0)?, "mine": r.get::<_, i64>(1)? == 1, "at": r.get::<_, i64>(2)?, "text": r.get::<_, String>(3)?, "state": r.get::<_, String>(4)? })))?
+                let mut stmt = c.prepare(
+                    "SELECT m.id, m.mine, m.at, m.text, m.state, m.reply, m.meta, m.seen, q.text, q.mine, m.author FROM chat_messages m \
+                     LEFT JOIN chat_messages q ON q.owner_hex = m.owner_hex AND q.id = m.reply \
+                     WHERE m.owner_hex = ?1 AND m.peer IN (SELECT value FROM json_each(?2)) AND m.at < ?3 ORDER BY m.at DESC, m.n DESC LIMIT ?4",
+                )?;
+                // Pièce jointe reçue : le fichier arrive par le partage du uCloud, sous `/Partages/De_…/` (absent tant qu'il voyage).
+                let mut find = c.prepare("SELECT path FROM ucloud_entries WHERE owner_hex = ?1 AND path LIKE '/Partages/%' AND path = parent || '/' || ?2 ORDER BY mtime DESC LIMIT 1")?;
+                let rows = stmt
+                    .query_map(rusqlite::params![o, peers, before, PAGE as i64 + 1], |r| {
+                        let quote: Option<String> = r.get(8)?;
+                        Ok((
+                            json!({ "id": r.get::<_, String>(0)?, "mine": r.get::<_, i64>(1)? == 1, "at": r.get::<_, i64>(2)?, "text": r.get::<_, String>(3)?, "state": r.get::<_, String>(4)?,
+                                    "reply": r.get::<_, Option<String>>(5)?, "seen": r.get::<_, i64>(7)? == 1, "author": r.get::<_, Option<String>>(10)?,
+                                    "quote": quote.map(|t| json!({ "text": t.chars().take(160).collect::<String>(), "mine": r.get::<_, Option<i64>>(9).ok().flatten() == Some(1) })) }),
+                            r.get::<_, Option<String>>(6)?,
+                        ))
+                    })?
                     .collect::<Result<Vec<_>, _>>()?;
+                let mut out = Vec::with_capacity(rows.len());
+                for (mut m, meta) in rows {
+                    let meta: Value = meta.and_then(|s| serde_json::from_str::<Value>(&s).ok()).unwrap_or(Value::Null);
+                    m["reply_at"] = meta["at_ms"].clone();
+                    let mut files: Vec<Value> = meta["files"].as_array().cloned().unwrap_or_default();
+                    if m["mine"] == json!(false) {
+                        for f in &mut files {
+                            let path: Option<String> = find.query_row(rusqlite::params![o, f["name"].as_str().unwrap_or_default()], |r| r.get(0)).optional()?;
+                            f["path"] = json!(path);
+                        }
+                    }
+                    m["files"] = json!(files);
+                    out.push(m);
+                }
                 Ok(out)
             })
             .await
@@ -327,7 +607,18 @@ impl Chat {
         let more = rows.len() > PAGE;
         rows.truncate(PAGE);
         rows.reverse();
-        Ok(json!({ "peer": peer, "messages": rows, "more": more }))
+        // Groupe : ses participants, nommés, pour dire qui a écrit chaque message.
+        let members = match self.group(owner, peer).await {
+            Some((name, list)) => {
+                let mut out = Vec::new();
+                for h in list.iter().filter(|h| *h != owner) {
+                    out.push(json!({ "hex": h, "label": self.label(owner, h).await }));
+                }
+                json!({ "name": name, "members": out })
+            }
+            None => Value::Null,
+        };
+        Ok(json!({ "peer": peer, "messages": rows, "more": more, "group": members }))
     }
 
     /// Marque la conversation comme lue.
@@ -336,8 +627,54 @@ impl Chat {
             return Err(ChatError::Invalid("correspondant invalide".into()));
         }
         let peers = serde_json::to_string(&self.class(peer).await.iter().map(|k| k.hex.clone()).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into());
-        let r = self.db.writer().execute("UPDATE chat_messages SET read = 1 WHERE owner_hex = ?1 AND peer IN (SELECT value FROM json_each(?2)) AND mine = 0 AND read = 0", vec![owner.to_owned().into(), peers.into()]).await.map_err(db_err)?;
-        Ok(json!({ "read": r.changes }))
+        let o = owner.to_owned();
+        // Par clé de l'ami : la date du dernier message lu, pour l'accusé de lecture (pas à une station : elle ne lit pas).
+        let (n, latest) = self
+            .db
+            .writer()
+            .transaction(move |tx| {
+                let latest = {
+                    let mut s = tx.prepare(
+                        "SELECT peer, MAX(at) FROM chat_messages WHERE owner_hex = ?1 AND peer IN (SELECT value FROM json_each(?2)) AND mine = 0 AND read = 0 \
+                         AND NOT EXISTS (SELECT 1 FROM identities i WHERE i.hex = peer AND i.role = 'node') \
+                         AND NOT EXISTS (SELECT 1 FROM chat_groups g WHERE g.owner_hex = ?1 AND g.id = peer) GROUP BY peer",
+                    )?;
+                    s.query_map(rusqlite::params![o, peers], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<Result<Vec<_>, _>>()?
+                };
+                let n = tx.execute("UPDATE chat_messages SET read = 1 WHERE owner_hex = ?1 AND peer IN (SELECT value FROM json_each(?2)) AND mine = 0 AND read = 0", rusqlite::params![o, peers])?;
+                Ok((n, latest))
+            })
+            .await
+            .map_err(db_err)?;
+        for (p, at) in latest {
+            self.send_receipt(owner, &p, at).await;
+        }
+        Ok(json!({ "read": n }))
+    }
+
+    /// Efface la conversation avec `peer` (toutes ses clés liées) pour le titulaire seul : l'autre personne garde la sienne. Les
+    /// messages antérieurs ne reviennent pas, même si la station relit les enveloppes ; un nouveau message rouvre la conversation.
+    pub async fn clear(&self, owner: &str, peer: &str) -> Result<Value, ChatError> {
+        if !is_hex64(peer) {
+            return Err(ChatError::Invalid("correspondant invalide".into()));
+        }
+        let peers: Vec<String> = self.class(peer).await.into_iter().map(|k| k.hex).collect();
+        let (o, at) = (owner.to_owned(), now());
+        let deleted = self
+            .db
+            .writer()
+            .transaction(move |tx| {
+                let mut n = 0;
+                for p in &peers {
+                    n += tx.execute("DELETE FROM chat_messages WHERE owner_hex = ?1 AND peer = ?2", rusqlite::params![o, p])?;
+                    tx.execute("INSERT OR REPLACE INTO kv(scope, key, value, updated_at) VALUES ('chat_cleared', ?1, ?2, ?3)", rusqlite::params![format!("{o}:{p}"), at.to_string(), at])?;
+                }
+                Ok(n)
+            })
+            .await
+            .map_err(db_err)?;
+        self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:msg", peer.to_owned(), None);
+        Ok(json!({ "deleted": deleted }))
     }
 
     async fn follows(&self, owner: &str, sender: &str) -> bool {
@@ -553,6 +890,15 @@ impl Chat {
         if rumor.kind == kind::CALL_SIGNAL {
             return self.handle_call(owner, &sender, &rumor).await;
         }
+        // Accusé de lecture : marque « lus » nos messages à cet ami, rien n'entre dans la conversation.
+        if rumor.kind == kind::CHAT && rumor.tags.iter().any(|t| t.first().map(String::as_str) == Some("t") && t.get(1).map(String::as_str) == Some(RECEIPT_TAG)) {
+            if sender != owner {
+                if let Ok(at) = rumor.content.trim().parse::<i64>() {
+                    self.seen(owner, &sender, at).await;
+                }
+            }
+            return 0;
+        }
         // Les messages de service (sauvegarde chez un ami, assistance) voyagent aussi en kind 14 : pas dans la conversation.
         if rumor.kind != kind::CHAT || rumor.is_station_protocol() {
             return 0;
@@ -563,8 +909,32 @@ impl Chat {
         }
         let Ok(id) = rumor.id() else { return 0 };
         let at = i64::try_from(rumor.created_at).unwrap_or(0).min(now());
+        // Plusieurs `p` : conversation de groupe (NIP-17), identifiée par l'empreinte des participants, auteur compris.
+        let mut members: Vec<String> = rumor.tags.iter().filter(|t| t.first().map(String::as_str) == Some("p")).filter_map(|t| t.get(1)).filter(|p| is_hex64(p)).cloned().collect();
+        members.push(sender.clone());
+        members.sort_unstable();
+        members.dedup();
+        let group = if members.len() > 2 {
+            if !members.iter().any(|m| m == owner) || members.len() > MAX_GROUP {
+                return 0;
+            }
+            let gid = group_id(&members);
+            // Un groupe déjà connu accepte tous ses participants ; un nouveau groupe, seulement s'il vient d'un proche.
+            if sender != owner && self.group(owner, &gid).await.is_none() && !self.follows(owner, &sender).await {
+                return 0;
+            }
+            let name = rumor.tag_value("subject").map(|n| clean(n).chars().take(80).collect::<String>()).filter(|n| !n.is_empty());
+            if self.save_group(owner, &gid, name.as_deref(), &members).await.is_err() {
+                return 0;
+            }
+            Some(gid)
+        } else {
+            None
+        };
         // Copie de soi (envoyée depuis une autre station du même compte) : le correspondant est le destinataire de la rumeur.
-        let (peer, mine) = if sender == owner {
+        let (peer, mine) = if let Some(gid) = &group {
+            (gid.clone(), sender == owner)
+        } else if sender == owner {
             match rumor.tag_value("p") {
                 Some(p) if is_hex64(p) && p != owner => (p.to_owned(), true),
                 _ => return 0,
@@ -573,12 +943,29 @@ impl Chat {
             if !self.follows(owner, &sender).await {
                 return 0;
             }
-            (sender, false)
+            (sender.clone(), false)
         };
-        match self.store(owner, &peer, &id, mine, at, &text, "ok", mine).await {
+        let reply = rumor.tags.iter().find(|t| t.first().map(String::as_str) == Some("e")).and_then(|t| t.get(1)).filter(|e| is_hex64(e)).map(String::as_str);
+        let reply_at = reply.and(rumor.tag_value("offset").and_then(|v| v.parse::<u64>().ok()));
+        let files: Vec<Value> = rumor
+            .tags
+            .iter()
+            .filter(|t| t.first().map(String::as_str) == Some("file"))
+            .take(MAX_FILES)
+            .filter_map(|t| file_of(&json!({ "name": t.get(1), "mime": t.get(2), "size": t.get(3).and_then(|s| s.parse::<u64>().ok()) })))
+            .collect();
+        let author = (group.is_some() && !mine).then_some(sender.as_str());
+        match self.store_row(owner, &peer, Row { id: &id, mine, at, text: &text, state: "ok", read: mine, reply, reply_at, files: &files, author }).await {
             Ok(true) => {
                 if !mine {
                     self.activity.publish_to(Audience::Owner(owner.to_owned()), "chat", "chat:msg", peer, None);
+                    // Réveil des navigateurs fermés (sans contenu), hors du chemin de réception.
+                    if let Some(p) = &self.push {
+                        let (p, o) = (p.clone(), owner.to_owned());
+                        tokio::spawn(async move {
+                            p.notify(&o).await;
+                        });
+                    }
                 }
                 1
             }

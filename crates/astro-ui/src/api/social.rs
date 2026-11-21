@@ -111,6 +111,13 @@ pub(super) fn routes<B: SocialApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/chat/messages", get(chat_messages::<B>))
         .route("/api/v1/chat/send", post(chat_send::<B>))
         .route("/api/v1/chat/read", post(chat_read::<B>))
+        .route("/api/v1/chat/clear", post(chat_clear::<B>))
+        .route("/api/v1/chat/delete", post(chat_delete::<B>))
+        .route("/api/v1/chat/search", get(chat_search::<B>))
+        .route("/api/v1/chat/group", post(chat_group::<B>))
+        .route("/api/v1/chat/preview", get(chat_preview::<B>))
+        .route("/api/v1/push/key", get(push_key::<B>))
+        .route("/api/v1/push/subscribe", post(push_subscribe::<B>))
         .route("/api/v1/call/signal", post(call_signal::<B>))
         .route("/api/v1/call/ice", get(call_ice::<B>))
         .route("/api/v1/presence", get(presence_get::<B>).post(presence_set::<B>))
@@ -263,12 +270,34 @@ struct ChatPeerQuery {
 #[derive(Deserialize)]
 struct ChatSendBody {
     peer: String,
+    #[serde(default)]
     text: String,
+    #[serde(default)]
+    reply: Option<String>,
+    #[serde(default)]
+    reply_at: Option<u64>,
+    #[serde(default)]
+    files: Vec<Value>,
 }
 
 #[derive(Deserialize)]
 struct ChatPeerBody {
     peer: String,
+}
+
+#[derive(Deserialize)]
+struct ChatIdBody {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct ChatSearchQuery {
+    q: String,
+}
+
+#[derive(Deserialize)]
+struct ChatPreviewQuery {
+    url: String,
 }
 
 async fn my_links<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
@@ -304,11 +333,40 @@ async fn call_ice<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Au
 }
 
 async fn chat_send<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<ChatSendBody>) -> Response {
-    reply(st.backend.chat(&p, ChatOp::Send(b.peer.chars().take(80).collect(), b.text.chars().take(20_000).collect())).await)
+    let op = ChatOp::Send { peer: b.peer.chars().take(80).collect(), text: b.text.chars().take(20_000).collect(), reply: b.reply.map(|r| r.chars().take(80).collect()), reply_at: b.reply_at, files: b.files.into_iter().take(20).collect() };
+    reply(st.backend.chat(&p, op).await)
+}
+
+async fn chat_delete<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<ChatIdBody>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Delete(b.id.chars().take(80).collect())).await)
+}
+
+async fn chat_group<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Group(b)).await)
+}
+
+async fn chat_preview<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<ChatPreviewQuery>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Preview(q.url.chars().take(2000).collect())).await)
+}
+
+async fn push_key<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.chat(&p, ChatOp::PushKey).await)
+}
+
+async fn push_subscribe<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Push(b)).await)
+}
+
+async fn chat_search<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<ChatSearchQuery>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Search(q.q.chars().take(200).collect())).await)
 }
 
 async fn chat_read<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<ChatPeerBody>) -> Response {
     reply(st.backend.chat(&p, ChatOp::Read(b.peer.chars().take(80).collect())).await)
+}
+
+async fn chat_clear<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<ChatPeerBody>) -> Response {
+    reply(st.backend.chat(&p, ChatOp::Clear(b.peer.chars().take(80).collect())).await)
 }
 
 async fn ai_params<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {

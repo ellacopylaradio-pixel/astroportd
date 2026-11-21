@@ -92,7 +92,6 @@ export default {
 "Appareil révoqué": "Device revoked",
 "Révoquer : sa sauvegarde sera supprimée de votre espace.": "Revoke: its backup will be deleted from your space.",
 "Mes images publiques": "My public images",
-"Images que vous avez publiées (photo de profil, bandeau, images envoyées depuis un client Nostr). Elles sont lisibles par tout le monde et comptent dans votre espace : {0} utilisés sur {1}. En retirer une libère de la place ; les publications qui la montrent ne l’afficheront plus.": "Images you have published (profile picture, banner, images sent from a Nostr client). Anyone can read them and they count against your space: {0} used out of {1}. Removing one frees space; posts that show it will no longer display it.",
 "Utilisée comme bandeau": "Used as banner",
 "Utilisée comme photo de profil": "Used as profile picture",
 "Image retirée": "Image removed",
@@ -100,4 +99,8 @@ export default {
 "Aucune image publiée pour l’instant.": "No image published yet.",
 "Réglages avancés": "Advanced settings",
 "Protégé par votre station et vos amis.": "Protected by your station and your friends.",
+"Votre photo de profil, votre bandeau et les images que vous avez mises dans vos publications. Tout le monde peut les voir.": "Your profile photo, your banner and the images you put in your posts. Everyone can see them.",
+"Espace utilisé : {0} sur {1}.": "Space used: {0} of {1}.",
+"Espace utilisé : {0} (sans limite).": "Space used: {0} (no limit).",
+"Retirer une image libère de la place, mais elle disparaît aussi des publications où elle apparaît.": "Removing an image frees up space, but it also disappears from the posts where it appears.",
 };

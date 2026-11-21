@@ -419,3 +419,99 @@ async fn an_envelope_accepted_by_the_relay_wakes_the_reader_at_once() {
     task.await.unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn a_cleared_conversation_is_gone_for_its_owner_only_and_never_comes_back() {
+    let (dir, db, chat) = rig("clear", false).await;
+    chat.send(&hex(&ALICE), &hex(&BOB), "Premier").await.unwrap();
+    assert_eq!(chat.poll_once().await, 1);
+    assert_eq!(chat.clear(&hex(&BOB), &hex(&ALICE)).await.unwrap()["deleted"], 1);
+    assert!(chat.conversations(&hex(&BOB)).await.unwrap()["conversations"].as_array().unwrap().is_empty());
+    assert_eq!(chat.conversations(&hex(&ALICE)).await.unwrap()["conversations"].as_array().unwrap().len(), 1, "Alice garde la sienne");
+    // La station relit toutes les enveloppes (repère remis à zéro) : le message effacé ne revient pas.
+    db.writer().execute("DELETE FROM kv WHERE scope = 'chat_seq'", vec![]).await.unwrap();
+    chat.poll_once().await;
+    assert!(chat.conversations(&hex(&BOB)).await.unwrap()["conversations"].as_array().unwrap().is_empty(), "rien ne revient");
+    assert!(chat.clear(&hex(&BOB), "pas-une-cle").await.is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn replies_attachments_read_receipts_deletion_and_search() {
+    let (dir, db, chat) = rig("rich", false).await;
+    let (a, b) = (hex(&ALICE), hex(&BOB));
+    let first = chat.send(&a, &b, "Salut Bob").await.unwrap();
+    chat.poll_once().await;
+    let id = first["id"].as_str().unwrap().to_owned();
+    // Bob répond en citant, avec une photo déjà partagée depuis son uCloud.
+    let photo = json!({ "name": "plage.jpg", "mime": "image/jpeg", "size": 1234, "path": "/Chat/plage.jpg" });
+    let r = chat.send_full(&b, &a, "", Some(&id), None, std::slice::from_ref(&photo)).await.unwrap();
+    assert_eq!(r["text"], "📎 plage.jpg", "sans texte, le message dit le nom du fichier");
+    assert!(chat.send_full(&b, &a, "x", None, None, &[json!({ "name": "../x" })]).await.is_err(), "nom de fichier refusé");
+    assert!(chat.send_full(&b, &a, "x", Some("pas-un-id"), None, &[]).await.is_err());
+    chat.poll_once().await;
+    let m = chat.messages(&a, &b, None).await.unwrap();
+    let got = &m["messages"][1];
+    assert_eq!((got["reply"].as_str(), got["quote"]["text"].as_str(), got["quote"]["mine"].as_bool()), (Some(id.as_str()), Some("Salut Bob"), Some(true)));
+    assert_eq!((got["files"][0]["name"].as_str(), got["files"][0]["path"].as_str()), (Some("plage.jpg"), None), "le fichier voyage encore");
+    db.writer().execute("INSERT INTO ucloud_entries(owner_hex, path, parent, type, mtime, data) VALUES (?1, '/Partages/De_bob/plage.jpg', '/Partages/De_bob', 'file', 1, '{}')", vec![a.clone().into()]).await.unwrap();
+    assert_eq!(chat.messages(&a, &b, None).await.unwrap()["messages"][1]["files"][0]["path"], "/Partages/De_bob/plage.jpg");
+    let mine = chat.messages(&b, &a, None).await.unwrap();
+    assert_eq!(mine["messages"][1]["files"][0]["path"], "/Chat/plage.jpg", "l'expéditeur garde son chemin");
+    assert_eq!(mine["messages"][1]["seen"], false);
+    // Alice lit : Bob reçoit l'accusé, son message passe à « lu » ; l'accusé n'apparaît nulle part.
+    chat.mark_read(&a, &b).await.unwrap();
+    chat.poll_once().await;
+    let mine = chat.messages(&b, &a, None).await.unwrap();
+    assert_eq!(mine["messages"][1]["seen"], true);
+    assert_eq!(mine["messages"].as_array().unwrap().len(), 2, "aucun message de service dans le fil");
+    // Recherche, puis effacement d'un message, qui ne revient pas à la relecture des enveloppes.
+    assert_eq!(chat.search(&a, "SALUT").await.unwrap()["results"].as_array().unwrap().len(), 1);
+    assert!(chat.search(&a, "x").await.is_err());
+    let gone = got["id"].as_str().unwrap().to_owned();
+    assert_eq!(chat.delete(&a, &gone).await.unwrap()["deleted"], true);
+    db.writer().execute("DELETE FROM kv WHERE scope = 'chat_seq'", vec![]).await.unwrap();
+    chat.poll_once().await;
+    let left = chat.messages(&a, &b, None).await.unwrap();
+    assert_eq!(left["messages"].as_array().unwrap().iter().map(|x| x["text"].as_str().unwrap()).collect::<Vec<_>>(), ["Salut Bob"]);
+    assert_eq!(chat.messages(&b, &a, None).await.unwrap()["messages"].as_array().unwrap().len(), 2, "Bob garde les siens");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_group_reaches_every_member_with_its_author_and_a_voice_reply_keeps_its_instant() {
+    const CAROL: [u8; 32] = [0xC3; 32];
+    let (dir, db, _) = rig("group", false).await;
+    db.writer().execute("INSERT INTO identities(hex, role, email, hosted) VALUES (?1, 'multipass', 'carol@example.org', 1)", vec![hex(&CAROL).into()]).await.unwrap();
+    let keys: Arc<dyn KeySource> = Arc::new(StaticKeySource::new().with(ALICE).with(BOB).with(CAROL));
+    let chat = Chat::new(db.clone(), keys, into_db(&db, false), into_db(&db, false), ActivityBus::default());
+    let (a, b, c) = (hex(&ALICE), hex(&BOB), hex(&CAROL));
+    assert!(chat.create_group(&a, "x", std::slice::from_ref(&b)).await.is_err(), "un groupe, c'est au moins trois personnes");
+    let g = chat.create_group(&a, "Rando", &[b.clone(), c.clone()]).await.unwrap();
+    let gid = g["id"].as_str().unwrap().to_owned();
+    assert_eq!(gid, astroportd::chat::group_id(&[c.clone(), a.clone(), b.clone()]), "même identifiant quel que soit l'ordre");
+    let sent = chat.send(&a, &gid, "On part à 9h ?").await.unwrap();
+    assert_eq!(sent["state"], "ok");
+    chat.poll_once().await;
+    for who in [&b, &c] {
+        let list = chat.conversations(who).await.unwrap();
+        let conv = &list["conversations"][0];
+        assert_eq!((conv["peer"].as_str(), conv["group"].as_bool(), conv["gname"].as_str()), (Some(gid.as_str()), Some(true), Some("Rando")));
+        let m = chat.messages(who, &gid, None).await.unwrap();
+        assert_eq!((m["messages"][0]["author"].as_str(), m["messages"][0]["text"].as_str()), (Some(a.as_str()), Some("On part à 9h ?")));
+        assert_eq!(m["group"]["members"].as_array().unwrap().len(), 2);
+    }
+    chat.send(&b, &gid, "Oui !").await.unwrap();
+    chat.poll_once().await;
+    let m = chat.messages(&c, &gid, None).await.unwrap();
+    assert_eq!(m["messages"][1]["author"], b.as_str(), "Carol voit que c'est Bob");
+    assert_eq!(chat.messages(&a, &gid, None).await.unwrap()["messages"].as_array().unwrap().len(), 2);
+    // Réponse « du tac au tac » à un message vocal : l'instant de l'original voyage avec la réponse.
+    let voice = chat.send(&a, &b, "🎤 Message vocal").await.unwrap();
+    chat.poll_once().await;
+    chat.send_full(&b, &a, "Oui, à ce moment-là", voice["id"].as_str(), Some(4200), &[]).await.unwrap();
+    chat.poll_once().await;
+    let m = chat.messages(&a, &b, None).await.unwrap();
+    assert_eq!((m["messages"][1]["reply_at"].as_u64(), m["messages"][1]["reply"].as_str()), (Some(4200), voice["id"].as_str()));
+    let _ = std::fs::remove_dir_all(dir);
+}
