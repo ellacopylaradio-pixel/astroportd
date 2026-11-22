@@ -285,7 +285,8 @@ Le titulaire retrouve tout dans *Fichiers › Médiathèque* (lecture en flux `/
 | Écluses et modes | `src/locks.rs`, `astro_db::station_mode` | [écluses](GUIDE.md#ecluses) |
 | Portail `/stations` | `src/locate.rs`, `web/stations.js` | [annuaire](GUIDE.md#annuaire) |
 | Conversations et visio | `src/chat.rs`, `src/turn.rs`, `src/presence.rs` | [visio](GUIDE.md#visio) |
-| Coffre et agents (MCP) | `src/agents.rs` | [étape 8bis-b](GUIDE.md#etape-8bis-b) |
+| Coffre et agents (MCP), navigateur prêté | `src/agents.rs`, `src/agent_browser/` ([conception](design/SESSION_AGENT.md)) | [étape 8bis-b](GUIDE.md#etape-8bis-b) |
+| Naviguer ensemble (co-surfing) | `src/cosurf.rs`, `web/m-cosurf.js`, `web/m-screen.js` | [cosurf](GUIDE.md#cosurf) |
 | Site public et vigie | `src/public_site.rs`, `src/privacy_watch.rs` | [étape 8bis-m](GUIDE.md#etape-8bis-m) |
 | Bibliothèque et recherche | `src/library.rs`, `src/search_*.rs` | — |
 | Ranger et reprendre | `src/organize.rs`, `src/webdav_pull.rs` | [étape 8bis-d](GUIDE.md#etape-8bis-d) |

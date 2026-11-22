@@ -3,7 +3,7 @@
 #
 # install.sh (qui, lui, n'utilise jamais sudo) le propose quand il manque quelque chose ; il se lance aussi seul :
 #
-#   sudo bash install_sudo.sh [--user NOM] [--kubo | --no-kubo] [--no-linger] [--yes] [--dry-run]
+#   sudo bash install_sudo.sh [--user NOM] [--kubo | --no-kubo] [--chromium] [--no-linger] [--yes] [--dry-run]
 #
 # Ce qu'il fait, seulement pour ce qui manque :
 #   1. paquets : ffmpeg (images des vidéos pour la recherche, Médiathèque), poppler (lecture des PDF), python3-pip et venv
@@ -14,7 +14,9 @@
 #      référence aux fichiers du disque : aucune place en plus), service systemd sous l'utilisateur. Un kubo déjà installé (par
 #      Astroport.ONE, par exemple) est gardé tel quel : seul le filestore est activé. Jamais en ẐEN (--no-kubo) ;
 #   3. « linger » : le service utilisateur d'astroportd démarre avec la machine, sans session ouverte.
-#   4. plafond du journal systemd (SystemMaxUse=500M), s'il n'y en a aucun.
+#   4. plafond du journal systemd (SystemMaxUse=500M), s'il n'y en a aucun ;
+#   5. Chromium, sur demande (--chromium) : le navigateur jetable qu'un membre prête à un agent (Mes agents). Aucun
+#      réglage d'écran n'est nécessaire : sans écran, le membre voit ce navigateur dans l'application.
 #
 # Il ne touche jamais au pare-feu, aux ports, ni à astroportd lui-même.
 
@@ -35,6 +37,7 @@ ORIGIN_BOOTSTRAP=(
 
 TARGET="${SUDO_USER:-}"
 KUBO=ask
+CHROMIUM=0
 LINGER=1
 YES=0
 DRY=0
@@ -44,13 +47,14 @@ warn() { printf '⚠  %s\n' "$*" >&2; }
 die()  { printf '✘ %s\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY" = 1 ]; then say "  \$ $*"; else "$@"; fi; }
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)      shift; TARGET="${1:?--user attend un nom (celui qui fait tourner astroportd)}" ;;
     --kubo)      KUBO=yes ;;
     --no-kubo)   KUBO=no ;;
+    --chromium)  CHROMIUM=1 ;;
     --no-linger) LINGER=0 ;;
     --yes|-y)    YES=1 ;;
     --dry-run)   DRY=1 ;;
@@ -273,6 +277,25 @@ if [ -d /etc/systemd ] && ! grep -rqs '^[[:space:]]*SystemMaxUse=' /etc/systemd/
     say "  ✔ plafonné à 500 Mo (${JOURNAL_CONF})"
   else
     warn "plafond du journal non posé : ${JOURNAL_CONF}"
+  fi
+fi
+
+# --- 5. Chromium (facultatif) : navigateur prêté aux agents ------------------------------------------------------
+if [ "$CHROMIUM" = 1 ]; then
+  say ""
+  say "▶ Chromium (navigateur jetable prêté aux agents)"
+  if command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1; then
+    say "  ✔ déjà installé"
+  elif [ -z "$PM" ]; then
+    warn "gestionnaire de paquets inconnu : installez Chromium vous-même"
+  elif confirm "  Installer Chromium (environ 300 Mo) ?" o; then
+    case "$PM" in
+      apt)    run env DEBIAN_FRONTEND=noninteractive apt-get install -y chromium || run env DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser || warn "Chromium non installé" ;;
+      dnf)    run dnf install -y chromium || warn "Chromium non installé" ;;
+      pacman) run pacman -S --noconfirm --needed chromium || warn "Chromium non installé" ;;
+    esac
+  else
+    say "  refusé : le mode navigateur de Mes agents restera indisponible."
   fi
 fi
 

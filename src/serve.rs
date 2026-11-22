@@ -705,6 +705,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let account_keys = keys.clone();
     let agent_keys = keys.clone();
     let agent_keys2 = keys.clone();
+    let cosurf_keys = keys.clone();
     let pull_keys = keys.clone();
     let invites_keys = keys.clone();
     let inbox_keys = keys.clone();
@@ -1063,9 +1064,44 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let welcome = Arc::new(astroportd::welcome::Welcome::new(db.clone(), invites.clone(), Some(activity.clone())));
     let account_publish = publish_fn(&event_publisher);
     // Agents du membre (kind 31903 `d = agents`) et serveur MCP : un agent demande, le membre accorde ou refuse.
-    let agents = Arc::new(astroportd::agents::Agents::new(db.clone(), agent_keys, publish_fn(&event_publisher)).with_activity(activity.clone()));
-    let member_ai = Arc::new(astroportd::member_ai::MemberAi::new(db.clone(), agent_keys2, publish_fn(&event_publisher)));
     let forwards = Arc::new(astroportd::forwards::Forwards::new(p2p_handle.clone()).with_binds(local_binds.clone()));
+    // Mode navigateur : Chromium sur la station, profils jetables dans `<données>/agent-browsers` (vidés au démarrage), et un
+    // écran pour que le membre s'y connecte (sous systemd : `Environment=DISPLAY=:0` et `XAUTHORITY`).
+    let agents = {
+        let mut base = astroportd::agents::Agents::new(db.clone(), agent_keys, publish_fn(&event_publisher)).with_activity(activity.clone());
+        // Agents des autres stations de la constellation : appels relayés et navigateur prêté par le maillage.
+        if let Some(h) = &p2p_handle {
+            base = base.with_p2p(h.clone(), forwards.clone());
+        }
+        let data = a.db.parent().map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let dir = astroportd::agents::browser_profiles_dir(&data);
+        match astroportd::agent_browser::Chromium::find() {
+            Some(c) => {
+                let screen = ["DISPLAY", "WAYLAND_DISPLAY"].iter().any(|v| std::env::var_os(v).is_some_and(|x| !x.is_empty()));
+                println!("agents : navigateur prêtable {} ({})", c.bin().display(), if screen { "fenêtre aussi sur l'écran de la station" } else { "sans fenêtre : le membre le voit dans l'application" });
+                Arc::new(base.with_browser(Arc::new(c), dir, screen))
+            }
+            None => Arc::new(base),
+        }
+    };
+    // Naviguer ensemble : un membre se fait aider par un ami sur un site (même navigateur jetable que les agents).
+    let cosurf = {
+        let data = a.db.parent().map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let mut c = astroportd::cosurf::CoSurf::new(db.clone(), cosurf_keys).with_activity(activity.clone());
+        if let Some(chromium) = astroportd::agent_browser::Chromium::find() {
+            let screen = ["DISPLAY", "WAYLAND_DISPLAY"].iter().any(|v| std::env::var_os(v).is_some_and(|x| !x.is_empty()));
+            c = c.with_browser(Arc::new(chromium), astroportd::cosurf::CoSurf::profiles_dir(&data), screen);
+        }
+        if let Some(h) = &p2p_handle {
+            c = c.with_p2p(h.clone());
+        }
+        Arc::new(c)
+    };
+    drop(cosurf.serve_remote());
+    // Relais MCP des agents des autres stations : une écoute du maillage sans fin propre ; détachée (et non dans `background`,
+    // que l'arrêt attend), elle s'arrête avec le processus.
+    drop(agents.serve_remote());
+    let member_ai = Arc::new(astroportd::member_ai::MemberAi::new(db.clone(), agent_keys2, publish_fn(&event_publisher)));
     let assist_admin = admin::assist_admin(&assist);
     // Maillage (stations, bootstrap gardé) et Capitaines (suivre, services des amis, accès à chaud) pour l'écran du Capitaine.
     let mut mesh = astroportd::mesh_admin::Mesh::new(db.clone(), p2p_handle.clone(), a.p2p_bootstrap.clone(), station_planes(&a.db).0, activity.clone())
@@ -1226,7 +1262,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         }
         Err(e) => eprintln!("contrôle local indisponible : {e}"),
     }
-    let mut ui = StationUi::new(services.clone(), dav.clone(), memory, ollama, true).with_setup(setup_code).with_conf_path(conf_path.clone()).with_ice(stun_port, turn.map(|t| t.0), a.ice_servers.clone()).with_presence(presence).with_chat(chat).with_people(people.clone()).with_agents(agents).with_ai(member_ai).with_reading(reading.clone()).with_seer(index_local.clone()).with_pull(pull).with_organize(organize).with_registrar(registrar.clone()).with_stations(stations.clone()).with_invites(invites).with_welcome(welcome).with_contacts(links.clone()).with_account(account_svc).with_book(address_book)
+    let mut ui = StationUi::new(services.clone(), dav.clone(), memory, ollama, true).with_setup(setup_code).with_conf_path(conf_path.clone()).with_ice(stun_port, turn.map(|t| t.0), a.ice_servers.clone()).with_presence(presence).with_chat(chat).with_people(people.clone()).with_agents(agents).with_cosurf(cosurf).with_ai(member_ai).with_reading(reading.clone()).with_seer(index_local.clone()).with_pull(pull).with_organize(organize).with_registrar(registrar.clone()).with_stations(stations.clone()).with_invites(invites).with_welcome(welcome).with_contacts(links.clone()).with_account(account_svc).with_book(address_book)
         .with_admin(admin_fn.clone());
     ui = ui.with_feedback(Arc::new(astroportd::feedback::Feedback::new(db.clone(), uplanet_name.to_string(), activity.clone()))).with_oc(Arc::new(astroportd::oc_member::OcMember::new(db.clone(), uplanet_name.to_string())));
     if let Some(f) = thumbs_fn {

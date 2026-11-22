@@ -215,7 +215,7 @@ if (ev.source === 'chat:msg') { if (/^[0-9a-f]{64}$/.test(ev.message)) lastPeer 
 if (ev.kind === 'call') mod('m-call.js').then(m => m.signal(K, ev.data), e => toast(e.message)); // visio
 feed.push(ev); if (feed.length > 200) feed.shift();
 listeners.forEach(l => l(ev));
-if (ev.at * 1000 > started - 5000) { if (ev.kind === 'economy') toast(ev.message, 1); else if (ev.source === 'bro:upload') toast(ev.message, 1); }
+if (ev.at * 1000 > started - 5000) { if (ev.kind === 'economy' || ev.kind === 'agent' || ev.kind === 'cosurf') toast(ev.message, 1); else if (ev.source === 'bro:upload') toast(ev.message, 1); }
 }, new AbortController().signal);
 }
 async function live(onEvent, signal) {

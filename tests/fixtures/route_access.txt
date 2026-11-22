@@ -13,6 +13,7 @@ GET /api/v1/account/site anon=401 member=200
 GET /api/v1/activity anon=401 member=200
 GET /api/v1/agents anon=401 member=200
 GET /api/v1/agents/requests anon=401 member=200
+GET /api/v1/agents/screen anon=401 member=400
 GET /api/v1/backup anon=401 member=501
 GET /api/v1/billet/check anon=400 member=400
 GET /api/v1/billet/destination anon=400 member=400
@@ -32,6 +33,9 @@ GET /api/v1/chat/settings anon=401 member=200
 GET /api/v1/constellation anon=401 member=501
 GET /api/v1/constellation/ledger anon=401 member=501
 GET /api/v1/contacts anon=401 member=200
+GET /api/v1/cosurf anon=401 member=501
+GET /api/v1/cosurf/screen anon=401 member=400
+GET /api/v1/cosurf/view anon=401 member=400
 GET /api/v1/dashboard anon=401 member=200
 GET /api/v1/devices anon=401 member=200
 GET /api/v1/faces anon=401 member=200
@@ -108,7 +112,10 @@ POST /api/v1/account/token/show anon=401 member=200
 POST /api/v1/account/unlock anon=400 member=400
 POST /api/v1/agents anon=401 member=422
 POST /api/v1/agents/decide anon=401 member=422
+POST /api/v1/agents/input anon=401 member=422
+POST /api/v1/agents/ready anon=401 member=422
 POST /api/v1/agents/revoke anon=401 member=422
+POST /api/v1/agents/stop anon=401 member=422
 POST /api/v1/attachments anon=401 member=501
 POST /api/v1/backup anon=401 member=422
 POST /api/v1/backup/rescue anon=401 member=422
@@ -145,6 +152,10 @@ POST /api/v1/constellation/charter/accept anon=401 member=403
 POST /api/v1/contacts/from-person anon=401 member=409
 POST /api/v1/contacts/link anon=401 member=422
 POST /api/v1/contacts/sync anon=401 member=200
+POST /api/v1/cosurf anon=401 member=422
+POST /api/v1/cosurf/input anon=401 member=422
+POST /api/v1/cosurf/level anon=401 member=422
+POST /api/v1/cosurf/stop anon=401 member=422
 POST /api/v1/devices anon=401 member=400
 POST /api/v1/devices/revoke anon=401 member=422
 POST /api/v1/faces/assign anon=401 member=422

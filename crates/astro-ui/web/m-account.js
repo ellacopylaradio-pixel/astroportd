@@ -297,8 +297,11 @@ export default async function account(root, K) {
   const start = h('section', { class: 'card wide ac-start', hidden: true }), space = h('section', { class: 'card', hidden: true });
   K.mod('m-start.js').then(m => m.default(K, { start, space, head, nDevices, guide: GUIDE }), () => {});
 
+  // Agents (OpenClaw, Claude…) qui demandent à agir pour le membre sur un site : écran m-agents.js.
+  const agentsCard = h('section', { class: 'card' }, head(t('Mes agents'), t('Des assistants (IA, robots) peuvent agir pour vous sur un site où vous êtes inscrit : vous vous connectez vous-même, puis vous leur prêtez le navigateur, le temps choisi.')),
+    h('p', {}, h('a', { class: 'btn', href: '#/agents' }, '🤖 ' + t('Gérer mes agents'))));
   // Trois onglets plutôt qu'une colonne de dix cartes : l'onglet ouvert se garde dans l'adresse (#/account?tab=securite).
-  const TABS = [['moi', t('Moi'), [start, profile, space, pics, reading, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), back, guard, rescue, backup, idCard, keys].filter(Boolean)]];
+  const TABS = [['moi', t('Moi'), [start, profile, space, pics, reading, h('details', { class: 'card wide fold' }, h('summary', {}, t('Réglages avancés')), h('div', { class: 'grid' }, [sitebox, visio, ai, planes]))]], ['appareils', t('Mes appareils'), [dav, devices, agentsCard]], ['securite', t('Ma sécurité'), [h('p', { class: 'muted' }, t('Protégé par votre station et vos amis.')), back, guard, rescue, backup, idCard, keys].filter(Boolean)]];
   const want = new URLSearchParams(location.hash.split('?')[1] || '').get('tab'), cur = TABS.some(x => x[0] === want) ? want : 'moi';
   const panels = TABS.map(([k, , cards]) => h('div', { class: 'grid', role: 'tabpanel', id: 'ac-p-' + k, 'aria-labelledby': 'ac-t-' + k, hidden: k !== cur }, cards));
   const tabs = TABS.map(([k, label], i) => h('button', { type: 'button', class: 'link', role: 'tab', id: 'ac-t-' + k, 'aria-controls': 'ac-p-' + k, 'aria-selected': String(k === cur), tabIndex: k === cur ? 0 : -1, onclick: () => pick(i),

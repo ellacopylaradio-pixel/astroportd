@@ -100,7 +100,8 @@ export default async function chat(root, K, query) {
 
   // Visio : l'appel part de l'en-tête de la conversation ; un appel manqué (texte « 📹 … » rangé par la station) propose de rappeler.
   const callBack = () => K.mod('m-call.js').then(m => m.call(K, s.peer, s.label), e => K.toast(e.message));
-  const linkify = text => text.split(/(https?:\/\/[^\s<>"]+)/).map((p, i) => (i % 2 ? h('a', { href: p, target: '_blank', rel: 'noopener noreferrer' }, p) : p));
+  // Liens web, et invitations à naviguer ensemble (#/cosurf?…) : celles-ci s'ouvrent dans l'application, sur la station du lecteur.
+  const linkify = text => text.split(/(https?:\/\/[^\s<>"]+|#\/cosurf\?[\w=&%.-]+)/).map((p, i) => (i % 2 ? (p.startsWith('#') ? h('a', { class: 'btn', href: p }, '🧭 ' + t('Rejoindre la navigation')) : h('a', { href: p, target: '_blank', rel: 'noopener noreferrer' }, p)) : p));
   // Sans texte, un envoi de fichiers se légende « 📎 nom » ou « 🎤 Message vocal » (ce que voit un autre client Nostr) : la bulle ne
   // répète pas la légende sous la pièce jointe.
   const caption = f => (/^audio\//.test(f.mime) ? '🎤 ' + t('Message vocal') : '📎 ' + f.name.replace(/^\d{8}-\d{6}-/, ''));
@@ -283,6 +284,10 @@ export default async function chat(root, K, query) {
       const c = s.convs.find(x => x.peer === s.peer) || { peer: s.peer };
       menuEl = h('div', { class: 'ch-menu', role: 'menu', onkeydown: e => { if (e.key === 'Escape') { closeMenu(); kebab.focus(); } } },
         s.station || group ? null : item('Ẑ ' + t('Envoyer des Ẑen à {0}', s.label), zen),
+        s.station || s.group?.left ? null : item('🧭 ' + t('Naviguer ensemble sur un site'), () => {
+          const who = group ? (s.group?.members || []) : [{ hex: s.peer, label: s.label }];
+          location.hash = '#/cosurf?' + new URLSearchParams({ conv: s.peer, with: who.map(x => x.hex).join(','), names: who.map(x => encodeURIComponent(x.label || '')).join(',') });
+        }),
         group && s.group && !s.group.left ? item('👥 ' + t('Participants et nom du groupe'), () => K.mod('c-group.js').then(m => m.default(K, detail, s.group, s.peer, () => openConv(s.peer, s.label, false, false, null, true)))) : null,
         s.station ? null : item(c.pinned ? '📌 ' + t('Désépingler') : '📌 ' + t('Épingler'), () => setPref(s.peer, { pinned: !c.pinned })),
         s.station ? null : item(c.muted ? '🔔 ' + t('Réactiver les notifications') : '🔕 ' + t('Mettre en sourdine'), () => setPref(s.peer, { muted: !c.muted })),

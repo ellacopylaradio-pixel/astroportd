@@ -1,0 +1,14 @@
+/* Écran d'un navigateur de la station (m-screen.js) : navigateur prêté, navigation partagée. */
+.ag-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0; }
+.ag-row button, .ag-row select, .ag-row input { min-height: 48px; }
+.ag-row .ghost { min-width: 48px; }
+.ag-row label { display: inline-flex; gap: .4rem; align-items: center; margin: 0; white-space: nowrap; }
+.ag-row label select { margin-top: 0; }
+.ag-view { margin: .6rem 0; }
+.sc-frame { position: relative; line-height: 0; }
+.ag-screen { display: block; width: 100%; height: auto; border: 1px solid var(--panel2); border-radius: var(--r); background: var(--panel2); cursor: pointer; touch-action: manipulation; }
+.ag-screen.sc-still { cursor: default; }
+.ag-type { flex: 1 1 10rem; min-width: 0; }
+.sc-dots { position: absolute; inset: 0; pointer-events: none; }
+.sc-dot { position: absolute; left: calc(var(--x) * 100%); top: calc(var(--y) * 100%); width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; box-shadow: 0 0 0 2px var(--accent); transition: left .15s, top .15s; }
+.sc-dot > span { position: absolute; left: 26px; top: -2px; line-height: 1.2; white-space: nowrap; font-size: .8rem; font-weight: 600; padding: .1rem .4rem; border-radius: .6rem; background: var(--accent); color: var(--on-accent); }

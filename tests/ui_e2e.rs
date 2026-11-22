@@ -1144,7 +1144,7 @@ async fn an_agent_asks_over_mcp_and_the_member_decides_through_the_api() {
     }
     let bearer = Some(format!("Bearer {token}"));
     let (s, _, tools) = rpc(bearer.clone(), json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).await;
-    assert_eq!((s, tools["result"]["tools"].as_array().map(Vec::len)), (StatusCode::OK, Some(2)));
+    assert_eq!((s, tools["result"]["tools"].as_array().map(Vec::len)), (StatusCode::OK, Some(8)));
     let (s, _, none) = rpc(bearer.clone(), json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await;
     assert_eq!((s, none), (StatusCode::ACCEPTED, Value::Null));
 

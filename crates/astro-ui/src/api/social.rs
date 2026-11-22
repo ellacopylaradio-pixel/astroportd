@@ -49,7 +49,7 @@ pub trait SocialApi: Auth {
         async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
     }
     /// Déclare un agent ; rend son jeton, montré une seule fois.
-    fn agents_enroll(&self, _who: &Principal, _name: String, _group: String, _max_secs: u64, _totp: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
+    fn agents_enroll(&self, _who: &Principal, _name: String, _group: String, _max_secs: u64, _totp: bool, _station: Option<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
     }
     /// Retire un agent (son jeton cesse de fonctionner).
@@ -61,12 +61,57 @@ pub trait SocialApi: Auth {
         async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
     }
     /// Le membre accorde (`secs` facultatif) ou refuse une demande.
-    fn agents_decide(&self, _who: &Principal, _id: String, _approve: bool, _secs: Option<u64>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+    fn agents_decide(&self, _who: &Principal, _id: String, _approve: bool, _secs: Option<u64>, _hosts: Vec<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
+    }
+    /// Mode navigateur : le membre s'est connecté et prête le navigateur à l'agent.
+    fn agents_ready(&self, _who: &Principal, _id: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
+    }
+    /// Le membre reprend la main : refuse, ou arrête tout de suite un accord ou un navigateur prêté.
+    fn agents_stop(&self, _who: &Principal, _id: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
+    }
+    /// Écran du navigateur prêté (images JSON `{ seq, w, h, jpeg }`), pour le membre seul.
+    fn agents_screen(&self, _who: &Principal, _id: String) -> impl Future<Output = Result<tokio::sync::watch::Receiver<Option<Arc<str>>>, ApiError>> + Send {
+        async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
+    }
+    /// Geste du membre dans le navigateur prêté (`{ type: click|scroll|key|text, … }`).
+    fn agents_input(&self, _who: &Principal, _id: String, _gesture: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
+    }
+    /// Naviguer ensemble : mes navigations partagées et celles où je suis invité.
+    fn cosurf_list(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("navigation partagée non disponible sur cette station")) }
+    }
+    /// Ouvre une navigation partagée sur `url` avec des amis (`(clé, nom)`), au niveau `level` (watch, point, drive).
+    fn cosurf_create(&self, _who: &Principal, _url: String, _guests: Vec<(String, String)>, _level: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("navigation partagée non disponible sur cette station")) }
+    }
+    /// Une navigation partagée (`station` : celle qui la tient, si ce n'est pas celle-ci).
+    fn cosurf_view(&self, _who: &Principal, _id: String, _station: Option<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("navigation partagée non disponible sur cette station")) }
+    }
+    /// Le propriétaire change le niveau d'un invité.
+    fn cosurf_level(&self, _who: &Principal, _id: String, _guest: String, _level: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("navigation partagée non disponible sur cette station")) }
+    }
+    /// Le propriétaire termine ; un invité s'en va.
+    fn cosurf_stop(&self, _who: &Principal, _id: String, _station: Option<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("navigation partagée non disponible sur cette station")) }
+    }
+    /// Flux de la navigation partagée : `(frame | pointer | level, JSON)`.
+    fn cosurf_screen(&self, _who: &Principal, _id: String, _station: Option<String>) -> impl Future<Output = Result<tokio::sync::mpsc::Receiver<(String, Arc<str>)>, ApiError>> + Send {
+        async { Err(ApiError::unavailable("navigation partagée non disponible sur cette station")) }
+    }
+    /// Geste dans la page partagée (`{ type: click|scroll|key|text|point, … }`).
+    fn cosurf_input(&self, _who: &Principal, _id: String, _station: Option<String>, _gesture: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("navigation partagée non disponible sur cette station")) }
     }
     /// Serveur MCP (JSON-RPC 2.0) : `bearer` = jeton d'agent. `Ok(None)` : notification, rien à répondre ;
     /// jeton absent ou faux : `Err` en 401.
-    fn mcp(&self, _bearer: Option<String>, _body: Value) -> impl Future<Output = Result<Option<Value>, ApiError>> + Send {
+    /// `station` (`?station=<PeerID>`) : station du membre quand l'agent tourne sur une autre station de la constellation.
+    fn mcp(&self, _bearer: Option<String>, _station: Option<String>, _body: Value) -> impl Future<Output = Result<Option<Value>, ApiError>> + Send {
         async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
     }
     /// Annuaire : fiches de contact, état de leur liaison à un MULTIPASS, personnes reconnues sans fiche.
@@ -132,6 +177,16 @@ pub(super) fn routes<B: SocialApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/agents/revoke", post(agents_revoke::<B>))
         .route("/api/v1/agents/requests", get(agents_requests::<B>))
         .route("/api/v1/agents/decide", post(agents_decide::<B>))
+        .route("/api/v1/agents/ready", post(agents_ready::<B>))
+        .route("/api/v1/agents/stop", post(agents_stop::<B>))
+        .route("/api/v1/agents/screen", get(agents_screen::<B>))
+        .route("/api/v1/agents/input", post(agents_input::<B>))
+        .route("/api/v1/cosurf", get(cosurf_list::<B>).post(cosurf_create::<B>))
+        .route("/api/v1/cosurf/view", get(cosurf_view::<B>))
+        .route("/api/v1/cosurf/level", post(cosurf_level::<B>))
+        .route("/api/v1/cosurf/stop", post(cosurf_stop::<B>))
+        .route("/api/v1/cosurf/screen", get(cosurf_screen::<B>))
+        .route("/api/v1/cosurf/input", post(cosurf_input::<B>))
         .route("/mcp", post(mcp::<B>))
         .route("/api/v1/contacts", get(contacts::<B>))
         .route("/api/v1/contacts/sync", post(contacts_sync::<B>))
@@ -460,6 +515,9 @@ struct EnrollBody {
     max_secs: u64,
     #[serde(default)]
     totp: bool,
+    /// Station de la constellation où tourne l'agent (PeerID) ; absente : cette station.
+    #[serde(default)]
+    station: Option<String>,
 }
 
 fn default_grant_secs() -> u64 {
@@ -467,7 +525,7 @@ fn default_grant_secs() -> u64 {
 }
 
 async fn agents_enroll<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<EnrollBody>) -> Response {
-    reply(st.backend.agents_enroll(&p, body.name, body.group, body.max_secs, body.totp).await)
+    reply(st.backend.agents_enroll(&p, body.name, body.group, body.max_secs, body.totp, body.station).await)
 }
 
 async fn agents_revoke<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<AgentIdBody>) -> Response {
@@ -483,16 +541,156 @@ struct DecideBody {
     id: String,
     approve: bool,
     secs: Option<u64>,
+    /// Mode navigateur : sites liés permis en plus du site demandé.
+    #[serde(default)]
+    hosts: Vec<String>,
 }
 
 async fn agents_decide<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<DecideBody>) -> Response {
-    reply(st.backend.agents_decide(&p, body.id, body.approve, body.secs).await)
+    reply(st.backend.agents_decide(&p, body.id, body.approve, body.secs, body.hosts).await)
+}
+
+async fn agents_ready<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<AgentIdBody>) -> Response {
+    reply(st.backend.agents_ready(&p, body.id).await)
+}
+
+async fn agents_stop<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<AgentIdBody>) -> Response {
+    reply(st.backend.agents_stop(&p, body.id).await)
+}
+
+#[derive(Deserialize)]
+struct ScreenQuery {
+    id: String,
+}
+
+/// Écran du navigateur prêté, en flux SSE : une image à chaque changement (la plus récente seulement, jamais d'arriéré).
+async fn agents_screen<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<ScreenQuery>) -> Response {
+    let rx = match st.backend.agents_screen(&p, q.id).await {
+        Ok(rx) => rx,
+        Err(e) => return reply(Err(e)),
+    };
+    let paced = stream::unfold((rx, true), |(mut rx, first)| async move {
+        if !first {
+            // Pas plus de ~8 images par seconde vers un téléphone, et jamais deux fois la même.
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            if rx.changed().await.is_err() {
+                return None;
+            }
+        }
+        loop {
+            // Image déjà là (première connexion) ou suivante ; flux fermé quand le navigateur s'arrête.
+            let current = rx.borrow_and_update().clone();
+            if let Some(f) = current {
+                return Some((Ok::<_, Infallible>(Event::default().event("frame").data(&*f)), (rx, false)));
+            }
+            if rx.changed().await.is_err() {
+                return None;
+            }
+        }
+    });
+    private(Sse::new(paced).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")).into_response())
+}
+
+async fn cosurf_list<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.cosurf_list(&p).await)
+}
+
+#[derive(Deserialize)]
+struct CoGuest {
+    hex: String,
+    #[serde(default)]
+    label: String,
+}
+
+#[derive(Deserialize)]
+struct CoCreate {
+    url: String,
+    guests: Vec<CoGuest>,
+    #[serde(default = "default_level")]
+    level: String,
+}
+
+fn default_level() -> String {
+    "point".into()
+}
+
+async fn cosurf_create<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<CoCreate>) -> Response {
+    reply(st.backend.cosurf_create(&p, b.url, b.guests.into_iter().map(|g| (g.hex, g.label)).collect(), b.level).await)
+}
+
+#[derive(Deserialize)]
+struct CoQuery {
+    id: String,
+    station: Option<String>,
+}
+
+async fn cosurf_view<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<CoQuery>) -> Response {
+    reply(st.backend.cosurf_view(&p, q.id, q.station).await)
+}
+
+#[derive(Deserialize)]
+struct CoLevel {
+    id: String,
+    guest: String,
+    level: String,
+}
+
+async fn cosurf_level<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<CoLevel>) -> Response {
+    reply(st.backend.cosurf_level(&p, b.id, b.guest, b.level).await)
+}
+
+#[derive(Deserialize)]
+struct CoStop {
+    id: String,
+    station: Option<String>,
+}
+
+async fn cosurf_stop<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<CoStop>) -> Response {
+    reply(st.backend.cosurf_stop(&p, b.id, b.station).await)
+}
+
+/// Flux SSE de la navigation partagée : images, pointeurs, niveau.
+async fn cosurf_screen<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<CoQuery>) -> Response {
+    let rx = match st.backend.cosurf_screen(&p, q.id, q.station).await {
+        Ok(rx) => rx,
+        Err(e) => return reply(Err(e)),
+    };
+    let events = stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|(k, d)| (Ok::<_, Infallible>(Event::default().event(k).data(&*d)), rx)) });
+    private(Sse::new(events).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")).into_response())
+}
+
+#[derive(Deserialize)]
+struct CoInput {
+    id: String,
+    station: Option<String>,
+    #[serde(flatten)]
+    gesture: Value,
+}
+
+async fn cosurf_input<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<CoInput>) -> Response {
+    reply(st.backend.cosurf_input(&p, b.id, b.station, b.gesture).await)
+}
+
+#[derive(Deserialize)]
+struct InputBody {
+    id: String,
+    #[serde(flatten)]
+    gesture: Value,
+}
+
+async fn agents_input<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<InputBody>) -> Response {
+    reply(st.backend.agents_input(&p, body.id, body.gesture).await)
 }
 
 /// Serveur MCP : le jeton d'agent (`Authorization: Bearer`) remplace la connexion d'un compte.
-async fn mcp<B: SocialApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
+#[derive(Deserialize)]
+struct McpQuery {
+    station: Option<String>,
+}
+
+async fn mcp<B: SocialApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap, Query(q): Query<McpQuery>, Json(body): Json<Value>) -> Response {
     let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(|t| t.trim().to_owned());
-    match st.backend.mcp(bearer, body).await {
+    match st.backend.mcp(bearer, q.station, body).await {
         Ok(Some(v)) => private(Json(v).into_response()),
         Ok(None) => private(StatusCode::ACCEPTED.into_response()),
         Err(e) => {

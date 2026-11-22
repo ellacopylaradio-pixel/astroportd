@@ -246,7 +246,8 @@ export default async function write(root, K) {
     const pane = h('div', { class: 'grid' }), pick = (k, b) => { choice.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); pane.replaceChildren(k === 'blog' ? note() : privateSave(shared)); };
     const choice = h('div', { class: 'wr-choice', role: 'group', 'aria-label': t('Que faire de ce partage ?') },
       h('button', { type: 'button', onclick: ev => pick('private', ev.currentTarget) }, h('b', {}, '🔒 ', t('Ranger en privé')), h('small', {}, t('Favori ou dossier de mon uCloud'))),
-      h('button', { type: 'button', onclick: ev => pick('blog', ev.currentTarget) }, h('b', {}, '📣 ', t('Publier une note')), h('small', {}, t('Visible de vos amis et sur votre site'))));
+      h('button', { type: 'button', onclick: ev => pick('blog', ev.currentTarget) }, h('b', {}, '📣 ', t('Publier une note')), h('small', {}, t('Visible de vos amis et sur votre site'))),
+      shared.url ? h('a', { class: 'btn ghost', href: '#/cosurf?url=' + encodeURIComponent(shared.url) }, h('b', {}, '🧭 ', t('Naviguer avec un ami')), h('small', {}, t('Se faire aider sur cette page'))) : null);
     root.replaceChildren(h('h2', {}, t('Partagé depuis votre téléphone')), choice, pane);
     pick(shared.list.length && !shared.url ? 'blog' : 'private', choice.querySelectorAll('button')[shared.list.length && !shared.url ? 1 : 0]);
     return;

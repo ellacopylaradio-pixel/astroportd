@@ -795,6 +795,10 @@ if { [ "$WANT_FACE" = 1 ] || [ "$WANT_EMBED" = 1 ] || [ "$WANT_SEARCH" = 1 ]; } 
   SYS_NEEDS+=("python3-pip : ONNX Runtime (visages, recherche)")
 fi
 command -v git >/dev/null 2>&1 || SYS_NEEDS+=("git : plugins (films, énergie, DNS)")
+# Navigateur prêté aux agents (Mes agents) : facultatif ; ASTRO_CHROMIUM peut désigner un autre binaire.
+if [ -z "${ASTRO_CHROMIUM:-}" ] && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1 && ! command -v google-chrome >/dev/null 2>&1; then
+  SYS_NEEDS+=("chromium : navigateur jetable prêté aux agents, dans Mes agents (facultatif)"); SUDO_ARGS+=(--chromium)
+fi
 # ORIGIN publie ses fichiers par Kubo, en miroir du disque, sur le réseau IPFS des stations ORIGIN (swarm.key à zéros) ; une station ẐEN n'a jamais de Kubo.
 if [ "$MODE" = zen ] || conf_get mode 2>/dev/null | grep -qx zen; then
   SUDO_ARGS+=(--no-kubo)

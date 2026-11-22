@@ -1,0 +1,17 @@
+/* Mes agents (m-agents.js) : demandes, navigateur prêté diffusé, agents déclarés. */
+.ag-req { display: block; }
+.ag-req > strong { overflow-wrap: anywhere; }
+.ag-live > strong::before { content: '● '; color: var(--accent); }
+.ag-code { display: inline-block; max-width: 100%; overflow-wrap: anywhere; font-size: .8rem; padding: .2rem .4rem; border-radius: var(--r); background: var(--panel2); }
+.ag-token { margin: .6rem 0; padding: .6rem; border: 1px solid var(--accent); border-radius: var(--r); }
+.ag-list { list-style: none; padding: 0; margin: 0; }
+.ag-list > li { padding: .8rem 0; border-top: 1px solid var(--panel2); }
+.ag-list > li:first-child { border-top: 0; padding-top: .2rem; }
+.ag-list > li:not(.ag-req) { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cs-form fieldset.cs-pick { border: 1px solid var(--panel2); border-radius: var(--r); padding: .6rem .8rem; margin: .8rem 0; }
+.cs-pick label { min-height: 48px; display: flex; align-items: center; gap: .5rem; font-weight: 400; margin: 0; }
+.cs-pick legend { font-weight: 600; }
+.cs-form button[type=submit] { min-height: 52px; font-size: 1.05rem; }
+.cs-status { font-size: 1.05rem; font-weight: 600; }
+.ag-list > li .ag-row { margin: 0; flex-wrap: nowrap; }

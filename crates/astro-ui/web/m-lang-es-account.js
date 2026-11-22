@@ -1,6 +1,8 @@
 'use strict';
 // Dictionnaire es, écran m-account.js.
 export default {
+"Des assistants (IA, robots) peuvent agir pour vous sur un site où vous êtes inscrit : vous vous connectez vous-même, puis vous leur prêtez le navigateur, le temps choisi.": "Asistentes (IA, robots) pueden actuar por usted en un sitio donde tiene cuenta: usted inicia sesión y luego les presta el navegador el tiempo que elija.",
+"Gérer mes agents": "Gestionar mis agentes",
 "Relais où vous publiez": "Relés donde publica",
 "Publié sur votre relai : vos Proches le voient.": "Publicado en su relé: sus Personas lo ven.",
 "Langue de l'interface": "Idioma de la interfaz",

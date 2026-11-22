@@ -1,6 +1,8 @@
 'use strict';
 // Dictionnaire es du chat (c-*.js), chargé avec son premier fichier.
 export default {
+"Naviguer ensemble sur un site": "Navegar juntos en un sitio",
+"Rejoindre la navigation": "Unirse a la navegación",
 "Chercher dans les conversations": "Buscar en las conversaciones",
 "Nouveau message": "Nuevo mensaje",
 "Vous : ": "Usted: ",

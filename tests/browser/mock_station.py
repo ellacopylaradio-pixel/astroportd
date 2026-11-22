@@ -57,6 +57,21 @@ ACCOUNTS = [dict(hex='bb' * 32, email='bob@example.org', status='cooperative_mem
             dict(hex='cc' * 32, email='chloe@example.org', status='active_rental', quota_bytes=10 ** 10, used_bytes=10 ** 8, unlimited=False, weekly_zen=1, files=12)]
 ADMIN['index'] = dict(enabled=True, default=True, engine=[], lend=None, members=[dict(hex='bb' * 32, email='bob@example.org', enabled=True, own=False, read=120, friend='La station de Marie'), dict(hex='cc' * 32, email='chloe@example.org', enabled=False, own=True, read=0, friend=None)])
 
+# Agents (m-agents.js) : un agent déclaré, une demande en mode navigateur ; l'écran prêté est une page de connexion dessinée.
+AGENTS = dict(agents=[dict(id='a1b2c3d4', name='OpenClaw', group='Agents', max_secs=3600, totp=False, created_at=1790000000)],
+              requests=[dict(id='r1', agent='OpenClaw', site='linkedin.com', reason='publier le résumé de la semaine', mode='navigateur', state='pending', asked_at=1790000000, until=None),
+                        dict(id='r2', agent='OpenClaw', site='impots.gouv.fr', reason='relever ma facture', mode='accord', state='pending', asked_at=1790000000, until=None)])
+# Naviguer ensemble : c1 tenue ici par Alice ; c2 tenue par la station d'un ami (Alice y est invitée).
+COSURF = {'c1': dict(id='c1', owner='aa' * 32, owner_label='alice', mine=True, level=None, url='https://impots.gouv.fr/', until=4102444800, station='12D3KooWIci', guests=[dict(hex='ab' * 32, label='Léa Martin', level='drive')]),
+          'c2': dict(id='c2', owner='cd' * 32, owner_label='Marc', mine=False, level='point', url='https://www.ameli.fr/', until=4102444800, station='12D3KooWAmi', guests=[dict(hex='aa' * 32, label='alice', level='point')])}
+
+def login_page(n):
+    im = Image.new('RGB', (800, 600), (245, 246, 248)); d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 800, 56), fill=(10, 102, 194)); d.text((24, 20), 'linkedin.com', fill=(255, 255, 255))
+    d.text((250, 140), 'Identifiez-vous', fill=(20, 20, 20)); d.rectangle((250, 180, 550, 220), outline=(120, 120, 120)); d.rectangle((250, 240, 550, 280), outline=(120, 120, 120))
+    d.rectangle((250, 310, 550, 350), fill=(10, 102, 194)); d.text((370, 323), "S'identifier", fill=(255, 255, 255)); d.text((250, 380), f'image {n}', fill=(150, 150, 150))
+    b = io.BytesIO(); im.save(b, 'JPEG', quality=60); return base64.b64encode(b.getvalue()).decode()
+
 def people():
     by = {}
     for f in STATE['faces']:
@@ -137,6 +152,37 @@ class H(BaseHTTPRequestHandler):
         if p.startswith('/ui/'):
             f = WEB / p[4:]
             return self.send(200, f.read_bytes(), MIME.get(f.suffix, 'application/octet-stream')) if f.is_file() else self.send(404, b'x', 'text/plain')
+        if p == '/api/v1/agents': return self.send(200, dict(here='12D3KooWIci', agents=AGENTS['agents']))
+        if p == '/api/v1/cosurf/view':
+            from urllib.parse import parse_qs
+            q = parse_qs(self.path.split('?', 1)[1]); STATE.setdefault('cosurf_views', []).append(q)
+            import time
+            s = COSURF.get(q['id'][0])
+            if s: s['until'] = int(time.time()) + 3600
+            return self.send(200, s) if s else self.send(404, dict(error='navigation partagée introuvable ou terminée'))
+        if p == '/api/v1/cosurf/screen':
+            from urllib.parse import parse_qs
+            sid = parse_qs(self.path.split('?', 1)[1])['id'][0]
+            self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+            import time
+            try:
+                for n in range(40):
+                    self.wfile.write(f'event: frame\ndata: {json.dumps(dict(seq=n + 1, w=800, h=600, jpeg=login_page(n)))}\n\n'.encode())
+                    if n == 1: self.wfile.write(f'event: pointer\ndata: {json.dumps(dict(who="Léa Martin" if sid == "c1" else "Marc", hex="ab" * 32, x=0.4, y=0.5, at=1))}\n\n'.encode())
+                    if sid == 'c2' and n == STATE.get('give_hand_at', 10 ** 6): self.wfile.write(b'event: level\ndata: {"level": "drive"}\n\n')
+                    self.wfile.flush(); time.sleep(0.4)
+            except (BrokenPipeError, ConnectionResetError): pass
+            return
+        if p == '/api/v1/agents/requests': return self.send(200, dict(requests=AGENTS['requests']))
+        if p == '/api/v1/agents/screen':
+            self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+            import time
+            try:
+                for n in range(40):
+                    self.wfile.write(f'event: frame\ndata: {json.dumps(dict(seq=n + 1, w=800, h=600, jpeg=login_page(n)))}\n\n'.encode()); self.wfile.flush()
+                    STATE['frames'] = n + 1; time.sleep(0.5)
+            except (BrokenPipeError, ConnectionResetError): pass
+            return
         if p == '/api/v1/me':
             if not (self.headers.get('Authorization') or '').startswith(('Basic ', 'Nostr ')): self.send(401, dict(error='authentification requise'))
             return self.send(200, dict(hex='aa' * 32, email='alice@example.org', captain=True, ai=STATE.get('ai', True)))
@@ -304,6 +350,31 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, dict(assigned=len(body['ids']), name=body['name']))
         if p == '/api/v1/station/coop': return self.send(200, COOP)
         if p == '/api/v1/devices': return self.send(200, dict(id='d2', label=body['label'], root=body['root'], mode=body['mode'], token='dv_' + 'ab' * 16, note='Ce jeton ne sera plus jamais affiché : copiez-le maintenant.'))
+        if p == '/api/v1/cosurf':
+            STATE.setdefault('cosurf_created', []).append(body)
+            return self.send(200, dict(COSURF['c1'], url='https://' + body['url'].split('://')[-1].split('/')[0] + '/'))
+        if p == '/api/v1/cosurf/level':
+            for g in COSURF[body['id']]['guests']:
+                if g['hex'] == body['guest']: g['level'] = body['level']
+            return self.send(200, COSURF[body['id']])
+        if p == '/api/v1/cosurf/input': STATE.setdefault('cosurf_inputs', []).append(body); return self.send(200, dict(ok=True))
+        if p == '/api/v1/cosurf/stop': return self.send(200, dict(id=body['id'], ended=True))
+        if p.startswith('/api/v1/agents'):
+            reqs = {r['id']: r for r in AGENTS['requests']}
+            if p == '/api/v1/agents':
+                a = dict(id='e5f6a7b8', name=body['name'], group=body['group'], max_secs=body['max_secs'], totp=False, created_at=1790000000); AGENTS['agents'].append(a)
+                return self.send(200, dict(id=a['id'], name=a['name'], token='ag1_' + 'aa' * 8 + '_' + 'cd' * 32, note='montré une fois'))
+            if p == '/api/v1/agents/revoke': AGENTS['agents'] = [a for a in AGENTS['agents'] if a['id'] != body['id']]; return self.send(200, dict(revoked=body['id']))
+            if p == '/api/v1/agents/input': STATE.setdefault('inputs', []).append(body); return self.send(200, dict(ok=True))
+            r = reqs.get(body.get('id'))
+            if r is None: return self.send(404, dict(error='agent ou demande introuvable'))
+            import time
+            if p == '/api/v1/agents/decide':
+                if not body['approve']: AGENTS['requests'].remove(r); return self.send(200, dict(r, state='denied'))
+                r.update(state='login' if r['mode'] == 'navigateur' else 'granted', until=int(time.time()) + (600 if r['mode'] == 'navigateur' else body.get('secs', 900)), secs=body.get('secs', 900))
+                return self.send(200, r)
+            if p == '/api/v1/agents/ready': r.update(state='granted', until=int(time.time()) + r.get('secs', 900)); return self.send(200, r)
+            if p == '/api/v1/agents/stop': AGENTS['requests'].remove(r); return self.send(200, dict(r, state='revoked'))
         if p == '/api/v1/devices/revoke': return self.send(200, dict(revoked=body['id']))
         if p == '/api/v1/organize/preview': return self.send(200, dict(total=7, placed=1, protected=4, unknown=1, capped=False, by_kind=[dict(kind='images', folder='Images', files=2, bytes=3000, sample=[dict(**{'from': '/Imports/A/p.jpg', 'to': '/Images/p.jpg'})]), dict(kind='documents', folder='Documents', files=5, bytes=900, sample=[])]))
         if p == '/api/v1/organize/undo': return self.send(200, dict(restored=7))

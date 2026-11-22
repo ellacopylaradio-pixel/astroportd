@@ -1,6 +1,8 @@
 'use strict';
 // Dictionnaire en, écran m-write.js.
 export default {
+"Naviguer avec un ami": "Browse with a friend",
+"Se faire aider sur cette page": "Get help on this page",
 "Ajouter une image de couverture": "Add a cover image",
 "Aperçu": "Preview",
 "Article programmé": "Article scheduled",

@@ -1,6 +1,6 @@
 [package]
 name = "astroportd"
-version = "1.8.0"
+version = "1.9.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -56,6 +56,9 @@ crc32fast.workspace = true
 flate2.workspace = true
 if-addrs.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal", "process"] }
+# Navigateur prêté à un agent : groupe de processus tué d'un coup, porte CDP en WebSocket.
+rustix = { workspace = true, features = ["process"] }
+tokio-tungstenite.workspace = true
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 [features]
@@ -95,7 +98,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.8.0"
+version = "1.9.0"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only"

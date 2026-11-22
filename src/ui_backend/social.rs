@@ -14,6 +14,7 @@ pub struct SocialBackend<B: BlobStore> {
     pub(super) memory: Option<Arc<BroMemory>>,
     pub(super) contacts: Option<Arc<crate::identity_links::IdentityLinks<B>>>,
     pub(super) agents: Option<Arc<crate::agents::Agents>>,
+    pub(super) cosurf: Option<Arc<crate::cosurf::CoSurf>>,
     pub(super) ai: Option<Arc<crate::member_ai::MemberAi>>,
     pub(super) reading: Option<Arc<crate::delegation::Delegation>>,
     pub(super) book: Option<Arc<crate::address_book::AddressBook<B>>>,
@@ -36,6 +37,16 @@ impl<B: BlobStore> SocialBackend<B> {
         card["plane"] = json!(people.plane());
     }
 
+    fn cosurf_service(&self) -> Result<&Arc<crate::cosurf::CoSurf>, ApiError> {
+        self.cosurf.as_ref().ok_or_else(|| ApiError::unavailable("navigation partagée non disponible sur cette station"))
+    }
+
+    /// La session est-elle tenue par une autre station ? (`station` donnée et différente de celle-ci.)
+    fn elsewhere<'a>(&self, station: Option<&'a str>) -> Option<&'a str> {
+        let here = self.cosurf.as_ref().and_then(|c| c.station());
+        station.filter(|s| !s.is_empty() && Some(*s) != here.as_deref())
+    }
+
     fn agents_service(&self) -> Result<&Arc<crate::agents::Agents>, ApiError> {
         self.agents.as_ref().ok_or_else(|| ApiError::unavailable("agents non disponibles sur cette station"))
     }
@@ -49,8 +60,8 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
     async fn agents_list(&self, who: &Principal) -> Result<Value, ApiError> {
         self.agents_service()?.list(&who.hex).await.map_err(agent_err)
     }
-    async fn agents_enroll(&self, who: &Principal, name: String, group: String, max_secs: u64, totp: bool) -> Result<Value, ApiError> {
-        self.agents_service()?.enroll(&who.hex, &name, &group, max_secs, totp).await.map_err(agent_err)
+    async fn agents_enroll(&self, who: &Principal, name: String, group: String, max_secs: u64, totp: bool, station: Option<String>) -> Result<Value, ApiError> {
+        self.agents_service()?.enroll_on(&who.hex, &name, &group, max_secs, totp, station.as_deref()).await.map_err(agent_err)
     }
     async fn agents_revoke(&self, who: &Principal, id: String) -> Result<Value, ApiError> {
         self.agents_service()?.revoke(&who.hex, &id).await.map_err(agent_err)
@@ -58,11 +69,65 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
     async fn agents_requests(&self, who: &Principal) -> Result<Value, ApiError> {
         Ok(self.agents_service()?.requests(&who.hex))
     }
-    async fn agents_decide(&self, who: &Principal, id: String, approve: bool, secs: Option<u64>) -> Result<Value, ApiError> {
-        self.agents_service()?.decide(&who.hex, &id, approve, secs).await.map_err(agent_err)
+    async fn cosurf_list(&self, who: &Principal) -> Result<Value, ApiError> {
+        Ok(self.cosurf_service()?.list(&who.hex))
     }
-    async fn mcp(&self, bearer: Option<String>, body: Value) -> Result<Option<Value>, ApiError> {
-        self.agents_service()?.mcp(bearer.as_deref(), &body).await.map_err(agent_err)
+    async fn cosurf_create(&self, who: &Principal, url: String, guests: Vec<(String, String)>, level: String) -> Result<Value, ApiError> {
+        let label = who.email.as_deref().and_then(|e| e.split('@').next()).filter(|s| !s.is_empty()).map_or_else(|| format!("…{}", &who.hex[56..]), str::to_owned);
+        self.cosurf_service()?.create(&who.hex, &label, &url, &guests, &level).await.map_err(super::cosurf_err)
+    }
+    async fn cosurf_view(&self, who: &Principal, id: String, station: Option<String>) -> Result<Value, ApiError> {
+        let c = self.cosurf_service()?;
+        match self.elsewhere(station.as_deref()) {
+            Some(s) => c.remote(s, &who.hex, &id, "view", &Value::Null).await,
+            None => c.view(&who.hex, &id),
+        }
+        .map_err(super::cosurf_err)
+    }
+    async fn cosurf_level(&self, who: &Principal, id: String, guest: String, level: String) -> Result<Value, ApiError> {
+        self.cosurf_service()?.set_level(&who.hex, &id, &guest, &level).await.map_err(super::cosurf_err)
+    }
+    async fn cosurf_stop(&self, who: &Principal, id: String, station: Option<String>) -> Result<Value, ApiError> {
+        let c = self.cosurf_service()?;
+        match self.elsewhere(station.as_deref()) {
+            Some(s) => c.remote(s, &who.hex, &id, "stop", &Value::Null).await,
+            None => c.stop(&who.hex, &id).await,
+        }
+        .map_err(super::cosurf_err)
+    }
+    async fn cosurf_screen(&self, who: &Principal, id: String, station: Option<String>) -> Result<tokio::sync::mpsc::Receiver<(String, Arc<str>)>, ApiError> {
+        let c = self.cosurf_service()?;
+        match self.elsewhere(station.as_deref()) {
+            Some(s) => c.remote_watch(s, &who.hex, &id).await,
+            None => c.watch(&who.hex, &id).await,
+        }
+        .map_err(super::cosurf_err)
+    }
+    async fn cosurf_input(&self, who: &Principal, id: String, station: Option<String>, gesture: Value) -> Result<Value, ApiError> {
+        let c = self.cosurf_service()?;
+        match self.elsewhere(station.as_deref()) {
+            Some(s) => c.remote(s, &who.hex, &id, "input", &gesture).await,
+            None => c.input(&who.hex, &id, &gesture).await,
+        }
+        .map_err(super::cosurf_err)
+    }
+    async fn agents_ready(&self, who: &Principal, id: String) -> Result<Value, ApiError> {
+        self.agents_service()?.ready(&who.hex, &id).await.map_err(agent_err)
+    }
+    async fn agents_stop(&self, who: &Principal, id: String) -> Result<Value, ApiError> {
+        self.agents_service()?.stop(&who.hex, &id).await.map_err(agent_err)
+    }
+    async fn agents_screen(&self, who: &Principal, id: String) -> Result<tokio::sync::watch::Receiver<Option<Arc<str>>>, ApiError> {
+        self.agents_service()?.screen_watch(&who.hex, &id).await.map_err(agent_err)
+    }
+    async fn agents_input(&self, who: &Principal, id: String, gesture: Value) -> Result<Value, ApiError> {
+        self.agents_service()?.screen_input(&who.hex, &id, &gesture).await.map_err(agent_err)
+    }
+    async fn agents_decide(&self, who: &Principal, id: String, approve: bool, secs: Option<u64>, hosts: Vec<String>) -> Result<Value, ApiError> {
+        self.agents_service()?.decide_hosts(&who.hex, &id, approve, secs, &hosts).await.map_err(agent_err)
+    }
+    async fn mcp(&self, bearer: Option<String>, station: Option<String>, body: Value) -> Result<Option<Value>, ApiError> {
+        self.agents_service()?.mcp_via(bearer.as_deref(), station.as_deref(), &body).await.map_err(agent_err)
     }
     async fn book(&self, who: &Principal, op: BookOp) -> Result<Value, ApiError> {
         let book = self.book.as_ref().ok_or_else(|| ApiError::unavailable("le carnet d'adresses n'est pas disponible sur cette station"))?;
