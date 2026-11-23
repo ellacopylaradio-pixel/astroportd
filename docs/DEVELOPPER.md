@@ -323,7 +323,7 @@ Tout passe par **la même adresse et le même port** (8090 en local, 443 en HTTP
   exacte est `public_kinds` dans `crates/astro-relay/src/policy.rs`.
 - **API HTTP** : en-tête `Authorization: Nostr <base64>` portant un kind **27235** (NIP-98) lié à l'URL exacte, à la
   méthode et à l'empreinte du corps (tag `payload`). Fenêtre de 120 s, chaque événement n'est accepté qu'une fois.
-- **WebDAV / CardDAV / CalDAV** : authentification Basic avec un **jeton d'appareil** (créé dans *Moi › Mes appareils*
+- **WebDAV / CardDAV / CalDAV** : authentification Basic avec un **jeton d'appareil** (créé dans *Moi › Appareils*
   ou par `astroportd token <email>`), révocable et confiné à un compte.
 
 L'écriture sur le relai n'est permise qu'aux membres du cercle, selon le mode de la station. Une exception : un

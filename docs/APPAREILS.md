@@ -2,7 +2,7 @@
 
 Trois gestes, une seule fois, et votre station travaille pour vous : vos **contacts** nourrissent la reconnaissance des visages, vos **photos** arrivent toutes seules, vos **fichiers** s'ouvrent comme un disque.
 
-Tout se trouve dans **Moi › Mes appareils** :
+Tout se trouve dans **Moi › Appareils** :
 
 | Ce qu'on vous demande | Où le trouver |
 |---|---|
@@ -47,7 +47,7 @@ Vos fiches de contact servent de base à la reconnaissance : quand la station re
 
 ## Étape 2 · Mes photos ⬆
 
-Créez d'abord un **jeton d'appareil** dans **Moi › Mes appareils** : nom « Téléphone de Léa », dossier `/Photos/Téléphone de Léa`, droits **⬆ Envoi seul**. Copiez-le : il n'est montré qu'une fois.
+Créez d'abord un **jeton d'appareil** dans **Moi › Appareils** : nom « Téléphone de Léa », dossier `/Photos/Téléphone de Léa`, droits **⬆ Envoi seul**. Copiez-le : il n'est montré qu'une fois.
 
 - **Android** : **FolderSync** ou **PhotoSync** › nouveau compte *WebDAV* (adresse, identifiant, jeton d'appareil) › synchronisation *vers le serveur* du dossier `DCIM/Camera`, programmée chaque nuit ou à chaque photo.
 - **iPhone** : **PhotoSync** › *Réglages › Configurer › WebDAV* (mêmes informations) › *Transfert automatique* : chaque nouvelle photo part vers la station.
@@ -74,5 +74,5 @@ Ajoutez la station à l'écran d'accueil (menu du navigateur › *Ajouter à l'�
 
 - **« Identifiant ou mot de passe refusé »** : recopiez le jeton avec le bouton « Copier » ; s'il a été remplacé, l'ancien ne marche plus.
 - **Le jeton d'appareil ne voit pas mes contacts** : normal, il ne voit que son dossier. Les contacts et l'agenda demandent le jeton principal.
-- **Rien n'arrive** : regardez dans **Moi › Mes appareils** la date du « dernier envoi » de l'appareil.
+- **Rien n'arrive** : regardez dans **Moi › Appareils** la date du « dernier envoi » de l'appareil.
 - Toujours bloqué ? Votre Capitaine est là pour ça.

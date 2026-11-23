@@ -1,4 +1,4 @@
-"""Test de fumée navigateur de la répartition des données (Mon compte › Moi › Mon espace) : anneau par zone (privé, partagé,
+"""Test de fumée navigateur de la répartition des données (Moi › Sauvegarde › Où sont vos données) : anneau par zone (privé, partagé,
 Public, Coffre, visages/messages/mémoire, index, carnet), jauge « à l'abri chez vos amis », jauges de ce qu'on garde pour
 eux. Sans gardien : on le dit et on mène au choix d'un gardien. Ordinateur et 400 px.
 
@@ -29,7 +29,7 @@ with sync_playwright() as pw:
         ctx.add_init_script("localStorage.setItem('basic', btoa('alice@example.org:jeton'))")
         noscroll = lambda what: check(not page.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth'), f'{tag} : pas de défilement horizontal ({what})')
         STATE['spread'] = SPREAD
-        page.goto(f'http://127.0.0.1:{port}/#/account?tab=moi'); page.wait_for_selector('text=Où sont vos données')
+        page.goto(f'http://127.0.0.1:{port}/#/backup'); page.wait_for_selector('text=Où sont vos données')
         txt = page.locator('main').inner_text()
         check('🗝️ Coffre' in txt and '🫂 Visages, messages et mémoire' in txt and '🔗 Partagé' in txt, f'{tag} : légende des zones')
         check(page.locator('.ac-z-coffre').count() >= 2, f'{tag} : la zone Coffre a sa part d’anneau et sa pastille')
@@ -40,7 +40,8 @@ with sync_playwright() as pw:
         noscroll('répartition'); page.locator('text=Où sont vos données').scroll_into_view_if_needed(); page.screenshot(path=str(OUT / f'spread-{tag}.png'), full_page=True)
         STATE['spread'] = dict(SPREAD, safe=0, guardians=[], hosted=[], hosted_total=0)
         page.reload(); page.wait_for_selector('text=Où sont vos données')
-        check(page.locator('a[href="#/account?tab=securite"]', has_text='Choisir un gardien').count() >= 1, f'{tag} : sans gardien, on mène à son choix')
+        check(page.locator('.warn', has_text='Aucun ami ne garde encore vos données').count() == 1 and page.locator('#ac-guard, #bk-friend').count() >= 1, f'{tag} : sans gardien, l’alerte est à côté de son choix')
+        check('0 % à l’abri' in page.inner_text('main'), f'{tag} : le bilan dit la part des fichiers à l’abri')
         STATE.pop('spread')
         ctx.close()
     br.close()

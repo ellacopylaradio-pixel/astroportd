@@ -8,12 +8,12 @@ export default async function money(root, K) {
     const [d, fp, me, isle] = await Promise.all([api('/api/v1/dashboard'), api('/api/v1/me/footprint'), api('/api/v1/me'), api('/api/v1/island').catch(() => null)]);
     // Île : réseau Ğ1 coupé, ou des promesses encore à régler. Rien à voir sinon.
     const pending = (isle?.promises || []).filter(p => p.state === 'accepted' && p.settled !== 'paid').length;
-    const b = d.balance, e = d.energy, w = d.sovereignty, k = fp.disk, ox = fp.opex, cx = fp.capex;
+    // Une partie absente (station plus ancienne, service coupé) n'éteint pas tout l'écran : sa carte dit « — ».
+    const b = d.balance || {}, e = d.energy || {}, w = d.sovereignty || {}, k = fp.disk || {}, ox = fp.opex || {}, cx = { assets: [], ...fp.capex };
     const pct = k.quota_bytes ? k.used_bytes / k.quota_bytes : 0;
     const card = (title, ...kids) => h('section', { class: 'card' }, h('h2', {}, t(title)), ...kids);
     const big = (v, unit) => h('p', { class: 'big' }, v, h('small', { class: 'muted' }, ' ' + unit));
     root.replaceChildren(
-      h('h2', {}, t('Mes Ẑen')),
       ...(isle?.open || pending ? [h('section', { class: 'card' },
         h('p', { class: isle.open ? 'degraded' : 'muted', role: 'status' }, '🏝️ ', isle.open ? t('Réseau Ğ1 coupé : vos envois deviennent des promesses, réglées en Ğ1 dès son retour.') : t('{0} promesse(s) en attente de règlement en Ğ1.', pending)),
         isle.open && isle.credit ? h('p', {}, t('Vous pouvez encore promettre {0} Ẑen.', isle.available_zen)) : null,

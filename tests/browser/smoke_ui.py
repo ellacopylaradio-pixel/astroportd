@@ -84,8 +84,12 @@ with sync_playwright() as pw:
     page.click('.pe-tray button:has-text("Pas à reconnaître")'); page.wait_for_timeout(600)
     forgets = [b for p_, b in STATE['posts'] if p_.endswith('/forget')]
     check(len(forgets) == 1 and len(forgets[0]['ids']) == sel, 'les visages sélectionnés sont oubliés (confirmation demandée)')
-    # Réplication.
-    page.goto(f'http://127.0.0.1:{port}/#/replication'); page.wait_for_selector('.rp-ring'); page.wait_for_timeout(300)
+    # Réplication : l'ancienne adresse mène à Moi › Sauvegarde, où les copies chez les autres stations sont repliées.
+    page.goto(f'http://127.0.0.1:{port}/#/replication'); page.wait_for_selector('#bk-copies'); page.wait_for_timeout(200)
+    check(page.evaluate('location.hash') == '#/backup', 'l\'ancienne adresse de la réplication mène à Sauvegarde')
+    check('Suis-je à l’abri ?' in page.inner_text('main') and '90 % copiées' in page.inner_text('main'), 'Sauvegarde commence par un bilan, dont les copies de vos publications')
+    page.click('#bk-copies summary'); page.wait_for_selector('.rp-ring'); page.wait_for_timeout(300)
+    page.click('summary:has-text("Détails techniques")')  # les voies réseau sont repliées pour le membre
     txt = page.inner_text('main')
     check('27 sur 30' in txt and 'Proche de proche' in txt and 'Maillage P2P' in txt and 'Injoignable' in txt and 'connexion fermée' in txt, 'la réplication montre où, par qui et par quelle voie')
     check('5 sur 8' in txt and 'poppy : 5 fichier' in txt, 'les fichiers fournis par d\'autres stations sont listés')
@@ -173,13 +177,16 @@ with sync_playwright() as pw:
     check(pl.locator('#list a.btn').first.inner_text() == 'Ouvrir', 'porte des membres : ouvrir sa station depuis la liste')
     pl.screenshot(path=str(OUT / 'portail-membre.png'), full_page=True)
     cl.close()
-    # Mon compte : jeton changé (la session suit), export des clés derrière une confirmation, profil.
+    # Moi : une seule rangée de sous-onglets (Compte · Mes Ẑen · Mon blog · Appareils · Sauvegarde), pas d'onglets dans les onglets.
     page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#ac-name'); page.wait_for_timeout(200)
-    page.click('#ac-t-securite'); page.wait_for_timeout(100)  # Mon compte est en onglets : Moi · Mes appareils · Ma sécurité
+    check(page.locator('nav.segs a').all_inner_texts() == ['Compte', 'Mes Ẑen', 'Mon blog', 'Appareils', 'Sauvegarde'] and page.locator('[role=tablist]').count() == 0, 'Moi : une seule rangée de sous-onglets')
+    page.goto(f'http://127.0.0.1:{port}/#/account?tab=securite'); page.wait_for_selector('#bk-keys'); page.wait_for_timeout(100)
+    check(page.evaluate('location.hash') == '#/backup', 'l\'ancien lien vers Ma sécurité mène à Sauvegarde')
+    page.click('#bk-keys summary')  # les clés et l'identité sont repliées
     check('npub1test' in page.inner_text('main') and 'wss://s.example' in page.inner_text('main'), 'Mon compte montre l\'identité et les relais annoncés')
     check(page.locator('button:text-is("Exporter mes clés")').is_disabled(), 'l\'export des clés exige une case de confirmation')
     # L'API donne `/dav` : l'écran montre (et copie) l'adresse complète, et le bouton de remplacement n'effraie pas sans raison.
-    page.click('#ac-t-appareils'); page.wait_for_timeout(100)
+    page.goto(f'http://127.0.0.1:{port}/#/devices'); page.wait_for_selector('#dv-label', state='attached'); page.wait_for_timeout(100)
     main_text = page.inner_text('main')
     check(f'http://127.0.0.1:{port}/dav' in main_text, "l'adresse WebDAV est complète")
     # Le jeton principal se montre sans être remplacé (il est dérivé du secret de la station).
@@ -190,10 +197,10 @@ with sync_playwright() as pw:
     page.wait_for_selector('text=NOUVEAU-JETON'); page.wait_for_timeout(100)
     import base64 as b64
     page.wait_for_function("localStorage.getItem('basic') !== btoa('alice@example.org:jeton')", timeout=3000); got = b64.b64decode(page.evaluate("localStorage.getItem('basic')")).decode(); check(got == 'alice@example.org:NOUVEAU-JETON', 'la session suit le nouveau jeton : ' + got)
-    page.click('#ac-t-securite'); page.check('#ac-ok'); page.click('button:text-is("Exporter mes clés")'); page.wait_for_selector('textarea[aria-label=nsec]')
+    page.goto(f'http://127.0.0.1:{port}/#/backup'); page.wait_for_selector('#bk-keys'); page.click('#bk-keys summary'); page.check('#ac-ok'); page.click('button:text-is("Exporter mes clés")'); page.wait_for_selector('textarea[aria-label=nsec]')
     check(page.input_value('textarea[aria-label=nsec]') == 'nsec1secret', 'les clés exportées s\'affichent après confirmation')
     check('[object' not in page.inner_text('main') and page.input_value('textarea[aria-label=dunikey]') == 'sec: x', 'la clé Ğ1 exportée est un champ, pas du texte « [object HTMLLabelElement] »')
-    page.click('#ac-t-moi'); page.fill('#ac-name', 'Alice B'); page.click('button:text-is("Enregistrer")'); page.wait_for_timeout(400)
+    page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#ac-name'); page.fill('#ac-name', 'Alice B'); page.click('button:text-is("Enregistrer")'); page.wait_for_timeout(400)
     sent = [b for p_, b in STATE['posts'] if p_ == '/api/v1/account/profile']
     check(sent and sent[-1] == dict(name='Alice B'), 'seul le champ modifié du profil est envoyé : ' + str(sent[-1:]))
     # Multilingue : l'anglais traduit la coque et les écrans, sans rechargement de dictionnaire côté serveur.
@@ -203,7 +210,10 @@ with sync_playwright() as pw:
     nav = p2.inner_text('nav')
     check('Home' in nav and 'Me' in nav and 'Accueil' not in nav, 'la navigation est traduite en anglais : ' + nav.replace('\n', ' | '))
     check('Display name' in p2.inner_text('main'), 'l\'écran Mon compte est traduit')
-    p2.click('#ac-t-securite'); p2.wait_for_timeout(100); check('Export my keys' in p2.inner_text('main'), 'l\'onglet sécurité est traduit')
+    p2.goto(f'http://127.0.0.1:{port}/#/backup'); p2.wait_for_selector('#bk-keys'); p2.click('#bk-keys summary'); p2.wait_for_timeout(100)
+    check('Export my keys' in p2.inner_text('main') and 'Am I safe?' in p2.inner_text('main'), 'Sauvegarde est traduite')
+    p2.goto(f'http://127.0.0.1:{port}/#/devices'); p2.wait_for_selector('#ai-url'); p2.wait_for_timeout(200)
+    check('Send only' in p2.inner_text('main') and 'Envoi seul' not in p2.inner_text('main'), 'Appareils est traduit')
     check(p2.get_attribute('html', 'lang') == 'en', 'l\'attribut lang du document suit')
     ctx2.close()
     # Carnet d'adresses : recherche, index, fiche unifiée, comparaison avec le profil Nostr, « Ma fiche », nouvelle fiche, doublons.
@@ -215,20 +225,20 @@ with sync_playwright() as pw:
     check(any('q=lea' in g for g in STATE.get('gets', [])), 'la recherche part au fil de la frappe : ' + str([g for g in STATE.get('gets', []) if 'q=' in g][-1:]))
     page.click('.ab-item:has-text("Léa Martin")'); page.wait_for_selector('.ab-card'); page.wait_for_timeout(300)
     # Photo de la fiche : envoyer une image, prendre un visage reconnu, retirer ; sélection de fiches pour suppression groupée.
-    page.click('.ab-head button:has-text("Photo…")'); page.wait_for_selector('.ab-face'); page.click('.ab-face >> nth=0'); page.wait_for_timeout(400)
+    page.click('.ab-head button:has-text("Photo…")'); page.wait_for_selector('.ab-picker .ab-face'); page.click('.ab-picker .ab-face >> nth=0'); page.wait_for_timeout(400)
     ph = [b for p_, b in STATE['posts'] if p_ == '/api/v1/book/photo']
     check(ph and str(ph[-1]['uri']).startswith('data:image/jpeg;base64,') and ph[-1]['path'] == '/Contacts/Lea.vcf', 'un visage reconnu devient la photo de la fiche')
     page.click('.ab-head button:has-text("Photo…")'); page.click('button:has-text("Retirer la photo")'); page.wait_for_timeout(400)
     check([b for p_, b in STATE['posts'] if p_ == '/api/v1/book/photo'][-1]['uri'] is None, 'la photo se retire')
-    page.click('button:has-text("Sélectionner")'); page.locator('.ab-chk >> nth=1').check(); page.wait_for_timeout(200)
+    page.click('main .ab-more summary'); page.click('.ab-menu button:has-text("Sélectionner")'); page.locator('.ab-chk >> nth=1').check(); page.wait_for_timeout(200)
     check('1 sélectionnée(s)' in page.inner_text('main'), 'une fiche cochée : le compte est affiché')
     page.click('button:has-text("Tout sélectionner")'); page.click('button:has-text("Supprimer la sélection")'); page.wait_for_timeout(400)
     dm = [b for p_, b in STATE['posts'] if p_ == '/api/v1/book/delete-many']
     check(dm and len(dm[-1]['paths']) >= 1, 'la suppression groupée envoie les fiches cochées')
-    page.click('button:has-text("Terminer la sélection")')
+    page.click('button:has-text("Terminer la sélection") >> visible=true')
     page.reload(); page.wait_for_selector('.ab-list li button'); page.click('.ab-item:has-text("Léa Martin")'); page.wait_for_selector('.ab-card'); page.wait_for_timeout(300)
     check(page.input_value('#f-name') == 'Léa Martin' and page.locator('.ab-diff table tbody tr').count() == 2, 'la fiche affiche ses champs et la comparaison avec le profil Nostr')
-    check(page.locator('.ck-acts a.btn').count() == 1 and page.get_attribute('.ck-acts a.btn', 'href') == '#/chat?peer=' + 'ab' * 32, "« Écrire » (en-tête de la fiche) ouvre la conversation avec la clé de l'UPlanet courante")
+    check(page.locator('.ck-acts a.btn:has-text("Écrire")').count() == 1 and page.get_attribute('.ck-acts a.btn:has-text("Écrire")', 'href') == '#/chat?peer=' + 'ab' * 32, "« Écrire » (en-tête de la fiche) ouvre la conversation avec la clé de l'UPlanet courante")
     page.locator('.ab-diff tr:has-text("Nom") button:has-text("Prendre")').click(); page.wait_for_timeout(400)
     taken = [b for p_, b in STATE['posts'] if p_ == '/api/v1/book/take']
     check(taken and taken[-1] == dict(path='/Contacts/Lea.vcf', keys=['name']), 'on prend UNE valeur du profil, pas tout : ' + str(taken[-1:]))
@@ -240,12 +250,12 @@ with sync_playwright() as pw:
     page.click('button:has-text("Nouvelle fiche")'); page.wait_for_selector('#f-name'); page.fill('#f-name', 'Nouvelle Amie'); page.click('.ab-actions button:has-text("Enregistrer")'); page.wait_for_timeout(400)
     created = [b for p_, b in STATE['posts'] if p_ == '/api/v1/book/card']
     check(created and created[-1]['path'] is None and created[-1]['fields']['name'] == 'Nouvelle Amie', 'une nouvelle fiche se crée avec son nom : ' + str(created[-1:])[:120])
-    page.click('button:has-text("Doublons")'); page.wait_for_selector('button:has-text("Garder celle-ci")'); page.wait_for_timeout(200)
+    page.click('main .ab-more summary'); page.click('.ab-menu button:has-text("Doublons")'); page.wait_for_selector('button:has-text("Garder celle-ci")'); page.wait_for_timeout(200)
     check('même téléphone' in page.inner_text('.ab-detail'), 'les doublons probables sont proposés avec leur raison')
     page.screenshot(path=str(OUT / 'contacts-book.png'))
     # Contacts : l'annuaire de synchronisation (onglet « Synchroniser et inviter »), la liaison manuelle et la création d'une fiche depuis une personne.
     def open_sync():
-        page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_timeout(100); page.goto(f'http://127.0.0.1:{port}/#/contacts'); page.wait_for_selector('button:has-text("Synchroniser et inviter")'); page.click('button:has-text("Synchroniser et inviter")'); page.wait_for_selector('table')
+        page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_timeout(100); page.goto(f'http://127.0.0.1:{port}/#/contacts'); page.wait_for_selector('main .ab-more summary'); page.click('main .ab-more summary'); page.click('.ab-menu button:has-text("Synchroniser et inviter")'); page.wait_for_selector('table')
     open_sync(); page.wait_for_timeout(200)
     txt = page.inner_text('main')
     check('Léa Martin' in txt and 'Proches réciproques' in txt and 'sans lien' in txt and 'https://s.example/dav/' in txt, 'l\'annuaire montre les fiches, leur lien MULTIPASS et l\'adresse CardDAV')
@@ -287,7 +297,7 @@ with sync_playwright() as pw:
             p3.screenshot(path=str(OUT / 'invite-page.png'))
         c3.close()
     # Envoi par la messagerie de l'expéditeur : liens mailto / sms / WhatsApp préremplis (la station n'envoie jamais de courrier).
-    page.goto(f'http://127.0.0.1:{port}/#/contacts'); page.wait_for_selector('button:has-text("Synchroniser et inviter")'); page.click('button:has-text("Synchroniser et inviter")'); page.wait_for_selector('table')
+    page.goto(f'http://127.0.0.1:{port}/#/contacts'); page.wait_for_selector('main .ab-more summary'); page.click('main .ab-more summary'); page.click('.ab-menu button:has-text("Synchroniser et inviter")'); page.wait_for_selector('table')
     page.locator('table tbody tr:has-text("Paul") button:text-is("Inviter")').click(); page.wait_for_selector('main a.btn:text-is("WhatsApp")')
     page.wait_for_timeout(600)  # la liste se redessine une seconde fois (rechargement des invitations) : on attend qu'elle se stabilise
     page.wait_for_function("document.querySelectorAll('main a.btn').length >= 3")
@@ -437,7 +447,7 @@ with sync_playwright() as pw:
     page.click('#chat-in'); page.wait_for_selector('.ab-list li button'); page.wait_for_timeout(200)
     check(page.url.endswith('#/chat'), "le lien de l'en-tête ouvre le chat")
     # Mes UPlanet : les clés dans les autres plans et l'annonce publique, sur demande seulement.
-    page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#announce-links', state='attached'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#announce-links'); page.wait_for_timeout(200)
+    page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#announce-links', state='attached'); page.click('summary:has-text("Ce que je publie")'); page.wait_for_selector('#announce-links'); page.wait_for_timeout(200)
     check('Mes autres comptes' in page.inner_text('main') and 'zen1' not in page.inner_text('main'), 'Mon compte parle de « mes autres comptes », sans constellation ni clé')
     before = len([1 for p_, _ in STATE['posts'] if p_ == '/api/v1/me/links'])
     check(before == 0, "l'annonce ne part jamais d'elle-même : rien n'est publié à l'ouverture de l'écran")
@@ -455,7 +465,7 @@ with sync_playwright() as pw:
     check('Nouvelle fiche' in txt and 'Cannot' not in txt and 'null' not in txt and 'Table de tri' not in txt, "l'écran quitté en cours de chargement n'écrit rien dans le suivant")
     page.unroute('**/api/v1/faces/board')
     # Appareils : un jeton WebDAV par téléphone, confiné à un dossier.
-    page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#ac-name'); page.click('#ac-t-appareils'); page.wait_for_selector('#dv-label'); page.wait_for_timeout(300)
+    page.goto(f'http://127.0.0.1:{port}/#/devices'); page.wait_for_selector('.ac-add summary'); page.click('.ac-add summary'); page.wait_for_selector('#dv-label'); page.wait_for_timeout(300)
     txt = page.inner_text('main')
     check('Téléphone de Léa' in txt and '/Photos/Léa' in txt and 'Envoi seul' in txt and 'Jamais utilisé' in txt, "l'appareil est listé avec son dossier, ses droits et son dernier usage")
     page.fill('#dv-label', 'Tablette'); page.select_option('#dv-mode', 'readwrite'); page.click('button:text-is("Ajouter cet appareil")'); page.wait_for_selector('text=ajouté'); page.wait_for_timeout(300)
@@ -508,11 +518,11 @@ with sync_playwright() as pw:
     check(any(p_ == '/api/v1/station/restart' for p_, _ in STATE['posts']), 'planes : le second clic demande le redémarrage')
     # BRO : masqué tant que le MULTIPASS n'a déclaré ni Ollama ni clé d'API ; la déclaration (Mon compte) le fait apparaître.
     STATE['ai'] = False
-    page.goto(f'http://127.0.0.1:{port}/#/account'); page.reload(); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
+    page.goto(f'http://127.0.0.1:{port}/#/devices'); page.reload(); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
     check(page.locator('nav a[data-r=bro]').is_hidden(), "sans IA déclarée, l'onglet BRO n'apparaît pas")
-    page.goto(f'http://127.0.0.1:{port}/#/bro'); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
-    check(page.evaluate('location.hash') == '#/account', "ouvrir #/bro sans IA renvoie vers Mon compte")
-    page.fill('#ai-url', 'http://127.0.0.1:11434'); page.click('section:has(#ai-url) button:has-text("Enregistrer")'); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(500)
+    page.goto(f'http://127.0.0.1:{port}/#/bro'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(300)
+    check(page.evaluate('location.hash') == '#/devices?card=ai', "ouvrir #/bro sans IA renvoie vers Moi › Appareils, carte de l'IA")
+    page.fill('#ai-url', 'http://127.0.0.1:11434'); page.click('section:has(#ai-url) button:has-text("Enregistrer")'); page.wait_for_selector('#ai-url'); page.wait_for_timeout(500)
     saved = [b for p_, b in STATE['posts'] if p_ == '/api/v1/me/ai']
     check(saved and saved[-1]['ollama_url'] == 'http://127.0.0.1:11434' and 'api_key' not in saved[-1], "l'adresse d'Ollama est enregistrée, sans clé inventée")
     check(page.locator('a.fab[href="#/bro"]').is_visible(), "une fois l'IA déclarée, le bouton ✨ de l'assistant apparaît")
@@ -564,7 +574,7 @@ with sync_playwright() as pw:
     check(len(signed) >= 2 and len(nonces) == len(signed) and len(set(nonces)) == len(nonces) and all(len(n) >= 16 for n in nonces), f"chaque événement signé par l'extension porte un nonce unique ({len(signed)} événements)")
     ext.close()
     # Style (Aurore par défaut, Sobre, Kraft) et mode clair/sombre : choisis dans l'en-tête, retenus par l'appareil.
-    page.emulate_media(color_scheme='light'); page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#ac-name'); page.click('summary:has-text("Réglages avancés")'); page.wait_for_selector('#style')
+    page.emulate_media(color_scheme='light'); page.goto(f'http://127.0.0.1:{port}/#/account'); page.wait_for_selector('#ac-name'); page.wait_for_selector('#style')
     check(page.evaluate("document.documentElement.dataset.style") == 'aurore', 'le style par défaut est Aurore')
     page.select_option('#style', 'kraft')
     check(page.evaluate("[document.documentElement.dataset.style, localStorage.getItem('style')]") == ['kraft', 'kraft'], 'le style choisi est appliqué et retenu')

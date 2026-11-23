@@ -25,7 +25,6 @@ export default {
 "Copie des amis seulement": "Copia solo de amigos",
 "Copie des amis d'amis": "Copia de amigos de amigos",
 "Tout le monde publie": "Todos publican",
-"Lecture seule": "Solo lectura",
 "Mots de passe : le membre seul": "Contraseñas: solo el miembro",
 "uCloud chiffré": "uCloud cifrado",
 "{0} membre(s) hébergé(s)": "{0} miembro(s) alojado(s)",

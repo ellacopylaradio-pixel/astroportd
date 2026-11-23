@@ -1,11 +1,11 @@
 .ab{display:grid;grid-template-columns:minmax(16rem,22rem) 1fr;gap:1rem;align-items:start}
 .ab-side{position:sticky;top:3.5rem;max-height:calc(100vh - 5rem);display:flex;flex-direction:column;gap:.5rem}
-.ab-search{display:flex;gap:.5rem;align-items:center}.ab-search input{flex:1}
+.ab-search{display:flex;gap:.5rem;align-items:center}.ab-search input{flex:1;min-width:0}.ab-search .muted{white-space:nowrap}
 .ab-chips{display:flex;flex-wrap:wrap;gap:.3rem}
 .chip{padding:.15rem .6rem;border-radius:2rem;font-size:.8rem;background:var(--panel);border:1px solid var(--line);color:var(--ink);cursor:pointer}
 .chip.on{background:var(--accent);color:var(--on-accent)}
 .ab-scroll{display:flex;gap:.25rem;overflow:hidden;min-height:0}
-.ab-list{list-style:none;margin:0;padding:0;overflow-y:auto;flex:1;border:1px solid var(--line);border-radius:12px}
+.ab-list{list-style:none;margin:0;padding:0;overflow-y:auto;flex:1;min-width:0;border:1px solid var(--line);border-radius:12px}
 .ab-list li.on{background:color-mix(in srgb,var(--accent) 18%,transparent)}
 .ab-item{display:flex;gap:.6rem;align-items:center;width:100%;padding:.45rem .6rem;border:0;background:none;color:inherit;text-align:left;cursor:pointer}
 .ab-name{display:flex;flex-direction:column;min-width:0}.ab-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -28,8 +28,10 @@
 .ab-back{display:none}
 .danger{color:var(--bad)}
 @media (max-width:52rem){
-  .ab{grid-template-columns:1fr}.ab-side{position:static;max-height:none}.ab-list{max-height:60vh}
+  .ab{grid-template-columns:minmax(0,1fr)}.ab-side{position:static;max-height:none;min-width:0}.ab-list{max-height:60vh}
   .ab .ab-detail{display:none}.ab.open .ab-detail{display:block}.ab.open .ab-side{display:none}.ab-back{display:inline-block}
+  /* Fiche au téléphone : le retour sur sa ligne, la photo et les actions côte à côte sur toute la largeur. */
+  .ab-head{flex-wrap:wrap;align-items:flex-start}.ab-head>.ab-back{flex-basis:100%;text-align:left;padding-left:0}.ab-head>div:last-child{flex:1;min-width:0}
   .ab-addr{grid-template-columns:1fr 1fr}.ab-2{grid-template-columns:1fr}
 }
 .ab-keys{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.35rem}
@@ -41,3 +43,10 @@
 .ab-sas{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:center;margin-bottom:1rem;border-color:var(--accent)}.ab-sas[hidden]{display:none}.ab-sas p{margin:.15rem 0 0}.ab-sas>div{flex:1;min-width:14rem}
 .ab-sas-n{font-size:1.8rem;font-weight:700;min-width:3.2rem;text-align:center;color:var(--accent)}.ab-sas-go{display:flex;flex-wrap:wrap;gap:.4rem}
 .ab-seen h4{margin:.6rem 0 .3rem}
+/* « ⋯ Plus » du carnet : menu déroulant des actions secondaires. */
+.ab-more{position:relative}.ab-more>summary{list-style:none;cursor:pointer}.ab-more>summary::-webkit-details-marker{display:none}
+.ab-more.dot>summary::after{content:'';display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:var(--warn);margin-left:.4rem;vertical-align:middle}
+.ab-menu{position:absolute;z-index:6;right:0;top:calc(100% + .3rem);min-width:14rem;display:flex;flex-direction:column;gap:.2rem;padding:.4rem;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px var(--sh)}
+.ab-menu>*{justify-content:flex-start;text-align:left;min-height:44px;display:flex;align-items:center;padding:0 .8rem;border-radius:8px}
+.ab-menu>a{text-decoration:none;color:var(--ink)}
+.ab-more>summary.ck-btn{background:transparent;color:var(--accent);border:1px solid var(--line);display:inline-flex;align-items:center;min-height:40px}

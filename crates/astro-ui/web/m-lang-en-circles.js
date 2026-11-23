@@ -23,4 +23,6 @@ export default {
 "C'est assez, mais dans un même coin de la toile : rencontrez des membres d'autres groupes.": "That is enough, but all in one corner of the web: meet members of other groups.",
 "Vous y tiennent : {0}.": "Holding you in: {0}.",
 "La toile compte {0} membres. Elle préparera un dividende universel entre nous ; il n'est pas encore actif.": "The web has {0} members. It will prepare a universal dividend between us; it is not active yet.",
+"rencontres prouvées : {0}": "proven meetings: {0}",
+"Vides pour l'instant : {0}. Le menu de chaque personne la range où vous voulez.": "Empty for now: {0}. Each person’s menu puts them where you want.",
 };

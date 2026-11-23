@@ -1,8 +1,9 @@
 'use strict';
-// Mon compte, onglet Moi : « Bien démarrer » (contacts, appareils, photos cherchables : la carte disparaît quand tout est fait) et
-// « Mon espace » (la part de chaque nature de fichier, en privé et en public, en deux anneaux). Remplit deux cartes déjà placées.
-export default function start(K, { start, space, head, nDevices, guide }) {
-  const { h, t } = K;
+// Deux cartes d'après l'empreinte du membre (/api/v1/me/footprint), chargées avec leur page : « Mon espace » (Moi › Compte : la
+// part de chaque nature de fichier, en privé et en public, en deux anneaux) et « Où sont vos données » (Moi › Sauvegarde : par
+// zone, ce qui est à l'abri chez les amis, ce qu'on garde pour eux). « Bien démarrer » n'existe qu'à l'accueil (m-home.js).
+function draw(K, el, which, fp) {
+  const { h, t } = K, head = K.head;
   // ── Mon espace : la part de chaque nature de fichier, en privé (uCloud) et en public, en deux anneaux (le détail est dans Fichiers).
   const KINDS = [['photo', '📷', t('Photos')], ['video', '🎬', t('Vidéos')], ['music', '🎵', t('Musique')], ['doc', '📄', t('Documents')], ['other', '📦', t('Autres')]];
   const NS = 'http://www.w3.org/2000/svg', sv = (tag, at) => { const e = document.createElementNS(NS, tag); for (const k in at) e.setAttribute(k, at[k]); return e; };
@@ -32,40 +33,25 @@ export default function start(K, { start, space, head, nDevices, guide }) {
       h('h4', {}, t('À l’abri chez vos amis')),
       gauge(t('{0} % de vos données', pc), sp.safe, sp.total, t('{0} sur {1}', K.bytes(sp.safe), K.bytes(sp.total))),
       ...(sp.guardians.length ? sp.guardians.map(g => h('p', { class: 'muted ac-who' }, t('{0} garde {1} pour vous', g.name, K.bytes(g.bytes))))
-        : [h('p', {}, t('Aucun ami ne garde encore vos données : si la station tombe, elles sont perdues.'), ' ', h('a', { href: '#/account?tab=securite' }, t('Choisir un gardien')))]),
+        : [h('p', { class: 'warn' }, t('Aucun ami ne garde encore vos données : si la station tombe, elles sont perdues.'))]),
       ...(sp.hosted.length ? [h('h4', {}, t('Ce que vous gardez pour vos amis'), ' ', h('small', { class: 'muted' }, K.bytes(sp.hosted_total))),
         ...sp.hosted.map(f => f.quota ? gauge(f.name, f.bytes, f.quota, t('{0} sur {1} accordés', K.bytes(f.bytes), K.bytes(f.quota))) : h('p', { class: 'muted ac-who' }, `${f.name} · ${K.bytes(f.bytes)}`))] : []),
     ];
   };
-  K.api('/api/v1/me/footprint').then(fp => {
-    if (!fp.disk) return;
+  (fp || K.api('/api/v1/me/footprint')).then(fp => {
+    if (!fp?.disk) return;
     const d = fp.disk, bk = d.by_kind || { ucloud: {}, public: {} }, all = k => (bk.ucloud[k] || 0) + (bk.public[k] || 0);
-    space.hidden = false;
-    space.append(head(t('Mon espace'), t('Ce que vos fichiers occupent, par nature. Le détail est dans Fichiers ; le dossier Public est lisible par tous.')),
+    el.hidden = false;
+    if (which === 'spread') return d.spread?.total ? el.append(head(t('Où sont vos données'), t('Vos fichiers par zone, la part copiée chez vos gardiens et ce que vous gardez pour vos amis.')), ...where(d.spread).slice(1)) : (el.hidden = true);
+    el.append(head(t('Mon espace'), t('Ce que vos fichiers occupent, par nature. Le détail est dans Fichiers ; le dossier Public est lisible par tous.')),
       h('p', {}, d.unlimited ? t('{0} utilisés', K.bytes(d.used_bytes)) : t('{0} utilisés sur {1}', K.bytes(d.used_bytes), K.bytes(d.quota_bytes))),
       d.unlimited || !d.quota_bytes ? null : h('meter', { min: 0, max: d.quota_bytes, value: d.used_bytes, high: d.quota_bytes * .9, 'aria-label': t('Espace utilisé'), class: 'ac-meter' }),
       h('div', { class: 'ac-donuts' }, ring(t('Privé'), bk.ucloud), ring(t('Public'), bk.public)),
       h('ul', { class: 'ac-legend' }, KINDS.filter(([k]) => all(k)).map(([k, ico, name]) => h('li', {}, h('i', { class: 'ac-k-' + k, 'aria-hidden': 'true' }), `${ico} ${name} `, h('span', { class: 'muted' }, K.bytes(all(k)))))),
-      ...where(d.spread),
-      h('p', {}, h('a', { href: '#/cloud' }, t('Ouvrir mes fichiers') + ' →')));
+      h('p', {}, h('a', { href: '#/cloud' }, t('Ouvrir mes fichiers') + '\u00a0→'), ' · ', h('a', { href: '#/backup' }, t('Qui les garde à l’abri') + '\u00a0→')));
   }, () => {});
 
-  // ── Bien démarrer : les trois gestes qui donnent toute sa force à la station. La carte disparaît quand tout est fait.
-  Promise.all([K.api('/api/v1/book?q=').then(b => b.contacts.length, () => 0), K.api('/api/v1/me/reading').then(v => v.state === 'local' || v.state === 'friend', () => true)]).then(([nContacts, searching]) => {
-    const steps = [
-      [false, '🚚', t('Je viens de Google ou d’Apple'), t('Photos, albums, contacts, agenda et documents en un geste, sans doublons.'), '#/move', t('Déménager')],
-      [nContacts > 0, '📇', t('Mes contacts'), t('Importez ou synchronisez votre carnet : les visages reconnus se rangent dans les fiches.'), '#/people', t('Importer')],
-      [nDevices > 0, '⇅', t('Mes appareils'), t('Branchez téléphone et ordinateur : ⬆ vos photos partent seules, ⬇ vos fichiers s’ouvrent comme un disque.'), '#/account?tab=appareils', t('Brancher')],
-      [searching, '🔍', t('Photos cherchables'), t('Retrouvez une photo par ce qu’elle montre ou par le texte qu’elle contient.'), '#/account?tab=moi&card=reading', t('Activer')]];
-    const left = steps.slice(1).filter(x => !x[0]).length;
-    if (!left) return;
-    start.hidden = false;
-    start.append(head(t('Bien démarrer'), t('Trois gestes, une seule fois. Le guide détaille chaque appareil : Android, iPhone, ordinateur.')),
-      h('ol', { class: 'ac-steps' }, steps.map(([done, ico, name, why, href, go]) => h('li', { class: done ? 'done' : '' },
-        h('span', { class: 'ac-step-ico', 'aria-hidden': 'true' }, done ? '✓' : ico),
-        h('span', { class: 't' }, h('b', {}, name), h('small', { class: 'muted' }, done ? t('Fait') : why)),
-        done ? null : h('a', { class: 'button', href }, go)))),
-      h('p', {}, h('a', { href: guide, target: '_blank', rel: 'noopener' }, '📖 ' + t('Guide pas à pas : Android, iPhone, ordinateur'))));
-  });
-
 }
+
+export const space = (K, el) => draw(K, el, 'space');
+export const spread = (K, el, fp) => draw(K, el, 'spread', fp);

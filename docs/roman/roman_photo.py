@@ -98,7 +98,7 @@ def shots(port):
         def ask(pg):
             SCENE['ask'] = 'waiting'; pg.wait_for_selector('#f:not([hidden])'); pg.fill('#card', M.CARD); pg.wait_for_timeout(300)
         phone('restore', '/restore', ask, login=False)
-        phone('lea', '/#/account?tab=securite', lambda pg: (pg.wait_for_selector('text=dit avoir perdu sa station'), pg.locator('label:has-text("je l\'ai reconnu")').click(),
+        phone('lea', '/#/backup', lambda pg: (pg.wait_for_selector('text=dit avoir perdu sa station'), pg.locator('label:has-text("je l\'ai reconnu")').click(),
                                                            pg.evaluate("document.querySelector('[role=alert]').scrollIntoView({block: 'start'})"), pg.evaluate('scrollBy(0, -12)')), who='lea')
         def done(pg):
             SCENE['ask'] = 'ready'; pg.wait_for_selector('#f:not([hidden])'); pg.fill('#card', M.CARD); pg.wait_for_selector('#done:not([hidden])')

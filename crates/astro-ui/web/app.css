@@ -158,6 +158,8 @@ fieldset.coop-s > p[role=status] { grid-column: 1 / -1; margin: 0 0 .3rem; }
 fieldset { min-width: 0; }
 details.fold > summary { cursor: pointer; list-style-position: inside; font-weight: 600; }
 details.fold[open] > summary { margin-bottom: .6rem; }
+/* Sous-titre d'un repli : sur sa propre ligne, sous le titre, aligné sur le texte. */
+details.fold > summary > small { display: block; font-weight: 400; margin: .15rem 0 0 1.1rem; }
 .hero { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding: 1.1rem 1.3rem; border-radius: var(--rc); color: #fff; background: var(--grad); margin: 0 0 1rem; box-shadow: 0 10px 28px var(--sh); }
 .hero .who { flex: 1; min-width: 12rem; }
 .hero h2 { color: #fff; font-size: 1.35rem; font-weight: 800; margin: 0; overflow-wrap: anywhere; }
@@ -198,11 +200,13 @@ details.fold[open] > summary { margin-bottom: .6rem; }
 .grid:has(> .card:only-child) { grid-template-columns: minmax(0, 1fr); }
 #log:empty::before { content: attr(data-empty); display: block; padding: 1.2rem; color: var(--muted); text-align: center; }
 /* Écrans moyens : la marque se réduit au logo et « Déconnexion » à une icône, pour que les neuf écrans tiennent sur une ligne. */
-@media (min-width: 40.01rem) and (max-width: 92rem) {
+@media (max-width: 92rem) {
   h1 span { display: none; }
   #out { font-size: 0; padding: .3rem .6rem; }
   #out::before { content: "⏻"; font-size: .95rem; }
 }
+/* Téléphone : l'en-tête tient sur une ligne ; le style (Aurore, Sobre, Kraft) se choisit dans Moi, à côté de la langue. */
+@media (max-width: 40rem) { header { flex-wrap: nowrap; } .tools { flex-wrap: nowrap; min-width: 0; } #style { display: none; } .tools #plane { max-width: 6rem; } }
 .grid + .card { margin-top: 1rem; }
 main > .card, main > div:not(.grid):not(.bar) > .card { margin-top: 1rem; }
 .tools #plane{max-width:8rem;text-overflow:ellipsis}
@@ -216,3 +220,15 @@ main > .card, main > div:not(.grid):not(.bar) > .card { margin-top: 1rem; }
 .pl-opt { display: flex; gap: .5rem; align-items: center; font-weight: 400; }
 .chat-in{display:inline-flex;align-items:center;gap:.2rem;min-height:40px;padding:0 .7rem;border-radius:1rem;background:var(--accent);color:var(--on-accent);text-decoration:none;animation:chat-in .9s ease 2}@keyframes chat-in{50%{transform:scale(1.12)}}@media (prefers-reduced-motion:reduce){.chat-in{animation:none}}
 pre.log{max-height:16em;overflow:auto;font-size:.78rem;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);padding:.6em;border-radius:.5rem}
+/* Bulle d'aide « ? » partagée par les écrans (K.tip, K.head) : l'explication ne s'ouvre qu'à la demande (details natif). */
+.ac-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; position: relative; }
+.ac-head h2 { margin: 0; }
+.ac-head + * { margin-top: .6rem; }
+.tip { display: inline-block; }
+.tip > summary { list-style: none; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%; border: 1px solid var(--line); color: var(--muted); font-weight: 700; font-size: .85rem; cursor: pointer; position: relative; }
+.tip > summary::-webkit-details-marker { display: none; }
+.tip > summary::after { content: ''; position: absolute; inset: -.75rem; } /* zone de toucher ≥ 48 px */
+.tip > summary:hover, .tip[open] > summary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+.tip > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tip-body { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; margin-top: .4rem; padding: .7rem .9rem; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 8px 24px var(--sh); font-weight: 400; font-size: .92rem; }
+.tip-body p { margin: 0 0 .4rem; } .tip-body p:last-child { margin: 0; }

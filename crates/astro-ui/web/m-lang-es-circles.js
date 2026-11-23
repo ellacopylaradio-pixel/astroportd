@@ -23,4 +23,6 @@ export default {
 "C'est assez, mais dans un même coin de la toile : rencontrez des membres d'autres groupes.": "Es suficiente, pero todo en un mismo rincón de la red: encuéntrate con miembros de otros grupos.",
 "Vous y tiennent : {0}.": "Te sostienen: {0}.",
 "La toile compte {0} membres. Elle préparera un dividende universel entre nous ; il n'est pas encore actif.": "La red tiene {0} miembros. Preparará un dividendo universal entre nosotros; todavía no está activo.",
+"rencontres prouvées : {0}": "encuentros probados: {0}",
+"Vides pour l'instant : {0}. Le menu de chaque personne la range où vous voulez.": "Vacíos por ahora: {0}. El menú de cada persona la coloca donde quieras.",
 };

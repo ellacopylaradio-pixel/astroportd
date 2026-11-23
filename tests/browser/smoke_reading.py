@@ -29,8 +29,8 @@ with sync_playwright() as pw:
         noscroll = lambda what: check(not page.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth'), f'{tag} : pas de défilement horizontal ({what})')
 
         # Incitation depuis la recherche : personne ne lit encore.
-        page.goto(f'http://127.0.0.1:{port}/#/find'); page.wait_for_selector('a[href="#/account?tab=moi&card=reading"]')
-        link = page.locator('a[href="#/account?tab=moi&card=reading"]', has_text='Documents et photos cherchables')
+        page.goto(f'http://127.0.0.1:{port}/#/find'); page.wait_for_selector('a[href="#/devices?card=reading"]')
+        link = page.locator('a[href="#/devices?card=reading"]', has_text='Documents et photos cherchables')
         check(link.is_visible(), f'{tag} : la recherche signale que le texte des documents n’est pas encore cherchable, avec le chemin')
         link.click(); page.wait_for_selector('#reading .pill')
         page.wait_for_timeout(200)

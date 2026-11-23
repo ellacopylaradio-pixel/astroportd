@@ -29,7 +29,7 @@ export default async function find(root, K, qs) {
   // Ce que la station sait chercher (le serveur le dit) : l'aide ne promet que ce qui marche, et invite au bon moment.
   const hint = h('div', {});
   const can = K.api('/api/v1/me/reading').then(r => ({ text: r.state === 'local' || r.state === 'friend', image: r.state !== 'blocked' && (r.local || []).includes('vision'), off: r.state === 'off' }), () => ({}));
-  can.then(c => { if (c.off) hint.replaceChildren(h('p', { class: 'muted' }, t('Le texte de vos documents n’est pas encore cherchable.'), ' ', h('a', { href: '#/account?tab=moi&card=reading' }, t('Documents et photos cherchables')))); });
+  can.then(c => { if (c.off) hint.replaceChildren(h('p', { class: 'muted' }, t('Le texte de vos documents n’est pas encore cherchable.'), ' ', h('a', { href: '#/devices?card=reading' }, t('Documents et photos cherchables')))); });
 
   if (!q && !kind && !from && !to) {
     const c = await can, ex = [c.text && 'facture', c.image && 'vélo rouge', 'Lyon', 'mars 2024'].filter(Boolean);

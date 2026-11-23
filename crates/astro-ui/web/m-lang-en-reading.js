@@ -26,7 +26,6 @@ export default {
 "Vous pouvez arrêter à tout moment ; ce qui a déjà été lu reste dans votre recherche.": "You can stop at any time; what has already been read stays in your search.",
 "C’est fait : la lecture de vos documents commence.": "Done: reading your documents begins.",
 "Tout arrêter": "Stop everything",
-"Retirer {0}": "Remove {0}",
 "{0} ne lit plus vos documents.": "{0} no longer reads your documents.",
 "Vos documents sont lus par ces stations amies, qui se partagent le travail :": "Your documents are read by these friendly stations, which share the work:",
 "Vos documents sont lus par cette station amie :": "Your documents are read by this friendly station:",

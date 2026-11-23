@@ -26,30 +26,37 @@ const R = [
   ['/rencontre', 'm-pay.js', 'me', 'people', null, '/people', 'Se rencontrer'],
   ['/cercles', 'm-circles.js', 'me', 'people', null, '/people', 'Mes cercles'],
   ['/cosurf', 'm-cosurf.js', 'me', 'people', null, '/chat', 'Naviguer ensemble'],
+  // Moi : une seule rangée de sous-onglets, une page par question (qui suis-je, mon argent, ce que j'écris, ce que je branche,
+  // ce qui me protège). Pas d'onglets dans les onglets.
   ['/account', 'm-account.js', 'me', 'me', 'Compte', null, 'Mon compte'],
   ['/money', 'm-money.js', 'me', 'me', 'Mes Ẑen', null, 'Mes Ẑen'],
-  ['/replication', 'm-replication.js', 'me', 'me', 'Sauvegarde', null, 'Sauvegarde'],
   ['/write', 'm-write.js', 'me', 'me', 'Mon blog', null, 'Mon blog'],
+  ['/devices', 'm-devices.js', 'me', 'me', 'Appareils', null, 'Mes appareils'],
+  // Tout ce qui protège : gardiens, ami hébergeur, carte de secours, copies chez les autres stations, clés.
+  ['/backup', 'm-backup.js', 'me', 'me', 'Sauvegarde', null, 'Sauvegarde'],
   ['/billets', 'm-billets.js', 'me', 'me', null, '/money', 'Billets'],
   ['/island', 'm-island.js', 'me', 'me', null, '/money', 'Ğ1 en différé'],
   ['/payer', 'm-pay.js', 'me', 'me', null, '/money', 'Payer'],
   ['/recevoir', 'm-pay.js', 'me', 'me', null, '/money', 'Recevoir'],
   ['/agents', 'm-agents.js', 'me', 'me', null, '/account', 'Mes agents'],
   ['/constellation', 'm-constellation.js', 'both', null, null, null, 'Constellation'],
-  ['/cockpit', 'm-cockpit.js', 'station', 'health', null, null, 'Santé'],
+  ['/cockpit', 'm-cockpit.js', 'station', 'health', 'État', null, 'Santé'],
   ['/alerts', 'm-alerts.js', 'station', 'health', null, '/cockpit', 'Alertes'],
   ['/machine', 'm-machine.js', 'station', 'health', null, '/cockpit', 'Détails techniques'],
+  // Réglages de la machine (moteur des visages, file de tâches, matrice du relai) : avec la santé, pas avec le réseau.
+  ['/options', 'm-options.js', 'station', 'health', 'Réglages', null, 'Réglages'],
   ['/members', 'm-members.js', 'station', 'members', null, null, 'Membres'],
   ['/mesh', 'm-mesh.js', 'station', 'net', 'Essaim', null, 'Essaim et pairs'],
+  // Tous les services entre stations, dans les deux sens, et l'entraide : un seul écran.
+  ['/services', 'm-services.js', 'station', 'net', 'Partages', null, 'Partages'],
   ['/planes', 'm-planes.js', 'station', 'net', 'Constellations', null, 'Constellations'],
   ['/locks', 'm-locks.js', 'station', 'net', 'Écluses', null, 'Écluses'],
-  ['/options', 'm-options.js', 'station', 'net', 'Réglages', null, 'Réglages'],
   ['/coop', 'm-coop.js', 'station', 'eco', 'Régie', null, 'Régie'],
   ['/ile', 'm-island.js', 'station', 'eco', 'Île', null, 'Île Ğ1'],
 ];
 export const ROUTES = R.map(([path, file, space, tab, seg, parent, title]) => ({ path, file, space, tab, seg, parent, title }));
 // Les adresses d'avant la refonte continuent de marcher.
-export const ALIASES = { '/chiffres': '/money', '/station': '/cockpit', '/contacts': '/people', '/sort': '/people/tri' };
+export const ALIASES = { '/chiffres': '/money', '/station': '/cockpit', '/contacts': '/people', '/sort': '/people/tri', '/tunnels': '/services', '/replication': '/backup' };
 // Une route « both » vit dans l'espace Station pour le Capitaine qui y était, sinon dans « Mes Ẑen ».
 const BOTH = { station: { tab: 'eco', seg: 'Constellation', parent: null }, me: { tab: 'me', seg: null, parent: '/money' } };
 

@@ -1,5 +1,5 @@
 'use strict';
-// Mes gardiens (Mon compte › Ma sécurité) : les amis qui hébergent la sauvegarde ET gardent une part de la clé ; ceux de cette
+// Mes gardiens (Moi › Sauvegarde) : les amis qui hébergent la sauvegarde ET gardent une part de la clé ; ceux de cette
 // même station ne comptent pas (ils tomberaient avec elle). Niveau, chances estimées par la station (‰), demande à un proche,
 // et, après un rétablissement, le suivi nominatif du retour des fichiers. Rend [suivi ou null, carte des gardiens].
 export default function guardCards(bk, K, refresh) {

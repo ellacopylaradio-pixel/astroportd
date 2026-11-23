@@ -586,7 +586,7 @@ sont des caches de l'index.
      blob est en paquet depuis au moins `GRACE_SECS` et que **chaque** paquet sur lequel il s'étale est basculé, a **plus de `k`**
      fragments sûrs et atteint 999 ‰ (disponibilités mesurées, 900 ‰ pour un gardien inconnu). Jamais sans marge. Le manifeste
      et l'index ne sont pas concernés (Q10) ; un gardien sans `rs` garde ses copies (il les recevrait de nouveau).
-7. **Interface et guide** *(fait)*. **Ma sécurité › Mes gardiens** (`m-guard.js`, champ `coded` de `GET /api/v1/backup`,
+7. **Interface et guide** *(fait)*. **Moi › Sauvegarde › Mes gardiens** (`m-guard.js`, champ `coded` de `GET /api/v1/backup`,
    `PrivateBackup::coded_view`) : « Sécurité estimée : 99,9 % (objectif 99,9 %) » — le plus faible des paquets, `k` parmi
    les gardiens qui tiennent un fragment sûr —, « 3 de vos 5 gardiens suffisent pour tout retrouver », « Vos amis gardent
    1,7 fois vos fichiers au lieu de 5 » (octets de fragments / octets de blobs ; masqué quand il n'y a rien d'économisé, en

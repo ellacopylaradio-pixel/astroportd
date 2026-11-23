@@ -1,15 +1,18 @@
 'use strict';
-// Accueil d'un membre : quatre gestes (photos, argent, proches, assistant ou smartphone), « Bien démarrer » coché d'après l'état réel, et une alerte
+// Accueil d'un membre : quatre gestes (photos, argent, proches, assistant ou smartphone), « Bien démarrer » coché d'après l'état réel (le seul
+// endroit où il apparaît), et une alerte
 // seulement si quelque chose le demande. Les chiffres (solde, loyer, disque…) sont dans Mes Ẑen : #/money.
-export function steps({ dash, faces, friends, backup, me, devices }) {
+export function steps({ dash, faces, friends, backup, me, devices, reading }) {
   const files = dash?.sovereignty?.encrypted_files || 0;
   const list = [
     { done: files > 0, title: 'Envoyer vos premières photos', why: 'Elles sont chiffrées avant de quitter votre appareil.', href: '#/cloud' },
-    { done: (devices?.devices || []).length > 0, title: 'Synchroniser votre smartphone', why: 'Photos, contacts et agenda quittent Google et Apple pour votre station.', href: '#/account?tab=appareils' },
+    { done: (devices?.devices || []).length > 0, title: 'Synchroniser votre smartphone', why: 'Photos, contacts et agenda quittent Google et Apple pour votre station.', href: '#/devices' },
     ...(faces?.enabled ? [{ done: (faces.people || []).length > 0, title: 'Reconnaître un visage', why: 'Nommez une personne : ses photos se rangent toutes seules.', href: '#/people' }] : []),
     { done: (friends?.friends || []).length > 0, title: 'Retrouver un proche', why: 'Suivez-vous mutuellement pour partager vos photos.', href: '#/people' },
-    { done: backup?.mine?.status === 'accepted', title: 'Mettre vos fichiers à l\'abri chez un ami', why: 'Si votre station tombe en panne, rien n\'est perdu.', href: '#/account?tab=securite' },
-    { done: !!me?.ai, title: 'Brancher un assistant', why: 'BRO répond avec votre propre IA, sans rien envoyer ailleurs.', href: '#/account' },
+    { done: backup?.mine?.status === 'accepted', title: 'Mettre vos fichiers à l\'abri chez un ami', why: 'Si votre station tombe en panne, rien n\'est perdu.', href: '#/backup' },
+    { done: !!me?.ai, title: 'Brancher un assistant', why: 'BRO répond avec votre propre IA, sans rien envoyer ailleurs.', href: '#/devices?card=ai' },
+    // Seulement si la station sait lire les documents (réponse de /api/v1/me/reading).
+    ...(reading?.state ? [{ done: reading.state === 'local' || reading.state === 'friend', title: 'Rendre vos documents cherchables', why: 'Retrouvez une photo ou un papier par le texte qu\'il contient.', href: '#/devices?card=reading' }] : []),
   ];
   return { list, left: list.filter(s => !s.done).length, files };
 }
@@ -18,12 +21,12 @@ export function steps({ dash, faces, friends, backup, me, devices }) {
 export function news({ faces, shares, backup, fp }) {
   const list = [], sug = (faces?.suggestions || []).length, unk = faces?.unknown || 0, pv = fp?.privacy;
   // Un ami qui a perdu sa station attend ma confirmation : toujours en tête.
-  for (const r of (backup?.hosting || []).filter(x => x.rescue).slice(0, 2)) list.push({ icon: '🆘', text: ['{0} a perdu sa station et vous demande de l\'aide', r.label], label: 'Répondre', href: '#/account?tab=securite' });
+  for (const r of (backup?.hosting || []).filter(x => x.rescue).slice(0, 2)) list.push({ icon: '🆘', text: ['{0} a perdu sa station et vous demande de l\'aide', r.label], label: 'Répondre', href: '#/backup' });
   // Après un rétablissement : les fichiers reviennent de chez les amis.
   const rs = backup?.restore;
-  if (rs && rs.state !== 'done') list.push({ icon: '📦', text: ['Vos fichiers reviennent : {0} ami(s) ont renvoyé, {1} attendu(s)', rs.returned.length, rs.waiting.length], label: 'Voir', href: '#/account?tab=securite' });
+  if (rs && rs.state !== 'done') list.push({ icon: '📦', text: ['Vos fichiers reviennent : {0} ami(s) ont renvoyé, {1} attendu(s)', rs.returned.length, rs.waiting.length], label: 'Voir', href: '#/backup' });
   // Aucun gardien hors de cette station : une panne de la station emporterait le compte.
-  if (backup?.guardians && !backup.guardians.some(g => !g.same_station)) list.push({ icon: '⚠️', text: ['Aucun gardien : si votre station tombe, votre compte est perdu.'], label: 'Choisir un gardien', href: '#/account?tab=securite' });
+  if (backup?.guardians && !backup.guardians.some(g => !g.same_station)) list.push({ icon: '⚠️', text: ['Aucun gardien : si votre station tombe, votre compte est perdu.'], label: 'Choisir un gardien', href: '#/backup' });
   // Vigie de Public (lisible par tous).
   const pvn = pv?.sensitive || 0; // les photos partent déjà sans lieu ni appareil
   if (pvn) list.push({ icon: '🔒', text: ['{0} fichier(s) de Public en disent trop (mot de passe, contacts, papiers…)', pvn], label: 'Voir', href: '#/cloud?p=%2FPublic' });
@@ -40,8 +43,8 @@ export default async function home(root, K) {
   K.mod('m-beta.js').then(m => beta.replaceChildren(...m.card(K)), () => { beta.hidden = true; });
   const draw = async () => {
     const health = await fetch('/health').then(r => r.json()).catch(() => null);
-    const [me, dash, faces, friends, backup, fp, devices, shares] = await Promise.all([K.api('/api/v1/me'), K.api('/api/v1/dashboard'), soft('/api/v1/faces'), soft('/api/v1/friends'), soft('/api/v1/backup'), soft('/api/v1/me/footprint'), soft('/api/v1/devices'), soft('/api/v1/faces/pending-shares')]);
-    const s = steps({ dash, faces, friends, backup, me, devices }), nFriends = (friends?.friends || []).length, nDevices = (devices?.devices || []).length;
+    const [me, dash, faces, friends, backup, fp, devices, shares, reading] = await Promise.all([K.api('/api/v1/me'), K.api('/api/v1/dashboard'), soft('/api/v1/faces'), soft('/api/v1/friends'), soft('/api/v1/backup'), soft('/api/v1/me/footprint'), soft('/api/v1/devices'), soft('/api/v1/faces/pending-shares'), soft('/api/v1/me/reading')]);
+    const s = steps({ dash, faces, friends, backup, me, devices, reading }), nFriends = (friends?.friends || []).length, nDevices = (devices?.devices || []).length;
     const disk = fp?.disk, full = disk && !disk.unlimited && disk.quota_bytes && disk.used_bytes / disk.quota_bytes >= .9;
     const tile = (icon, title, line, href) => h('a', { class: 'card hm-tile', href }, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, icon), h('strong', {}, t(title)), h('span', { class: 'muted' }, line));
     const first = (me.email || '').split('@')[0];
@@ -62,10 +65,12 @@ export default async function home(root, K) {
         tile('💰', 'Mes Ẑen', t('Solde, loyer, espace'), '#/money'),
         tile('👥', 'Mes proches', nFriends ? t('{0} ami(s)', nFriends) : t('Retrouver vos proches'), '#/people'),
         // Sans assistant (pas de Brain), le geste mis en avant est de quitter Google et Apple : la synchro du smartphone.
-        me.ai ? tile('🤖', 'Mon assistant', t('BRO vous répond'), '#/bro') : tile('📱', 'Mon smartphone', nDevices ? t('{0} appareil(s) synchronisé(s)', nDevices) : t('Quitter Google et Apple : photos, contacts, agenda'), '#/account?tab=appareils')),
+        me.ai ? tile('🤖', 'Mon assistant', t('BRO vous répond'), '#/bro') : tile('📱', 'Mon smartphone', nDevices ? t('{0} appareil(s) synchronisé(s)', nDevices) : t('Quitter Google et Apple : photos, contacts, agenda'), '#/devices')),
       s.left ? h('section', { class: 'card' }, h('h2', {}, t('Bien démarrer'), h('small', { class: 'muted' }, ` · ${s.list.length - s.left}/${s.list.length}`)),
         h('progress', { max: s.list.length, value: s.list.length - s.left, 'aria-label': t('Étapes terminées') }),
-        h('ul', { class: 'hm-steps' }, s.list.map(x => h('li', { class: x.done ? 'done' : '' }, h('span', { 'aria-hidden': 'true' }, x.done ? '✅' : '⬜'), h('div', {}, x.done ? h('span', {}, t(x.title)) : h('a', { href: x.href }, h('strong', {}, t(x.title))), x.done ? null : h('p', { class: 'muted' }, t(x.why))))))) : null,
+        h('ul', { class: 'hm-steps' }, s.list.map(x => h('li', { class: x.done ? 'done' : '' }, h('span', { 'aria-hidden': 'true' }, x.done ? '✅' : '⬜'), h('div', {}, x.done ? h('span', {}, t(x.title)) : h('a', { href: x.href }, h('strong', {}, t(x.title))), x.done ? null : h('p', { class: 'muted' }, t(x.why)))))),
+        // Qui arrive avec tout chez Google ou Apple n'a qu'un geste à faire : le déménagement.
+        s.files ? null : h('p', {}, '🚚 ', h('a', { href: '#/move' }, t('Je viens de Google ou d’Apple')), ' · ', h('span', { class: 'muted' }, t('Photos, albums, contacts, agenda et documents en un geste, sans doublons.')))) : null,
       beta
     ].filter(Boolean));
   };

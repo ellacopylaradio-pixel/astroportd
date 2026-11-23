@@ -29,8 +29,8 @@ with sync_playwright() as pw:
         return page
 
     page = open_page(1280, 860)
-    page.goto(f'http://127.0.0.1:{port}/#/account?tab=appareils'); page.wait_for_selector('a[href="#/agents"]')
-    check(page.locator('a[href="#/agents"]').is_visible(), 'Mon compte › Mes appareils mène à Mes agents')
+    page.goto(f'http://127.0.0.1:{port}/#/devices'); page.wait_for_selector('a[href="#/agents"]')
+    check(page.locator('a[href="#/agents"]').is_visible(), 'Moi › Appareils mène à Mes agents')
     page.click('a[href="#/agents"]'); page.wait_for_selector('.ag-req')
     check(page.locator('.ag-req').count() == 2, 'deux demandes en attente')
     check('voudrait agir sur linkedin.com' in page.inner_text('.ag-reqs') and 'relever ma facture' in page.inner_text('.ag-reqs'), 'la demande dit qui, où et pourquoi')

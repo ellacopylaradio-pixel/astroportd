@@ -38,7 +38,7 @@ with sync_playwright() as pw:
         STATE['backup'] = backup([G('Bob', same=True)])
         page.goto(f'http://127.0.0.1:{port}/#/'); page.wait_for_selector('.hm-news')
         check('si votre station tombe, votre compte est perdu' in page.locator('.hm-news').inner_text(), f'{tag} : alerte « aucun gardien » dans Pour vous')
-        page.goto(f'http://127.0.0.1:{port}/#/account?tab=securite'); page.wait_for_selector('#ac-guard')
+        page.goto(f'http://127.0.0.1:{port}/#/backup'); page.wait_for_selector('#ac-guard')
         txt = guard()
         check('Aucun gardien' in txt and 'ne vous protège pas d’une panne'.replace('’', "'") in txt, f'{tag} : niveau 0, Bob sur la même station ne compte pas')
         check(page.locator('#ac-guard p.err[role=alert]').count() == 1, f'{tag} : alerte rouge annoncée')
@@ -72,7 +72,7 @@ with sync_playwright() as pw:
         # Après un rétablissement : le suivi du retour des fichiers (Ma sécurité et Pour vous).
         STATE['backup'] = backup([G('Léa', p=900)], dict(permille=900, next_permille=990, files_permille=900), dict(state='late', since=1, returned=['Léa'], waiting=[dict(label='Paul', seen_days=4), dict(label='Marie', seen_days=None)]))
         page.reload(); page.wait_for_selector('#ac-guard')
-        body = page.locator('#ac-p-securite').inner_text()
+        body = page.locator('main').inner_text()
         check('Vos fichiers reviennent' in body and 'Paul est hors ligne depuis 4 jour(s)' in body and 'Marie n\'a pas encore répondu' in body and 'sans rien écraser' in body, f'{tag} : suivi nominatif du retour des fichiers')
         noscroll('retour des fichiers'); page.screenshot(path=str(OUT / f'guardians-restore-{tag}.png'), full_page=True)
         page.goto(f'http://127.0.0.1:{port}/#/'); page.wait_for_selector('.hm-news')

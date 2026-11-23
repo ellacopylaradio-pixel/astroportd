@@ -201,7 +201,7 @@ Le flux d'activité du membre dit « OpenClaw agit sur linkedin.com pour vous »
 
 ## 9. Ce que voit le membre
 
-Écran `Mon compte › Agents`, sans jargon :
+Écran `Moi › Appareils › Mes agents`, sans jargon :
 
 1. « **OpenClaw** voudrait agir sur **linkedin.com** pour vous : *publier le résumé de la semaine*. »
    [ Me connecter pour lui ] [ Refuser ]

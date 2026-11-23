@@ -301,7 +301,7 @@ impl<O: Outbox> Assist<O> {
                     )
                     .await;
                 if res.is_ok_and(|r| r.changes > 0) {
-                    self.tell(me, format!("🆘 {friend_label} demande de l'aide ({service}, {hours} h){}. Répondez dans Options › Tunnels › Assistance.", if note.is_empty() { String::new() } else { format!(" : « {note} »") })).await;
+                    self.tell(me, format!("🆘 {friend_label} demande de l'aide ({service}, {hours} h){}. Répondez dans Ma station › Réseau › Partages.", if note.is_empty() { String::new() } else { format!(" : « {note} »") })).await;
                 }
                 true
             }

@@ -36,7 +36,7 @@ with sync_playwright() as pw:
         check(ph() == 'Nom, description, Léa, Lyon, 2024…', f'{tag} : petite station : rien de promis sur le texte ni l’image ({ph()})')
         page.goto(f'http://127.0.0.1:{port}/#/find'); page.wait_for_selector('.fd-chips button')
         check(page.locator('.fd-chips button', has_text='facture').count() == 0 and page.locator('.fd-chips button', has_text='Lyon').count() == 1, f'{tag} : exemples adaptés (pas de « facture » sans lecture)')
-        check(page.locator('a[href="#/account?tab=moi&card=reading"]').is_visible(), f'{tag} : l’aide invite à rendre le texte cherchable')
+        check(page.locator('a[href="#/devices?card=reading"]').is_visible(), f'{tag} : l’aide invite à rendre le texte cherchable')
 
         # Station équipée : texte des documents et ce que montrent les photos.
         READING.update(state='local', local=['ocr', 'vision'], photos=dict(seen=3, waiting=0, more=False))

@@ -156,7 +156,7 @@ La même `swarm.key` donne le droit d'entrer ; le chemin entre les stations se f
 
 ### Ce que vous décidez : qui ouvre quoi
 
-Votre station offre au maillage trois services : **SSH** (l'accès à distance), **Ollama** (un moteur d'IA) et **ComfyUI** (un générateur d'images), plus ceux que vous ajoutez. Pour chacun, vous choisissez dans *Ma station › Réseau › Réglages › Tunnels et accès* qui peut l'ouvrir :
+Votre station offre au maillage trois services : **SSH** (l'accès à distance), **Ollama** (un moteur d'IA) et **ComfyUI** (un générateur d'images), plus ceux que vous ajoutez. Pour chacun, vous choisissez dans *Ma station › Réseau › Partages* (carte *Sur cette machine*) qui peut l'utiliser :
 
 | Réglage | Qui peut ouvrir le service |
 |---|---|

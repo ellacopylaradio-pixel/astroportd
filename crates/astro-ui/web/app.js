@@ -33,7 +33,7 @@ const look = () => {
 const b64 = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 const bytes = n => { if (n == null) return '—'; const u = ['o', 'Ko', 'Mo', 'Go', 'To']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return `${n < 10 && i ? n.toFixed(1) : Math.round(n)} ${u[i]}`; };
 const when = t => (t ? new Date(t * 1000).toLocaleString('fr', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
-const span = s => { s = Math.floor(s); const d = Math.floor(s / 86400), hh = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d} j ${hh} h` : hh ? `${hh} h ${m} min` : `${m} min`; };
+const span = s => { s = Math.floor(s); const d = Math.floor(s / 86400), hh = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? t('{0} j {1} h', d, hh) : hh ? `${hh} h ${m} min` : `${m} min`; };
 const enc = p => p.split('/').map(encodeURIComponent).join('/');
 const toast = (msg, ok) => { const t = h('div', { class: 'toast' + (ok ? ' ok' : '') }, msg), box = $('#toasts'); box.append(t); while (box.children.length > 4) box.firstChild.remove(); setTimeout(() => t.remove(), 4500); };
 const lastName = p => p.slice(p.lastIndexOf('/') + 1);
@@ -163,14 +163,14 @@ async function viewCloud(root, q) {
 const path = q.get('p') || '/', mode = q.get('m'), sources = mode === 'sources', organize = mode === 'organize';
 const go = (p, m) => { location.hash = '#/cloud?' + new URLSearchParams({ p, ...(m && { m }) }); };
 const tabs = h('div', { class: 'bar' },
-h('button', { class: sources || organize ? 'ghost' : '', onclick: () => go(path) }, 'Dossiers'),
+sources || organize ? h('button', { class: 'ghost', onclick: () => go(path) }, '← ', 'Dossiers') : null,
 h('button', { class: sources ? '' : 'ghost', onclick: () => go(path, 'sources') }, 'Sources'),
 h('button', { class: organize ? '' : 'ghost', onclick: () => go(path, 'organize') }, 'Ranger'));
 if (sources) return (await mod('m-sources.js')).default(root, K, tabs);
 if (organize) return (await mod('m-organize.js')).default(root, K, tabs);
 const r = await api('/api/v1/ucloud/list?path=' + encodeURIComponent(path));
 dav = r.dav || dav;
-const sel = new Set(), btn = h('button', { disabled: true, onclick: () => share([...sel]) }, 'Partager la sélection'), send = h('button', { disabled: true, class: 'ghost', onclick: () => mod('m-send.js').then(m => m.default([...sel], K)) }, 'Envoyer à des proches'), pubBox = h('div', { class: 'card', hidden: '' }), pub = h('button', { disabled: true, class: 'ghost', onclick: () => { pubBox.hidden = false; mod('m-publish.js').then(m => m.default(pubBox, [...sel], K, path, () => go(path))); } }, path.startsWith('/Public') ? 'Retirer de Public' : 'Publier');
+const sel = new Set(), btn = h('button', { disabled: true, onclick: () => share([...sel]) }, 'Partager la sélection'), send = h('button', { disabled: true, class: 'ghost', onclick: () => mod('m-send.js').then(m => m.default([...sel], K)) }, 'Envoyer à des proches'), pubBox = h('div', { class: 'card', hidden: true }), pub = h('button', { disabled: true, class: 'ghost', onclick: () => { pubBox.hidden = false; mod('m-publish.js').then(m => m.default(pubBox, [...sel], K, path, () => go(path))); } }, path.startsWith('/Public') ? 'Retirer de Public' : 'Publier');
 const parts = path.split('/').filter(Boolean), crumbs = h('span', { class: 'crumbs' }, h('a', { href: '#/cloud' }, t('Fichiers')));
 parts.forEach((n, i) => crumbs.append(' / ', h('a', { href: '#/cloud?p=' + encodeURIComponent('/' + parts.slice(0, i + 1).join('/')) }, n)));
 const media = r.entries.filter(x => x.type === 'file' && kindOf(x.mime) !== 'file');
@@ -182,7 +182,7 @@ h('input', { type: 'checkbox', 'aria-label': 'Sélectionner ' + x.name, onchange
 h('span', { 'aria-hidden': 'true' }, dir ? '📁' : k === 'image' ? '🖼' : k === 'video' ? '🎬' : '📄'),
 h('button', { class: 'link', onclick: act }, x.name), h('span', { class: 'muted' }, dir ? '' : bytes(x.size)), h('span', { class: 'muted' }, when(x.mtime)));
 };
-root.replaceChildren(tabs, h('div', { class: 'bar' }, crumbs, h('span', { class: 'sp' }), pub, send, btn), pubBox,
+root.replaceChildren(tabs, h('div', { class: 'bar fbar' }, crumbs, h('span', { class: 'sp' }), pub, send, btn), pubBox,
 r.entries.length ? h('ul', { class: 'files' }, r.entries.map(li)) : h('p', { class: 'muted' }, 'Dossier vide.'));
 // Téléverser, créer, renommer, déplacer, supprimer, glisser-déposer : m-files.js, chargé avec la liste.
 mod('m-files.js').then(m => m.default(root, K, { path, dav, reload: route }), e => toast(e.message));
@@ -279,7 +279,10 @@ const sure = (label, run, why, attrs) => {
   b._disarm = disarm;
   return h('span', {}, b, note);
 };
-const K = { req, auth: authHeader, sure, mod, t, lang, setLang, login: (u, p) => store.set('basic', btoa(`${u}:${p}`)), h, api, toast, when, bytes, span, pill, table, open, blob: blobUrl, tiles, every, enc, del, picker, mark, photos, dav: v => { if (v) dav = v; }, davRoot: () => dav, cleanup: f => cleanups.push(f), planeHref: (n, hash) => planeHref && planeHref(n, hash), listen: f => { listeners.add(f); cleanups.push(() => listeners.delete(f)); }, chatUnread: n => badge(n), feed, listeners };
+// Bulle d'aide « ? » et titre de carte qui la porte : partagés par tous les écrans (une seule apparence, un seul comportement).
+const tip = (...x) => h('details', { class: 'tip' }, h('summary', { 'aria-label': t('Aide'), title: t('Aide') }, '?'), h('div', { class: 'tip-body' }, x.map(p => h('p', {}, p))));
+const head = (title, ...x) => h('div', { class: 'ac-head' }, h('h2', {}, title), x.length ? tip(...x) : null);
+const K = { tip, head, req, auth: authHeader, sure, mod, t, lang, setLang, login: (u, p) => store.set('basic', btoa(`${u}:${p}`)), h, api, toast, when, bytes, span, pill, table, open, blob: blobUrl, tiles, every, enc, del, picker, mark, photos, dav: v => { if (v) dav = v; }, davRoot: () => dav, cleanup: f => cleanups.push(f), planeHref: (n, hash) => planeHref && planeHref(n, hash), listen: f => { listeners.add(f); cleanups.push(() => listeners.delete(f)); }, chatUnread: n => badge(n), feed, listeners };
 const lazyView = f => async (root, q) => (await mod(f)).default(root, K, q);
 let me = null, shell = null;
 async function route() {
@@ -294,7 +297,7 @@ if (!me) { me = await api('/api/v1/me'); mod('m-nostr.js').then(m => m.default(m
 const R = await mod('m-routes.js');
 const res = R.resolve(p, me, store.get('space') || 'me');
 if (res.redirect) { location.replace('#' + res.redirect + (qs ? '?' + qs : '')); return; }
-if (res.route.path === '/bro' && !me.ai) { toast(t('Déclarez une IA dans Mon compte pour utiliser l\'assistant')); location.hash = '#/account'; return; }
+if (res.route.path === '/bro' && !me.ai) { toast(t('Déclarez une IA dans Moi › Appareils pour utiliser l\'assistant')); location.hash = '#/devices?card=ai'; return; }
 if (res.route.space !== 'both') store.set('space', res.space);
 if (me.captain) planeSwitch();
 (shell ??= (await mod('m-shell.js')).default(K, me)).update(res);

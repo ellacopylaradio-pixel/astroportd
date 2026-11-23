@@ -25,7 +25,6 @@ export default {
 "Copie des amis seulement": "Copy of friends only",
 "Copie des amis d'amis": "Copy of friends of friends",
 "Tout le monde publie": "Anyone publishes",
-"Lecture seule": "Read only",
 "Mots de passe : le membre seul": "Passwords: the member alone",
 "uCloud chiffré": "Encrypted uCloud",
 "{0} membre(s) hébergé(s)": "{0} hosted member(s)",

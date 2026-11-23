@@ -82,7 +82,7 @@ pub(super) async fn start(a: &ServeArgs, p2p_seed: Option<[u8; 32]>, coop_relays
         }
         for spec in &specs {
             let (name, target) = spec.split_once('=').ok_or("--p2p-expose attend nom=hôte:port")?;
-            // Chaque flux passe par la politique du Capitaine (voir l'écran Options › Tunnels) : rien n'est ouvert sans elle.
+            // Chaque flux passe par la politique du Capitaine (voir l'écran Réseau › Partages) : rien n'est ouvert sans elle.
             let peers = (name == astroportd::tunnel_policy::AI_INDEX).then(|| ai_book.clone());
             let opts = ExposeOpts { gate: Some(Arc::new(PolicyGate::new(tunnel_policy.clone()))), peers, ..ExposeOpts::default() };
             tunnel_policy.note_target(name, target);

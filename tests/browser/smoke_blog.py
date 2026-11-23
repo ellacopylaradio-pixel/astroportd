@@ -54,6 +54,15 @@ with sync_playwright() as pw:
         p.click('.wr-friend >> nth=1'); p.wait_for_selector('.wr-reader h1')
         check('Réservé pour vous' in p.inner_text('.wr-reader'), f'{name} : article réservé lu chez mes amis')
         p.screenshot(path=str(OUT / f'blog-{name}-friends.png'), full_page=True)
+        check(p.locator(f'.wr-reader a[href="#/chat?peer={"ef" * 32}"]').count() == 1, f'{name} : un article d’ami mène à la conversation avec son auteur')
+        # Depuis la fiche d'une personne (« Ses articles ») : seulement les siens, et un geste pour revenir à tous.
+        p.goto(f'http://127.0.0.1:{port}/#/'); p.goto(f'http://127.0.0.1:{port}/#/write?tab=friends&who=' + 'cd' * 32); p.wait_for_selector('.wr-friend')
+        check(p.locator('.wr-friend').count() == 1 and 'Articles de Léa' in p.inner_text('main') and p.locator('a[href="#/write?tab=friends"]').count() >= 1, f'{name} : « Ses articles » ne montre que les siens')
+        # La fiche contact est le pivot de la personne : écrire, appeler, payer, lire ses articles, la ranger dans un cercle.
+        p.goto(f'http://127.0.0.1:{port}/#/people?c=/Contacts/Lea.vcf'); p.wait_for_selector('.ab-head a[href^="#/write?tab=friends&who="]')
+        head = p.inner_text('.ab-head')
+        check(all(x in head for x in ['Écrire', 'Appeler', 'Payer', 'Ses articles']), f'{name} : la fiche mène à tout ce qu’on fait avec la personne')
+        p.wait_for_selector('.ab-circle select'); check(p.locator('.ab-circle select').count() == 1, f'{name} : son cercle se règle depuis la fiche')
         # Bêta : la carte de l'accueil, « Annuler » ferme même vide, un retour part avec les bons champs.
         p.goto(f'http://127.0.0.1:{port}/#/'); p.wait_for_selector('.bt-card button')
         check('Astroport est en bêta' in p.inner_text('.bt-card'), f'{name} : la bêta est annoncée')

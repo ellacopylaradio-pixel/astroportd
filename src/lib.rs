@@ -15,6 +15,7 @@ pub mod agents;
 pub mod assist;
 pub mod chat;
 pub mod link_preview;
+pub mod local_ports;
 pub mod web_push;
 pub mod coop_config;
 pub mod delegation;

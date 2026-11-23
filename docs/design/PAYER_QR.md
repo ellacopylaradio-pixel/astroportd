@@ -81,7 +81,7 @@ l'on suit.
   /api/v1/me/circles` `{ hex, level: 1..5 | null }` ; la fiche (`GET /api/v1/me/meet/<clé>`) porte `level`.
 - **Branché** : au moment de payer, Famille/Proche/Ami rassurent (« Léa, votre proche (Famille) »), Connaissance demande de
   vérifier le nom, Contact ou inconnu avertit.
-- **Branché** : *Mes gardiens* (Mon compte › Ma sécurité) propose d'abord les proches sur un **autre Astroport** (sur la même
+- **Branché** : *Mes gardiens* (Moi › Sauvegarde) propose d'abord les proches sur un **autre Astroport** (sur la même
   station, un gardien tomberait avec elle), puis du cercle le plus proche au plus lointain, puis rencontrés en personne
   (`private_backup::guardian_candidates`) ; si tous les proches sont sur la station, l'écran le dit et propose *Se rencontrer*.
 

@@ -31,6 +31,9 @@ assert.equal(r.list.length, 5); assert.ok(!r.list.some(s => s.title.includes('vi
 
 // Appels qui échouent (null) : jamais d'exception.
 r = steps({}); assert.equal(r.list.length, 5); assert.equal(r.left, 5);
+// Lecture des documents : l'étape n'existe que si la station sait lire ; cochée quand elle lit (ici ou chez un ami).
+r = steps({ reading: { state: 'off' } }); assert.equal(r.list.at(-1).href, '#/devices?card=reading'); assert.equal(r.list.at(-1).done, false);
+assert.equal(steps({ reading: { state: 'friend' } }).list.at(-1).done, true);
 console.log('accueil : étapes OK');
 
 // « Pour vous » : rien à faire = encart vide ; partages en attente d'abord, puis ressemblances (avant les visages inconnus).
@@ -40,7 +43,7 @@ assert.equal(n.length, 2); assert.deepEqual(n[0].text.slice(1), [12, 'Fred']); a
 assert.deepEqual(news({ faces: { suggestions: [], unknown: 4 } })[0].text, ['{0} visage(s) à nommer', 4]);
 // Un ami en secours passe avant tout le reste.
 n = news({ faces: { suggestions: [{}], unknown: 0 }, shares: { pending: [] }, backup: { hosting: [{ label: 'Léa', rescue: { station: 'x' } }, { label: 'Max' }] } });
-assert.deepEqual(n.map(x => x.icon), ['🆘', '🫂']); assert.equal(n[0].href, '#/account?tab=securite'); assert.deepEqual(n[0].text[1], 'Léa');
+assert.deepEqual(n.map(x => x.icon), ['🆘', '🫂']); assert.equal(n[0].href, '#/backup'); assert.deepEqual(n[0].text[1], 'Léa');
 // Vigie de Public : un fichier qui en dit trop passe avant les photos et les visages ; rien à signaler = rien d'affiché.
 // Une photo HEIC non servie n'en dit pas trop (les autres photos partent nettoyées) : elle n'alarme pas l'accueil.
 n = news({ faces: { suggestions: [{}] }, shares: { pending: [{ count: 1, name: 'Fred' }] }, fp: { privacy: { unserved: 2, sensitive: 3 } } });
@@ -50,7 +53,7 @@ console.log('accueil : « Pour vous » OK');
 
 // Gardiens : aucun hors de cette station = alerte tant qu'il n'y en a pas ; un gardien d'ailleurs la fait taire.
 n = news({ backup: { hosting: [], guardians: [] } });
-assert.deepEqual(n.map(x => x.icon), ['⚠️']); assert.equal(n[0].href, '#/account?tab=securite');
+assert.deepEqual(n.map(x => x.icon), ['⚠️']); assert.equal(n[0].href, '#/backup');
 assert.deepEqual(news({ backup: { guardians: [{ label: 'Bob', same_station: true }] } }).map(x => x.icon), ['⚠️'], 'un gardien sur la même station ne protège pas');
 assert.deepEqual(news({ backup: { guardians: [{ label: 'Léa', same_station: false }] } }), []);
 assert.deepEqual(news({ backup: { mine: null } }), [], 'ancienne réponse sans gardiens : pas d\'alerte inventée');

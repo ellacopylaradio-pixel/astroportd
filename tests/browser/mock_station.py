@@ -44,6 +44,28 @@ ADMIN = dict(face=dict(mode='off', label=None, locked=None, onnx_compiled=True, 
              kinds=dict(kinds=[dict(kind=1, label='Note publique', read='public', write='circle', project=True, default='read=public write=circle project=on', source='défaut'), dict(kind=7, label='Réaction (+N = Ẑen)', read='circle', write='circle', project=True, default='read=circle write=circle project=on', source='défaut')],
                         choices=dict(read=['public', 'addressed', 'friends', 'circle', 'deny'], write=['circle', 'open', 'deny']), fixed={'1059': 'x', '22242': 'y'}))
 ADMIN.update(route=ROUTE, tunnels=None, tasks=None, assist=dict(services=['ssh'], friends=[], incoming=[], outgoing=[]))  # réglages facultatifs de m-options.js : absents, l'écran s'en passe sans erreur
+# Tableau de bord par défaut : la forme de `GET /api/v1/dashboard` (src/ui_backend/station.rs), pour que Santé et Mes Ẑen
+# s'affichent sans que chaque test le remplisse ; un test peut toujours le remplacer par STATE['dashboard'].
+DASHBOARD = dict(backup_rs=None, station=dict(node='abcdef012345', peer_id='12D3KooWMaStation', domain='station.example', version='1.10.0', uptime_secs=86400 * 3, captain=True),
+                 relay=dict(events=48210, last_event_at=1790000000, db_bytes=310_000_000), p2p=dict(enabled=True, peers=4, listen=2, score=12.5, tier='Standard'),
+                 balance=dict(g1_cents=12000, zen_cents=120000, error=None, stale=False), energy=dict(weeks=4.2, max_weeks=8, weekly_rent_cents=100),
+                 sovereignty=dict(encrypted_files=12, encrypted_bytes=2_200_000_000, last_manifest_at=1790000000, last_manifest_event='abcdef012345', last_manifest_rev='7'))
+# Partages (m-services.js) : ce que cette station prête, les ports qui écoutent ici, une demande d'aide reçue.
+TUNNELS = dict(origin=False, modes=['off', 'listed', 'friends', 'swarm'], max_shared=8, ssh_managed=True, friends=[dict(peer='12D3KooWAmiLyon', label='Marie'), dict(peer='12D3KooWAmiNantes', label='Atelier Nantes')],
+               services=[dict(name='ssh', mode='off', default_mode='off', customized=False, grants=[], named=0, shared=False, target='127.0.0.1:22', up=True),
+                         dict(name='ollama', mode='listed', default_mode='friends', customized=True, grants=[dict(peer='12D3KooWAmiLyon', label='Marie', until=1791000000, expired=False)], named=1, shared=False, target='127.0.0.1:11434', up=True),
+                         dict(name='comfyui', mode='friends', default_mode='friends', customized=False, grants=[], named=0, shared=False, target='127.0.0.1:8188', up=False)],
+               suggest=[dict(name='bureau-vnc', target='127.0.0.1:5900', label='Bureau à distance (VNC)')],
+               listening=[dict(port=5900, target='127.0.0.1:5900', local_only=False, program='wayvnc', name='bureau-vnc', label='Bureau à distance (VNC)'),
+                          dict(port=8096, target='127.0.0.1:8096', local_only=False, program='jellyfin', name='jellyfin', label='Films et musique (Jellyfin)'),
+                          dict(port=7070, target='127.0.0.1:7070', local_only=True, program='navidrome', name='navidrome', label=None)])
+ADMIN['tunnels'] = TUNNELS
+# Capitaines : Marie est aussi dans l'annuaire (pas de doublon attendu) ; Paul n'y est pas (son service doit apparaître quand même).
+ADMIN['captains'] = dict(captains=[dict(label='Marie', hex='dd' * 32, friend=True, i_follow=True, follows_me=True, peer='12D3KooWAmiLyon', services=[dict(name='ollama', local=None)]),
+                                   dict(label='Paul', hex='ee' * 32, friend=True, i_follow=True, follows_me=True, peer='12D3KooWPaulHorsAnnuaire', services=[dict(name='jellyfin', local=None)]),
+                                   dict(label='Inès', hex='ff' * 32, friend=False, i_follow=True, follows_me=False, peer=None, services=None)])
+ADMIN['assist'] = dict(services=['ssh', 'bureau-vnc'], friends=[dict(hex='dd' * 32, label='Marie')], outgoing=[],
+                       incoming=[dict(id='a1', other='dd' * 32, **{'from': 'Marie'}, service='ssh', hours=2, note='mon disque est plein', status='pending', station='12D3KooWAmiLyon')])
 ADMIN['locks'] = dict(mode='village', plane=dict(origin=True, kubo=True, pool_peers=1, p2p=True), gates=dict(register=True, register_cli=True, crawl=True, n2=True, mutual_only=False, photos_auto=True, open_writes=[]), people=dict(hosted=4, n1=9, n1_mutual=5, n2=37, n2_known=37), faces=dict(auto_off_members=1), public=dict(files=12, unserved=0, sensitive=3, members=1))
 ACCOUNT = dict(hex='aa' * 32, npub='npub1test', email='alice@example.org', role='multipass', g1pub='G1TEST', home_station='Qm:ab', lang='fr', langs=['fr', 'en', 'es'], profile=dict(name='Alice', about='Bonjour', picture=None),
                dav=dict(url='/dav', login='alice@example.org'), token_generation=0, keys_exportable=True, has_g1_key=True, relays=[dict(url='wss://s.example', read=True, write=True)])
@@ -270,7 +292,7 @@ class H(BaseHTTPRequestHandler):
             if p == '/api/v1/book/card': return self.send(200, dict(path='/Contacts/Lea.vcf', me=False, pubkey='ab' * 32, via='vcard', fields=lea, faces=12, hosted_here=None, plane='origin', keys=[dict(plane='origin', hex='ab' * 32, via='station'), dict(plane='zen1', hex='cd' * 32, via='lien')], profile=dict(name='Léa M.'), drift=True, diff=[
                 dict(key='name', label='Nom', mine='Léa Martin', theirs='Léa M.', same=False, can_take=True), dict(key='about', label='Présentation', mine='', theirs='Boulangère', same=False, can_take=True), dict(key='nip05', label='NIP-05', mine='', theirs='', same=True, can_take=False)]))
             if p == '/api/v1/book/photo': return self.send(200, dict(uri=None))
-            if p == '/api/v1/book/photo-choices': return self.send(200, dict(faces=[7]))
+            if p == '/api/v1/book/photo-choices': return self.send(200, dict(faces=[7], photos=[dict(id=7, path='/Photos/lea.jpg', bbox=[0.3, 0.2, 0.4, 0.5])], total=12))  # forme de address_book::photo_choices
             if p == '/api/v1/book/duplicates': return self.send(200, dict(groups=[dict(reasons=['même téléphone'], cards=[dict(path='/Contacts/Lea.vcf', name='Léa Martin', emails=[], phones=['+33 6 12']), dict(path='/Contacts/Lea2.vcf', name='L. Martin', emails=[], phones=['06 12'])])]))
         if p == '/api/v1/ucloud/memories': return self.send(200, STATE.get('memories') or dict(memories=[]))
         if p == '/api/v1/ucloud/trips': return self.send(200, STATE.get('trips') or dict(trips=[], home=None))  # smoke_souvenirs.py
@@ -314,7 +336,7 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/pull': return self.send(200, dict(sources=[dict(id='s1', label='Mon Nextcloud', url='https://nc.example/remote.php/dav/files/fred', username='fred', remote_path='Photos', dest_prefix='/Imports/Mon Nextcloud', private_ok=False,
             job=dict(state='running', dry_run=False, started=1, finished=None, progress=dict(done=40, total=100, imported=30, skipped=8, errors=2), report=None, error=None), last=None)]))
         if p == '/api/v1/station/update': return self.send(200, STATE.get('update') or dict(current='1.7.0', latest='v1.7.0', newer=False, error=None, models=[], plugins=[], running=False, log=[], can_run=True, command='curl … | bash'))  # smoke_update.py
-        if p == '/api/v1/dashboard': return self.send(200, STATE.get('dashboard') or dict(sovereignty=dict(encrypted_files=12)))  # accueil d'un membre (m-home.js) ; Détails techniques : smoke_backup_rs.py
+        if p == '/api/v1/dashboard': return self.send(200, STATE.get('dashboard') or DASHBOARD)  # accueil d'un membre (m-home.js) ; Détails techniques : smoke_backup_rs.py
         if p == '/api/v1/ucloud/media/safety': return self.send(200, STATE.get('safety') or dict(files={}))  # copies des fichiers partagés : smoke_backup_rs.py
         if p == '/api/v1/backup': return self.send(200, STATE.get('backup') or dict(mine=None, friends=[], hosting=[], share=None))  # gardiens : smoke_guardians.py
         if p == '/api/v1/faces/pending-shares': return self.send(200, dict(pending=[], auto_share=True))
@@ -458,6 +480,25 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/update': STATE.setdefault('update_posts', []).append(1); STATE['update'] = {**STATE.get('update', {}), 'running': True, 'log': ['▶ Téléchargement et vérification', '  ✔ empreinte SHA-256 vérifiée']}; return self.send(200, dict(started=True, version='v1.8.0'))
         if p == '/api/v1/station/planes/service': STATE['unit'] = 'planes'; return self.send(200, dict(state='switched', unit='/h/u', command='x', backup='/h/u.bak-1', carried=[], carried_to=None, to_carry=[], unreadable=False))
         if p == '/api/v1/station/admin/locks': ADMIN['locks']['mode'] = body['mode']; return self.send(200, ADMIN['locks'])
+        if p == '/api/v1/station/admin/tunnels':  # comme TunnelPolicy::set : share, unshare, mode, grant, revoke, reset
+            sv = {s['name']: s for s in TUNNELS['services']}
+            if 'share' in body:
+                s = body['share']
+                if s['name'] in sv: return self.send(400, dict(error=f"« {s['name']} » existe déjà"))
+                TUNNELS['services'].append(dict(name=s['name'], mode=s.get('mode', 'listed'), default_mode='listed', customized=False, grants=[], named=0, shared=True, target=s['target'], up=True))
+                TUNNELS['listening'] = [x for x in TUNNELS['listening'] if x['target'] != s['target']]
+            elif 'unshare' in body: TUNNELS['services'] = [s for s in TUNNELS['services'] if s['name'] != body['unshare']]
+            else:
+                s = sv[body['service']]
+                if 'mode' in body: s.update(mode=body['mode'], customized=True)
+                if 'grant' in body: s['grants'].append(dict(peer=body['grant']['peer'], label=body['grant'].get('label') or '', until=None if not body['grant'].get('hours') else 1791000000, expired=False))
+                if 'revoke' in body: s['grants'] = [g for g in s['grants'] if g['peer'] != body['revoke']]
+                if body.get('reset'): s.update(mode=s['default_mode'], customized=False, grants=[])
+            return self.send(200, TUNNELS)
+        if p == '/api/v1/station/admin/assist':
+            r = next((x for x in ADMIN['assist']['incoming'] if x['id'] == body.get('id')), None)
+            if body.get('action') == 'respond' and r: r['status'] = 'accepted' if body['accept'] else 'declined'
+            return self.send(200, dict(ok=True))
         if p == '/api/v1/station/admin/route':  # services ouverts par la constellation : ouvrir (station précise ou la plus puissante), fermer
             rows = ADMIN['route']['stations']
             if 'connect' in body:

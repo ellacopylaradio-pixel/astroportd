@@ -17,3 +17,12 @@
 .hm-news li > span:nth-child(2) { flex: 1; min-width: 12rem; }
 .hm-news .hm-ico { font-size: 1.6rem; }
 .hm-mem .photos{grid-template-columns:repeat(4,1fr)}
+/* Téléphone : les tuiles en deux colonnes compactes, pour voir l'essentiel sans faire défiler. */
+@media (max-width: 40rem) {
+  .hm-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+  .hm-tile { padding: .75rem .8rem; gap: .15rem; }
+  .hm-tile .hm-ico { font-size: 1.5rem; }
+  .hm-tile strong { font-size: 1rem; }
+  .hm-tile .muted { font-size: .82rem; }
+  .hm-cap { margin: .5rem 0; }
+}

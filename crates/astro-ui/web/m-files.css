@@ -14,3 +14,7 @@ ul.files li { flex-wrap: wrap; }
 .fm-line span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-dlg ul.files { max-height: 50vh; overflow: auto; }
 .fm-dlg h2 { margin-top: 0; font-size: 1.1rem; }
+/* Barre de Fichiers : les actions sur la sélection n'apparaissent que lorsqu'un fichier est coché (barre contextuelle). */
+.fbar button:disabled { display: none; }
+ul.files li > .link { min-width: 0; text-align: left; }
+@media (max-width: 40rem) { ul.files li > span.muted + span.muted { display: none; } }

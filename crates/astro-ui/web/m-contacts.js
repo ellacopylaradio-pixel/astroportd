@@ -58,7 +58,9 @@ export default async function contacts(root, K, qs) {
     } }, t('Supprimer la sélection ({0})', sel.size));
     selbar.replaceChildren(h('strong', {}, t('{0} sélectionnée(s)', sel.size)),
       h('button', { class: 'ghost', onclick: () => { mine.forEach(p => sel.add(p)); load(); bar(); } }, t('Tout sélectionner') + ` (${mine.length})`),
-      h('button', { class: 'ghost', onclick: () => { sel.clear(); load(); bar(); } }, t('Tout désélectionner')), rm);
+      h('button', { class: 'ghost', onclick: () => { sel.clear(); load(); bar(); } }, t('Tout désélectionner')), rm,
+      // Sortie toujours en vue : « Sélectionner » est rangé dans « ⋯ Plus ».
+      h('button', { class: 'ghost', onclick: () => selbtn.click() }, '✕ ' + t('Terminer la sélection')));
   }
   selbtn.onclick = () => { s.select = !s.select; sel.clear(); selbtn.textContent = s.select ? t('Terminer la sélection') : t('Sélectionner'); load().then(bar); };
   function avatar(c) {
@@ -118,7 +120,7 @@ export default async function contacts(root, K, qs) {
       h('p', { class: 'bar' }, go, halt), bar, msg);
   }
   const dupBtn = h('button', { class: 'ghost', onclick: () => duplicates() }, t('Doublons'));
-  const dupCount = () => api('/api/v1/book/merge-exact', { method: 'POST', body: { apply: false } }).then(p => { dupBtn.textContent = p.groups ? t('Doublons ({0} exacts)', p.groups) : t('Doublons'); }, () => {});
+  const dupCount = () => api('/api/v1/book/merge-exact', { method: 'POST', body: { apply: false } }).then(p => { dupBtn.textContent = p.groups ? t('Doublons ({0} exacts)', p.groups) : t('Doublons'); more.classList.toggle('dot', !!p.groups); }, () => {});
   async function duplicates() {
     try {
       const top = h('div', { class: 'card' }), r = await api('/api/v1/book/duplicates');
@@ -131,9 +133,11 @@ export default async function contacts(root, K, qs) {
             h('button', { class: 'ghost', onclick: async ev => { ev.target.disabled = true; try { await api('/api/v1/book/merge', { method: 'POST', body: { keep: c.path, drop: g.cards.filter(x => x.path !== c.path).map(x => x.path) } }); K.toast(t('Fiches fusionnées'), 1); duplicates(); load(); } catch (e) { K.toast(e.message); ev.target.disabled = false; } } }, t('Garder celle-ci')))))))); }
     catch (e) { K.toast(e.message); }
   }
-  const tabs = h('div', { class: 'bar' },
-    h('button', { class: 'ghost', onclick: async () => { const sync = (await K.mod('m-sync.js')).default; K.cleanup(() => {}); await sync(root, K); root.prepend(h('p', {}, h('button', { class: 'ghost', onclick: () => contacts(root, K) }, '← ' + t('Retour au carnet')))); } }, t('Synchroniser et inviter')));
-  tools.append(h('button', { onclick: create }, '＋ ' + t('Nouvelle fiche')), h('button', { class: 'ghost', onclick: () => file.click() }, t('Importer un .vcf')), dupBtn, selbtn, file);
+  const syncBtn = h('button', { class: 'ghost', onclick: async () => { const sync = (await K.mod('m-sync.js')).default; K.cleanup(() => {}); await sync(root, K); root.prepend(h('p', {}, h('button', { class: 'ghost', onclick: () => contacts(root, K) }, '← ' + t('Retour au carnet')))); } }, t('Synchroniser et inviter'));
+  // Deux actions en vue (se rencontrer, nouvelle fiche) ; le reste derrière « ⋯ Plus », qui se referme après un choix.
+  const more = h('details', { class: 'ab-more' }, h('summary', { class: 'ck-btn ghost' }, '⋯ ' + t('Plus')),
+    h('div', { class: 'ab-menu', onclick: ev => { if (ev.target.closest('button, a')) more.open = false; } }, h('a', { href: '#/cercles' }, '⭕ ' + t('Mes cercles')), syncBtn, h('button', { class: 'ghost', onclick: () => file.click() }, t('Importer un .vcf')), dupBtn, selbtn));
+  tools.append(h('a', { class: 'ck-btn', href: '#/rencontre' }, '🤝 ' + t('Se rencontrer')), h('button', { onclick: create }, '＋ ' + t('Nouvelle fiche')), more, file);
   dupCount();
   q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { s.q = q.value; load(); }, 200); };
   K.cleanup(() => clearTimeout(timer));
@@ -148,8 +152,7 @@ export default async function contacts(root, K, qs) {
         h('p', { class: 'muted' }, n ? t('Une question à la fois : « Est-ce Léa ? », « Qui est-ce ? ». Chaque réponse range les visages dans la fiche de la personne.') : t('La station analyse vos nouvelles photos : les visages à ranger apparaîtront ici.'))),
       h('span', { class: 'ab-sas-go' }, h('button', { onclick: go(n ? '#/people/tri?grand' : '#/people/tri') }, n ? t('Ranger les visages') : t('Table de tri'))));
   }, () => {});
-  const meet = h('p', { class: 'ck-acts' }, h('a', { class: 'ck-btn', href: '#/rencontre' }, '🤝 ' + t('Se rencontrer')), h('a', { class: 'ck-btn', href: '#/cercles' }, '⭕ ' + t('Mes cercles')));  // QR face à face, ou recherche dans la constellation
-  root.replaceChildren(h('h2', {}, t('Proches')), meet, sas, tabs, tools, selbar, main);
+  root.replaceChildren(sas, tools, selbar, main);
   // Lien direct vers une fiche (`#/people?c=/Contacts/…vcf`, depuis la recherche).
   const want = qs?.get?.('c');
   if (want) select({ path: want }); else show0();

@@ -172,20 +172,24 @@ export default async function write(root, K) {
   async function friendsView() {
     const box = h('section', { class: 'card wide' }, h('p', { class: 'muted' }, t('Chargement…')));
     K.api(A + '/friends').then(r => {
-      if (!r.posts.length) return box.replaceChildren(h('p', { class: 'muted' }, t('Vos amis réciproques n’ont encore rien écrit. Leurs articles, publics ou réservés pour vous, arriveront ici.')));
+      // Depuis la fiche d'une personne (`&who=<clé>`) : ses articles seulement, et un geste pour revenir à tous.
+      const who = q.get('who'), mine = who ? r.posts.filter(p => p.author === who) : r.posts;
+      const only = who ? h('p', { class: 'wr-only' }, h('span', { class: 'pill' }, '📰 ', mine[0] ? t('Articles de {0}', mine[0].name) : t('Une seule personne')), ' ', h('a', { href: '#/write?tab=friends' }, t('Tous mes amis'))) : null;
+      if (!mine.length) return box.replaceChildren(...[only, h('p', { class: 'muted' }, who ? t('Cette personne n’a encore rien publié pour vous.') : t('Vos amis réciproques n’ont encore rien écrit. Leurs articles, publics ou réservés pour vous, arriveront ici.'))].filter(Boolean));
+      r = { ...r, posts: mine };
       const reader = h('article', { class: 'wr-reader', hidden: true });
       const open = p => {
         const doc = new DOMParser().parseFromString(`<body>${p.html}</body>`, 'text/html');
         reader.replaceChildren(...[h('button', { type: 'button', class: 'ghost', onclick: () => { reader.hidden = true; list.hidden = false; } }, '← ', t('Retour')),
           p.image ? h('img', { class: 'wr-reader-cover', src: p.image, alt: '' }) : null, h('p', { class: 'muted' }, p.name, ' · ', new Date(p.published_at * 1000).toLocaleDateString(K.lang, { day: 'numeric', month: 'long', year: 'numeric' }), ' · ', t('{0} min de lecture', p.minutes), p.reserved ? [' · ', h('span', { class: 'pill' }, '🔒 ', t('Réservé pour vous'))] : null),
           h('h1', {}, p.title), p.summary ? h('p', { class: 'wr-lede' }, p.summary) : null, h('div', { class: 'wr-preview prose' }, [...doc.body.childNodes].map(n => document.importNode(n, true))),
-          h('p', { class: 'wr-bar' }, h('a', { class: 'btn', href: `#/write?a=${encodeURIComponent(`30023:${p.author}:${p.d}`)}&to=${p.author}` }, '💬 ', t('Commenter')), p.site && !p.reserved ? h('a', { class: 'btn ghost', href: `${p.site}blog/${encodeURIComponent(p.d)}`, target: '_blank', rel: 'noopener' }, t('Sur son blog'), ' ↗') : null)].filter(Boolean));
+          h('p', { class: 'wr-bar' }, h('a', { class: 'btn', href: `#/write?a=${encodeURIComponent(`30023:${p.author}:${p.d}`)}&to=${p.author}` }, '💬 ', t('Commenter')), h('a', { class: 'btn ghost', href: `#/chat?peer=${p.author}` }, '✉️ ', t('Lui écrire')), p.site && !p.reserved ? h('a', { class: 'btn ghost', href: `${p.site}blog/${encodeURIComponent(p.d)}`, target: '_blank', rel: 'noopener' }, t('Sur son blog'), ' ↗') : null)].filter(Boolean));
         list.hidden = true; reader.hidden = false; reader.scrollIntoView({ block: 'start' });
       };
       const list = h('ul', { class: 'wr-list' }, r.posts.map(p => h('li', { class: 'wr-friend', tabIndex: 0, onclick: () => open(p), onkeydown: ev => ev.key === 'Enter' && open(p) },
         p.image ? h('img', { src: p.image, alt: '', loading: 'lazy' }) : h('span', { class: 'wr-noimg', 'aria-hidden': 'true' }, p.reserved ? '🔒' : '📰'),
         h('span', { class: 't' }, h('b', {}, p.title), h('small', { class: 'muted' }, p.name, ' · ', new Date(p.published_at * 1000).toLocaleDateString(K.lang, { day: 'numeric', month: 'short' }), p.reserved ? ' · 🔒 ' + t('Réservé pour vous') : '')))));
-      box.replaceChildren(list, reader);
+      box.replaceChildren(...[only, list, reader].filter(Boolean));
       // Lien direct vers un article (`#/write?tab=friends&open=<auteur>:<d>`, depuis la recherche).
       const want = r.posts.find(p => `${p.author}:${p.d}` === q.get('open'));
       if (want) open(want);

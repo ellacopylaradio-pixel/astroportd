@@ -16,9 +16,11 @@ export function levelSelect(K, p, onPick) {
 }
 
 // Toile de confiance N² (astro_economy::wot) : seules les rencontres prouvées (code scanné face à face) y font entrer.
+// Repliée en bas de page : c'est un horizon (le dividende), pas le geste du jour ; son état tient dans le titre.
 function web(K, w) {
   const { h, t } = K, short = w.certs < w.needed;
-  return h('section', { class: 'card', id: 'ci-wot' }, h('h3', {}, '🕸️ ', t('Toile de confiance')),
+  const state = w.root || w.member ? '✓' : t('{0} sur {1}', w.certs, w.needed);
+  return h('details', { class: 'card wide fold', id: 'ci-wot' }, h('summary', {}, '🕸️ ', t('Toile de confiance'), ' ', h('small', { class: 'muted' }, t('rencontres prouvées : {0}', state))),
     w.root ? h('p', { class: 'ok' }, t('Capitaine : vous en êtes membre d\'office ; vos rencontres y font entrer les autres.'))
       : w.member ? h('p', { class: 'ok' }, h('strong', {}, '✓ ', t('Vous êtes dans la toile : {0} rencontres prouvées avec des membres.', w.certs)))
         : h('p', {}, h('strong', {}, t('Rencontres prouvées avec des membres : {0} sur {1}.', w.certs, w.needed)), ' ',
@@ -35,7 +37,9 @@ export default async function circles(root, K) {
   const draw = v => {
     const set = (p, level) => api('/api/v1/me/circles', { method: 'POST', body: { hex: p.hex, level } })
       .then(n => { draw(n); K.toast(t('{0} : {1}', p.label, t(LEVELS.find(x => x[0] === level)[2])), 1); }, e => K.toast(e.message, 0));
-    const groups = LEVELS.map(([l, ico, name]) => {
+    // Les cercles où il y a quelqu'un, en cartes ; les cercles vides, en une ligne (pas quatre cartes « Personne pour l'instant »).
+    const empty = LEVELS.filter(([l]) => !v.people.some(p => p.level === l));
+    const groups = LEVELS.filter(([l]) => v.people.some(p => p.level === l)).map(([l, ico, name]) => {
       const who = v.people.filter(p => p.level === l);
       return h('section', { class: 'card ci-ring' },
         h('h3', {}, `${ico} ${t(name)} `, h('small', { class: 'muted' }, String(who.length))),
@@ -47,12 +51,13 @@ export default async function circles(root, K) {
           levelSelect(K, p, lv => set(p, lv)))))
           : h('p', { class: 'muted' }, t('Personne pour l\'instant.')));
     });
-    root.replaceChildren(h('h2', {}, t('Mes cercles')),
+    root.replaceChildren(
       h('p', { class: 'muted' }, '🔒 ', t('Rangez vos proches du plus proche au plus lointain. C\'est privé : personne, pas même eux, ne sait où vous les avez rangés.')),
-      w ? web(K, w) : '',
       v.people.length ? h('div', { class: 'grid' }, groups) : h('p', { class: 'muted' }, t('Vous ne suivez encore personne.')),
-      h('p', { class: 'ck-acts' }, h('a', { class: 'ck-btn', href: '#/rencontre' }, '🤝 ' + t('Se rencontrer'))));
+      v.people.length && empty.length ? h('p', { class: 'muted ci-empty' }, t('Vides pour l\'instant : {0}. Le menu de chaque personne la range où vous voulez.', empty.map(([, ico, name]) => `${ico} ${t(name)}`).join(' · '))) : '',
+      h('p', { class: 'ck-acts' }, h('a', { class: 'ck-btn', href: '#/rencontre' }, '🤝 ' + t('Se rencontrer'))),
+      w ? web(K, w) : '');
   };
   try { const [v, x] = await Promise.all([api('/api/v1/me/circles'), api('/api/v1/me/wot').catch(() => null)]); w = x; draw(v); }
-  catch (e) { root.replaceChildren(h('h2', {}, t('Mes cercles')), h('p', { class: 'err', role: 'alert' }, e.message)); }
+  catch (e) { root.replaceChildren(h('p', { class: 'err', role: 'alert' }, e.message)); }
 }

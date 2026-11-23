@@ -19,7 +19,7 @@ export default async function library(root, K, qs) {
 
   // ── Temps : un fil continu, jour par jour, du plus récent au plus ancien ──
   const streamList = []; // une seule liste pour tout le fil : la visionneuse passe d'un jour au suivant
-  const tl = h('section', { class: 'card wide' }, h('h2', {}, t('Temps')), h('p', { class: 'muted' }, t('Chargement…')));
+  const tl = h('section', { class: 'card wide' }, h('p', { class: 'muted' }, t('Chargement…')));
   K.api(A + 'timeline').then(r => {
     if (!r.months.length) { tl.lastChild.textContent = t('Aucune photo datée pour le moment.'); return; }
     const months = r.months, box = h('div', { class: 'stream' }), more2 = h('button', { class: 'ghost' }, t('Mois précédents'));
@@ -46,11 +46,11 @@ export default async function library(root, K, qs) {
   }, e => { tl.lastChild.textContent = e.message; });
 
   // ── Carte ──
-  const mapSection = h('section', { class: 'card wide' }, h('h2', {}, t('Carte')), h('p', { class: 'muted' }, t('Vos photos géolocalisées, regroupées par la station : aucun service de carte extérieur n\'est appelé.')));
+  const mapSection = h('section', { class: 'card wide' }, h('p', { class: 'muted' }, t('Vos photos géolocalisées, regroupées par la station : aucun service de carte extérieur n\'est appelé.')));
   K.mod('m-map.js').then(m => mapSection.append(m.default(K, grid)), e => mapSection.append(h('p', { class: 'err' }, e.message)));
 
   // ── Voyages : repérés par la station (m-trips.js), chargés à la première ouverture de l'onglet ──
-  const tripsSection = h('section', { class: 'card wide' }, h('h2', {}, t('Voyages')));
+  const tripsSection = h('section', { class: 'card wide' });
   let tripsLoaded = false;
   const loadTrips = () => { if (tripsLoaded) return; tripsLoaded = true; K.mod('m-trips.js').then(async m => tripsSection.append(await m.tripsView(K, grid)), e => tripsSection.append(h('p', { class: 'err' }, e.message))); };
 
@@ -87,10 +87,11 @@ export default async function library(root, K, qs) {
     } catch (e) { K.toast(e.message); }
     self.disabled = false;
   } }, t('Chercher les doublons'));
-  const dups = h('section', { class: 'card wide' }, h('h2', {}, t('Doublons')), h('p', { class: 'muted' }, t('Images identiques ou presque (recadrage, recompression). Cochez ce que vous voulez supprimer, en une seule action : rien n\'est supprimé sans votre confirmation.')), h('p', {}, dupBtn), dupBox);
+  const dups = h('section', { class: 'card wide' }, h('p', { class: 'muted' }, t('Images identiques ou presque (recadrage, recompression). Cochez ce que vous voulez supprimer, en une seule action : rien n\'est supprimé sans votre confirmation.')), h('p', {}, dupBtn), dupBox);
 
   // ── Onglets : une vue à la fois (le fil du temps est long, la carte a besoin de place) ──
   const views = [['time', 'Temps', tl], ['trips', 'Voyages', tripsSection], ['map', 'Carte', mapSection], ['dups', 'Doublons', dups]];
+  views.forEach(([id, , el]) => { el.setAttribute('role', 'tabpanel'); el.setAttribute('aria-labelledby', 'lib-tab-' + id); });
   const tabs = h('div', { class: 'bar', role: 'tablist' }, views.map(([id, label]) => h('button', { role: 'tab', id: 'lib-tab-' + id, 'aria-selected': 'false', onclick: () => pick(id) }, t(label))));
   const pick = id => {
     views.forEach(([k, , el]) => { el.hidden = k !== id; mem.hidden = id !== 'time'; tabs.querySelector('#lib-tab-' + k).setAttribute('aria-selected', String(k === id)); tabs.querySelector('#lib-tab-' + k).className = k === id ? '' : 'ghost'; });
@@ -117,6 +118,7 @@ export default async function library(root, K, qs) {
   };
   P.change = paint; paint();
   K.cleanup(() => { P.on = false; P.set.clear(); P.all.clear(); P.lists.clear(); P.change = () => {}; });
-  root.replaceChildren(h('h2', {}, t('Bibliothèque')), tabs, h('div', { class: 'bar' }, selBtn), selBar, mem, h('div', { class: 'grid' }, ...views.map(v => v[2])));
+  // Pas de titre : le sous-onglet « Photos » et les onglets Temps · Voyages · Carte · Doublons disent déjà où l'on est.
+  root.replaceChildren(tabs, h('div', { class: 'bar' }, selBtn), selBar, mem, h('div', { class: 'grid' }, ...views.map(v => v[2])));
   pick(views.some(v => v[0] === qs?.get?.('tab')) ? qs.get('tab') : 'time');
 }

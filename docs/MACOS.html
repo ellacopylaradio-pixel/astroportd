@@ -148,7 +148,7 @@ astroportd face-check                                          # dit ce qui manq
 ./target/release/astroportd serve --db ~/.zen/astroportd/uplanet.db --blobs ~/.zen/astroportd/blobs \
     --p2p-listen /ip4/0.0.0.0/tcp/4101
 </code></pre></div>
-<p>La station offre au maillage Ollama (<code>127.0.0.1:11434</code>), ComfyUI (<code>127.0.0.1:8188</code>) et SSH (<code>127.0.0.1:22</code>). <strong>C'est vous qui décidez qui peut les ouvrir</strong>, dans <em>Ma station › Réseau › Réglages › Tunnels et accès</em>. Au départ, Ollama et ComfyUI sont ouverts à vos Capitaines amis ; le SSH est fermé en ẐEN et ouvert à vos Capitaines amis en ORIGIN. Détails dans <a href="CONSTELLATIONS.html">Constellations</a> et, dans le guide, à <a href="guide.html#etape-9">Relier sa station aux autres Capitaines</a>.</p>
+<p>La station offre au maillage Ollama (<code>127.0.0.1:11434</code>), ComfyUI (<code>127.0.0.1:8188</code>) et SSH (<code>127.0.0.1:22</code>). <strong>C'est vous qui décidez qui peut les ouvrir</strong>, dans <em>Ma station › Réseau › Partages</em>. Au départ, Ollama et ComfyUI sont ouverts à vos Capitaines amis ; le SSH est fermé en ẐEN et ouvert à vos Capitaines amis en ORIGIN. Détails dans <a href="CONSTELLATIONS.html">Constellations</a> et, dans le guide, à <a href="guide.html#etape-9">Relier sa station aux autres Capitaines</a>.</p>
 <p>Pour que le SSH existe sur le Mac, activez <em>Réglages Système › Partage › Session à distance</em>.</p>
 <h3>6. Démarrer la station à l'ouverture de session (launchd)</h3>
 <p>launchd est le service de macOS qui lance des programmes au démarrage. Créez le fichier <code>~/Library/LaunchAgents/org.uplanet.astroportd.plist</code> (remplacez <code>VOTRE_USER</code> par votre nom d'utilisateur) :</p>

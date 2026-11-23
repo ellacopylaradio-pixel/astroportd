@@ -16,7 +16,7 @@ export default function shell(K, me) {
   const switcher = sp => {
     if (!me.captain) return;
     if (!sw) { sw = h('a', { class: 'space-sw' }); tools.prepend(sw); }
-    sw.href = sp === 'station' ? '#/' : '#/cockpit';
+    sw.href = sp === 'station' ? '#/' : help ? '#/services' : '#/cockpit';
     sw.textContent = sp === 'station' ? '🏠 ' + t('Mon espace') : '🛰️ ' + t('Ma station');
     sw.title = sp === 'station' ? t('Retour à mon espace') : t('Gérer la station');
     if (help) sw.append(help);
@@ -25,8 +25,10 @@ export default function shell(K, me) {
   let help = null;
   const poll = () => K.api('/api/v1/station/admin/assist').then(v => {
     const n = v.incoming.filter(r => r.status === 'pending').length;
-    if (!n) { help?.remove(); help = null; return; }
+    if (!n) { help?.remove(); help = null; if (sw && space !== 'station') sw.href = '#/cockpit'; return; }
     if (!help) { help = h('span', { class: 'ch-badge' }); sw?.append(help); }
+    // Une demande d'aide attend : l'interrupteur mène droit à l'écran où l'on y répond.
+    if (sw && space !== 'station') sw.href = '#/services';
     help.textContent = n; help.title = t('{0} demande(s) d\'aide en attente', n);
   }, () => {});
   if (me.captain) { poll(); setInterval(poll, 30000); }
@@ -55,6 +57,12 @@ export default function shell(K, me) {
     else if (segs.length) nav = h('nav', { class: 'segs', 'aria-label': t('Rubrique') }, segs.map(s => h('a', { href: '#' + s.path, 'aria-current': s.path === res.route.path ? 'page' : null }, t(s.label))));
     const f = finder(res);
     if (nav || f) document.getElementById('main').before(bar = h('div', { class: 'strip' }, nav, f));
+    // Sur téléphone, les sous-onglets défilent : l'actif est amené au centre, et un fondu dit de quel côté il en reste.
+    const cur = nav?.querySelector('[aria-current]');
+    if (cur && nav.scrollWidth > nav.clientWidth) {
+      const edge = () => { nav.classList.toggle('more-r', nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 4); nav.classList.toggle('more-l', nav.scrollLeft > 4); };
+      nav.scrollLeft = cur.offsetLeft - (nav.clientWidth - cur.offsetWidth) / 2; edge(); nav.addEventListener('scroll', edge, { passive: true });
+    }
   };
   const assistant = res => {
     fab?.remove(); fab = null;

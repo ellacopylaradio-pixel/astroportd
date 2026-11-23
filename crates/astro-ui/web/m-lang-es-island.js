@@ -15,7 +15,6 @@ export default {
 "À vérifier par le Capitaine": "A verificar por el Capitán",
 "Règlement en cours": "Pago en curso",
 "À régler au retour du réseau": "Se pagará cuando vuelva la red",
-"Refusée": "Rechazada",
 "En vérification": "En verificación",
 "garantie par une station inconnue d'ici": "garantizada por una estación desconocida aquí",
 "Aucune promesse.": "Ninguna promesa.",

@@ -1,11 +1,10 @@
 'use strict';
 // Maillage et Capitaines amis (Capitaine) : sa station dans le maillage, les stations jointes (ajout à chaud, gardées comme
-// bootstrap), les Capitaines connus (suivre / ne plus suivre) et, pour chaque ami réciproque, les services que SA station nous
-// ouvre — demandés à elle, jamais publiés. « Ouvrir » donne un accès local (127.0.0.1) à un service d'une station amie.
+// bootstrap), les Capitaines connus (suivre / ne plus suivre). Les services échangés avec eux sont dans Partages (m-services.js).
 export default async function mesh(root, K) {
   const { h, t } = K, api = p => K.api('/api/v1/station/admin/' + p), post = (p, body) => K.api('/api/v1/station/admin/' + p, { method: 'POST', body });
   root.replaceChildren(h('p', { class: 'muted' }, t('Chargement…')));
-  const [m, c, rt, cs] = await Promise.all([api('mesh').catch(e => ({ error: e.message })), api('captains').catch(e => ({ error: e.message })), api('route').catch(e => ({ error: e.message })), K.api('/api/v1/station/constellation').catch(() => null)]);
+  const [m, c, cs] = await Promise.all([api('mesh').catch(e => ({ error: e.message })), api('captains').catch(e => ({ error: e.message })), K.api('/api/v1/station/constellation').catch(() => null)]);
   const act = (p, body, msg) => async ev => { const b = ev.target; b.disabled = true; try { await post(p, body); if (msg) K.toast(msg, 1); mesh(root, K); } catch (e) { K.toast(e.message); b.disabled = false; } };
   // Action à confirmer d'un second appui (pas de boîte de dialogue).
   const sure = (label, run) => { const b = h('button', { class: 'ghost', onclick: ev => { if (b.dataset.armed) return run(ev); b.dataset.armed = 1; b.textContent = t('Confirmer ?'); } }, label); return b; };
@@ -68,43 +67,22 @@ export default async function mesh(root, K) {
       h('p', { class: 'muted' }, t('Seule une station de la même constellation (même swarm.key) peut être jointe.')));
   }
 
-  // ── Services ouverts par la constellation : chaque station ne cite que ce que SA politique nous ouvre ; « Ouvrir » crée un accès local ──
-  const how = (s, a) => s === 'ssh' ? `ssh -p ${a.split(':').pop()} <utilisateur>@127.0.0.1` : s.startsWith('bureau') ? t('client de bureau à distance vers {0}', a) : `http://${a}`;
-  const NAMES = { ssh: t('Console à distance (SSH)'), ollama: t('IA de discussion (Ollama)'), comfyui: t('Images par IA (ComfyUI)'), 'ai-index': t('Lecture de documents (IA)'), 'bureau-vnc': t('Bureau à distance (VNC)'), 'bureau-rdp': t('Bureau à distance (RDP)'), jellyfin: t('Films et musique (Jellyfin)'), 'open-webui': t('IA en discussion (Open WebUI)') };
-  const copy = a => h('button', { type: 'button', class: 'ghost', onclick: () => navigator.clipboard?.writeText(a).then(() => K.toast(t('Copié : {0}', a), 1), e => K.toast(e.message)) }, t('Copier'));
-  const open = (service, peer) => async ev => {
-    // Sans port : la station donne le port habituel s'il est libre, sinon un port stable propre à ce service et à cette station amie.
-    const b = ev.target; b.disabled = true;
-    try { const r = await post('route', { connect: { service, peer, mode: 'power' } }); K.toast(t('Ouvert : {0}', how(service, r.addr)), 1); mesh(root, K); }
-    catch (e) { K.toast(t('Ouverture impossible : {0}', e.message)); b.disabled = false; }
-  };
-  // Un service : ouvert → l'adresse à utiliser, à copier, et « Fermer » ; sinon « Ouvrir ».
-  const svc = (peer, s, who) => h('li', { class: 'ms-svc' }, h('strong', {}, NAMES[s.name] || s.name), who ? [' · ', who] : null, ' ', s.local
-    ? [h('span', { class: 'pill ok' }, t('ouvert')), ' ', h('code', {}, how(s.name, s.local.addr)), ' ', copy(how(s.name, s.local.addr)), ' ', h('button', { class: 'ghost', onclick: act('route', { disconnect: { service: s.name, peer } }, t('Accès fermé')) }, t('Fermer'))]
-    : h('button', { onclick: open(s.name, peer) }, t('Ouvrir')));
-  const sts = rt.stations || [], offered = sts.filter(x => Array.isArray(x.services) && x.services.length), down = sts.filter(x => x.services?.error);
-  const several = [...new Set(offered.flatMap(x => x.services.map(s => s.name)))].filter(n => offered.filter(x => x.services.some(s => s.name === n)).length > 1);
-  const friends = h('section', { class: 'card wide' }, h('h2', {}, t('Services ouverts par la constellation')),
-    rt.error ? h('p', { class: 'degraded', role: 'alert' }, rt.error) : !rt.mesh ? h('p', { class: 'degraded' }, t('Maillage coupé : relancez la station sans --no-p2p pour rejoindre les autres stations.'))
-      : !offered.length ? h('p', { class: 'muted', role: 'status' }, t('Aucune station de la constellation ne vous ouvre de service pour l\'instant. Un Capitaine ami peut vous en ouvrir depuis son écran Options › Tunnels.'))
-      : [h('ul', { class: 'ms-list' }, offered.flatMap(x => x.services.map(s => svc(x.peer, s, x.name)))),
-        several.length ? h('p', {}, t('Au plus puissant :'), ' ', several.map(n => h('button', { class: 'ghost', onclick: open(n) }, NAMES[n] || n))) : null],
-    down.length ? h('p', { class: 'muted' }, t('Injoignables : {0}', down.map(x => x.name).join(', '))) : null,
-    h('p', { class: 'muted' }, t('L\'adresse reste sur cet ordinateur (127.0.0.1) et se ferme seule après 8 heures. C\'est la station amie qui accepte ou refuse.')));
-
   // ── Capitaines ──
-  const card = cap => h('div', { class: 'card' }, h('h3', {}, cap.label, ' ', h('span', { class: cap.friend ? 'pill ok' : 'pill disabled' }, cap.friend ? t('ami') : cap.follows_me ? t('vous suit') : cap.i_follow ? t('suivi') : t('inconnu'))),
-    cap.i_follow ? sure(t('Ne plus suivre'), act('captains', { unfollow: cap.hex }, t('Vous ne suivez plus {0}', cap.label))) : h('button', { onclick: act('captains', { follow: cap.hex }, t('Vous suivez {0}', cap.label)) }, t('Suivre')),
-    !cap.friend ? (cap.i_follow ? h('p', { class: 'muted' }, t('En attente : il doit vous suivre aussi pour partager.')) : null)
-      : !cap.peer ? h('p', { class: 'muted' }, t('Station inconnue.'))
-      : cap.services?.error ? h('p', { class: 'muted' }, t('Station injoignable : {0}', cap.services.error))
-      : cap.services?.length ? h('ul', {}, cap.services.map(s => svc(cap.peer, s))) : h('p', { class: 'muted' }, t('Rien de partagé avec vous pour l\'instant.')));
-  const caps = c.captains || [], list = h('div', { class: 'grid' }), find = h('input', { type: 'search', placeholder: t('Chercher un Capitaine'), 'aria-label': t('Chercher un Capitaine') });
+  // Une rangée par Capitaine : qui, où en est le lien, et le seul geste utile (suivre en retour, ne plus suivre).
+  const card = cap => h('li', { class: 'ms-cap' }, h('div', { class: 'ms-who' }, h('span', {}, h('strong', {}, cap.label), ' ', h('span', { class: cap.friend ? 'pill ok' : 'pill disabled' }, cap.friend ? t('ami') : cap.follows_me ? t('vous suit') : cap.i_follow ? t('suivi') : t('inconnu'))),
+    h('small', { class: 'muted' }, !cap.friend ? (cap.i_follow ? t('En attente : il doit vous suivre aussi pour partager.') : '')
+      : !cap.peer ? t('Station inconnue.')
+      : cap.services?.error ? t('Station injoignable : {0}', cap.services.error)
+      : cap.services?.length ? [t('{0} service(s) partagé(s) avec vous', cap.services.length), ' · ', h('a', { href: '#/services' }, t('Utiliser'))] : t('Rien de partagé avec vous pour l\'instant.'))),
+    cap.i_follow ? sure(t('Ne plus suivre'), act('captains', { unfollow: cap.hex }, t('Vous ne suivez plus {0}', cap.label))) : h('button', { onclick: act('captains', { follow: cap.hex }, t('Vous suivez {0}', cap.label)) }, cap.follows_me ? t('Suivre en retour') : t('Suivre')));
+  // D'abord ceux qui attendent un geste (ils vous suivent), puis les amis, puis le reste.
+  const rank = x => (x.follows_me && !x.i_follow ? 0 : x.friend ? 1 : 2);
+  const caps = (c.captains || []).slice().sort((x, y) => rank(x) - rank(y)), list = h('ul', { class: 'ms-caps' }), find = h('input', { type: 'search', placeholder: t('Chercher un Capitaine'), 'aria-label': t('Chercher un Capitaine') });
   const show = () => list.replaceChildren(...caps.filter(x => !find.value || x.label.toLowerCase().includes(find.value.toLowerCase())).map(card));
   find.oninput = show; show();
   const captains = h('section', { class: 'card wide' }, h('h2', {}, t('Capitaines')),
     c.error ? h('p', { class: 'degraded' }, c.error) : !caps.length ? h('p', { class: 'muted' }, t('Aucun autre Capitaine connu pour l\'instant.')) : [caps.length > 8 ? find : null, list],
-    h('p', { class: 'muted' }, t('Un ami réciproque vous montre ce qu\'il vous partage ; c\'est sa station qui décide.'), ' ', h('a', { href: '#/options' }, t('Régler mes partages')), ' · ', h('a', { href: '#/locks' }, t('Ce que « Suivre » ouvre'))));
+    h('p', { class: 'muted' }, t('Un ami réciproque vous montre ce qu\'il vous partage ; c\'est sa station qui décide.'), ' ', h('a', { href: '#/services' }, t('Régler mes partages')), ' · ', h('a', { href: '#/locks' }, t('Ce que « Suivre » ouvre'))));
 
   // ── Essaim : toutes les stations vues, de la plus puissante à la moins puissante ──
   const TIER = { Light: '🌿', Standard: '⚡', Brain: '🔥' }, nodes = cs?.nodes || [];
@@ -118,5 +96,5 @@ export default async function mesh(root, K) {
     h('p', {}, h('label', { for: 'ms-ia' }, only, ' ', t('Seulement celles qui offrent l\'IA (Ollama)'))), grid,
     h('p', {}, h('a', { class: 'ck-btn', href: '#/planes' }, t('Constellations'))));
 
-  root.replaceChildren(...[first, friends, captains, swarm, stations, h('section', { class: 'card wide' }, h('h2', {}, t('Ma station')), me)].filter(Boolean));
+  root.replaceChildren(...[first, captains, swarm, stations, h('section', { class: 'card wide' }, h('h2', {}, t('Ma station')), me)].filter(Boolean));
 }

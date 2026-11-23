@@ -15,7 +15,6 @@ export default {
 "À vérifier par le Capitaine": "To be checked by the Captain",
 "Règlement en cours": "Settlement in progress",
 "À régler au retour du réseau": "To be settled when the network is back",
-"Refusée": "Refused",
 "En vérification": "Being checked",
 "garantie par une station inconnue d'ici": "backed by a station unknown here",
 "Aucune promesse.": "No promises.",

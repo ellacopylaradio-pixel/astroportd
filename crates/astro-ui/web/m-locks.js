@@ -127,6 +127,6 @@ export default async function locks(root, K) {
     h('section', { class: 'card' }, h('h2', {}, t('Mode de la station')), modes, apply),
     follow,
     h('section', { class: 'card' }, h('h2', {}, t('Cette station')), facts,
-      h('p', { class: 'muted' }, t('Réglage fin, service par service et kind par kind : '), h('a', { href: '#/options' }, t('Réglages')), '.')));
+      h('p', { class: 'muted' }, t('Réglage fin, service par service et kind par kind : '), h('a', { href: '#/services' }, t('Partages')), ' · ', h('a', { href: '#/options' }, t('Réglages')), '.')));
   draw();
 }

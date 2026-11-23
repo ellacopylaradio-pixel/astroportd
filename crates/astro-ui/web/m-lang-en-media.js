@@ -17,7 +17,6 @@ export default {
 "Films": "Films",
 "Séries": "Series",
 "{0} épisode(s)": "{0} episode(s)",
-"Musique": "Music",
 "Morceaux": "Tracks",
 "Partagé avec mes amis": "Shared with my friends",
 "Corriger la fiche": "Edit the record",

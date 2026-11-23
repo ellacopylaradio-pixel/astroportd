@@ -1,7 +1,7 @@
 /* Mon blog (chargé avec m-write.js) : éditeur au pouce, aperçu fidèle au site, mêmes variables que app.css (clair et sombre). */
 .wr-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: .4rem 0 1rem; }
 .wr-head .sp, .wr-bar .sp { flex: 1; }
-.wr-tabs { display: flex; gap: .3rem; overflow-x: auto; }
+.wr-tabs { display: flex; flex-wrap: wrap; gap: .3rem; }
 .wr-tabs a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 1rem; border-radius: 999px; text-decoration: none; color: var(--muted); font-weight: 600; white-space: nowrap; }
 .wr-tabs a[aria-selected=true] { background: var(--accent); color: var(--on-accent); }
 .wr-themes { display: flex; gap: .25rem; }

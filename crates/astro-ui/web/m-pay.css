@@ -31,3 +31,9 @@
 .ci-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .4rem .8rem; }
 .ci-who { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: no-preference) { .pay-cam .frame { transition: border-color .15s; } }
+/* Recevoir : le montant précis sur une ligne, sous le code. */
+.pay-row { align-items: center; margin-top: .6rem; }
+.pay-row label { flex: 1 1 100%; font-weight: 600; }
+.pay-row input { flex: 1 1 6rem; min-width: 0; }
+/* Mes cercles : la ligne des cercles vides. */
+.ci-empty { margin-top: .8rem; }

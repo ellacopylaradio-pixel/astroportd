@@ -76,7 +76,7 @@ brew install ollama && ollama serve &          # Ollama, port 11434
     --p2p-listen /ip4/0.0.0.0/tcp/4101
 ```
 
-La station offre au maillage Ollama (`127.0.0.1:11434`), ComfyUI (`127.0.0.1:8188`) et SSH (`127.0.0.1:22`). **C'est vous qui décidez qui peut les ouvrir**, dans *Ma station › Réseau › Réglages › Tunnels et accès*. Au départ, Ollama et ComfyUI sont ouverts à vos Capitaines amis ; le SSH est fermé en ẐEN et ouvert à vos Capitaines amis en ORIGIN. Détails dans [Constellations](CONSTELLATIONS.md) et, dans le guide, à [Relier sa station aux autres Capitaines](GUIDE.md#etape-9).
+La station offre au maillage Ollama (`127.0.0.1:11434`), ComfyUI (`127.0.0.1:8188`) et SSH (`127.0.0.1:22`). **C'est vous qui décidez qui peut les ouvrir**, dans *Ma station › Réseau › Partages*. Au départ, Ollama et ComfyUI sont ouverts à vos Capitaines amis ; le SSH est fermé en ẐEN et ouvert à vos Capitaines amis en ORIGIN. Détails dans [Constellations](CONSTELLATIONS.md) et, dans le guide, à [Relier sa station aux autres Capitaines](GUIDE.md#etape-9).
 
 Pour que le SSH existe sur le Mac, activez *Réglages Système › Partage › Session à distance*.
 

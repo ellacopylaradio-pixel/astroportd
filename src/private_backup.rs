@@ -512,7 +512,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         if must_ask {
             let label = self.label_of(owner).await;
             if self.hosted_here(&host).await {
-                self.tell(&host, format!("🗄️ {label} vous demande d'héberger sa sauvegarde privée (chiffrée, illisible pour vous). Acceptez ou refusez dans Mon compte › Ma sécurité.")).await;
+                self.tell(&host, format!("🗄️ {label} vous demande d'héberger sa sauvegarde privée (chiffrée, illisible pour vous). Acceptez ou refusez dans Moi › Sauvegarde.")).await;
             } else {
                 self.control(owner, &host, "request", vec![]).await?;
             }
@@ -934,7 +934,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                     )
                     .await;
                 self.claim(&wrap.id, at).await;
-                self.tell(me, format!("🗄️ {label} vous demande d'héberger sa sauvegarde privée (chiffrée, illisible pour vous). Acceptez ou refusez dans Mon compte › Ma sécurité.")).await;
+                self.tell(me, format!("🗄️ {label} vous demande d'héberger sa sauvegarde privée (chiffrée, illisible pour vous). Acceptez ou refusez dans Moi › Sauvegarde.")).await;
                 stats.control += 1;
             }
             // Mon hébergeur répond.
@@ -991,7 +991,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
                 match astro_lifecycle::share::SecretShare::parse(&rumor.content) {
                     Ok(share) if accepted && share.index == 3 && share.hex == sender => {
                         self.kv_put(SHARE_HELD, &format!("{me}:{sender}"), &share.to_text(), at).await;
-                        self.tell(me, format!("🔑 {label} vous a confié une part de sa clé de secours. Seule, elle ne sert à rien : s'il perd sa station, il vous la demandera : vous confirmerez d'un geste après lui avoir parlé (Mon compte › Ma sécurité).")).await;
+                        self.tell(me, format!("🔑 {label} vous a confié une part de sa clé de secours. Seule, elle ne sert à rien : s'il perd sa station, il vous la demandera : vous confirmerez d'un geste après lui avoir parlé (Moi › Sauvegarde).")).await;
                     }
                     _ => stats.ignored += 1,
                 }
@@ -2171,7 +2171,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         let station: String = tag(&rumor.tags, "station").unwrap_or("une autre station").chars().filter(|c| !c.is_control()).take(80).collect();
         self.kv_put(RESCUE_IN, &key, &json!({ "from": from, "station": station, "at": at }).to_string(), at).await;
         let label = self.label_of(&owner).await;
-        self.tell(me, format!("🆘 {label} dit avoir perdu sa station et veut retrouver son compte sur « {station} ». Appelez-le avant de confirmer : Mon compte › Ma sécurité.")).await;
+        self.tell(me, format!("🆘 {label} dit avoir perdu sa station et veut retrouver son compte sur « {station} ». Appelez-le avant de confirmer : Moi › Sauvegarde.")).await;
     }
 
     /// Côté gardien : `accept` rend la part P3 à la station qui la demande ; sinon la demande est refusée et le Capitaine alerté.

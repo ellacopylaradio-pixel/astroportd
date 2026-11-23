@@ -16,7 +16,7 @@
 .histo .bar-m{flex:0 0 7px;min-height:6px;padding:0;border:0;border-radius:2px;background:var(--line);cursor:pointer}
 .histo .bar-m.on{background:var(--accent)}
 .stream h3.sticky{position:sticky;top:0;z-index:1;margin:0;padding:.4rem 0;background:var(--bg)}
-.stream h4{margin:.8rem 0 .3rem;font-weight:600;text-transform:capitalize}
+.stream h4{margin:.8rem 0 .3rem;font-weight:600}.stream h4::first-letter{text-transform:uppercase}
 
 /* Fiches de station (onglet Essaim et pairs). */
 .ck-node.self { border-color: var(--accent); }
@@ -25,3 +25,7 @@
 .ck-st.off { color: var(--muted); }
 .ck-chip { display: inline-block; margin: 0 .3rem .2rem 0; padding: .05rem .6rem; border-radius: 1rem; background: var(--panel2); font-size: .78rem; }
 .ck-btn { flex: none; padding: .35rem .9rem; border-radius: 1rem; background: var(--accent); color: var(--on-accent); font-weight: 600; text-decoration: none; }
+/* Essaim : un Capitaine par rangée (m-mesh.js). */
+.ms-caps { list-style: none; margin: .4rem 0; padding: 0; display: grid; gap: .4rem; }
+.ms-cap { display: flex; align-items: center; justify-content: space-between; gap: .4rem .8rem; flex-wrap: wrap; min-height: 48px; padding: .35rem .6rem; border: 1px solid var(--line); border-radius: var(--r); }
+.ms-who { display: flex; flex-direction: column; min-width: 0; }

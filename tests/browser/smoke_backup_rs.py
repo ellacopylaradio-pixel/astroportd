@@ -42,7 +42,7 @@ with sync_playwright() as pw:
 
         # Mes gardiens : 3 sur 5, 1,7 fois au lieu de 5, objectif atteint.
         STATE['backup'] = backup(CODED)
-        page.goto(f'http://127.0.0.1:{port}/#/account?tab=securite'); page.wait_for_selector('#ac-guard')
+        page.goto(f'http://127.0.0.1:{port}/#/backup'); page.wait_for_selector('#ac-guard')
         txt = page.locator('#ac-guard').inner_text()
         check('Sécurité estimée : 99,9 % (objectif 99,9 %)' in txt, f'{tag} : sécurité estimée et objectif')
         check('3 de vos 5 gardiens suffisent pour tout retrouver' in txt, f'{tag} : quelques-uns suffisent')

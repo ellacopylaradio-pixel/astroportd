@@ -53,7 +53,7 @@ export default async function members(root, K, q) {
     if (!ix) return null;
     const lend = ix.lend === 'off' || ix.lend === 'friends'
       ? sw('ix-lend', ix.lend === 'friends', t('Prêter la puissance de cette station à mes Capitaines amis'), on => setIndex({ lend: on ? 'friends' : 'off' }))
-      : ix.lend ? h('p', { class: 'muted' }, t('Prêt aux amis : réglage particulier ({0}), voir Réglages › Tunnels.', ix.lend)) : null;
+      : ix.lend ? h('p', { class: 'muted' }, t('Prêt aux amis : réglage particulier ({0}), voir Réseau › Partages.', ix.lend)) : null;
     return h('section', { class: 'card wide' }, h('h3', {}, t('Analyse des documents et photos (IA)')),
       h('p', { class: 'muted' }, ix.engine.length ? t('Cette station lit elle-même le texte des images et des PDF de ses membres.') : t('Pas de moteur sur cette station : chaque membre peut confier la lecture à une station amie, s’il le souhaite (Mon compte).')),
       h('p', {}, sw('ix-on', ix.enabled, t('Lecture des documents sur cette station'), on => setIndex({ enabled: on }))),

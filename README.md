@@ -130,7 +130,7 @@ Chaque limite est suivie de ce qu'on peut faire en attendant.
   sont relancés chaque jour pendant 30 jours (ce qui revient est fusionné sans rien écraser). Les fichiers sont répartis
   entre les gardiens (`k` parts sur `n` suffisent) : il faut que `k` d'entre eux répondent. La sûreté et le débit n'ont
   pas encore été mesurés sur un vrai réseau ni sur Raspberry Pi. *Ayez trois gardiens ou plus dont la station reste
-  allumée (Ma sécurité affiche la sécurité estimée face à l'objectif de 99,9 %).*
+  allumée (Moi › Sauvegarde affiche la sécurité estimée face à l'objectif de 99,9 %).*
 - **Binaires statiques (musl)** : pas d'inférence locale. *Visages et mémoire se calculent sur une autre machine (`--face-engine`, Ollama).*
 - **Mémoire de BRO** : un seul moteur d'embeddings par mémoire. *Changer de moteur demande de ré-indexer.*
 - **Entre deux UPlanet d'une même machine** : copie à la main, sans miroir automatique. *`astroportd bridge-copy`.*

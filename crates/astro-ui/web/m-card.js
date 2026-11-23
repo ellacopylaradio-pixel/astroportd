@@ -85,6 +85,10 @@ export default async function card(K, { path, me, blank, groups, onSaved, onClos
 
   // En-tête : qui est-ce, lien avec un MULTIPASS, visages.
   const pic = h('div', { class: 'ab-picker', hidden: true });
+  // Son cercle (privé), réglable d'ici : la même réglette que dans Mes cercles et au moment de payer.
+  const circle = h('p', { class: 'ab-circle' });
+  if (!isMe && d.pubkey) K.api(`/api/v1/me/meet/${d.pubkey}`).then(v => v.level && K.mod('m-circles.js').then(m => circle.replaceChildren(h('span', { class: 'muted' }, t('Son cercle, connu de vous seul :')), ' ',
+    m.levelSelect(K, { ...v, label: f.name }, lv => K.api('/api/v1/me/circles', { method: 'POST', body: { hex: d.pubkey, level: lv } }).then(() => K.toast(t('Cercle enregistré'), 1), e => K.toast(e.message)))))).catch(() => {});
   const chatKey = isMe ? null : ((d.keys || []).find(k => !k.plane || k.plane === d.plane)?.hex || d.pubkey || null); // une personne = une conversation
   const head = h('div', { class: 'ab-head' }, h('button', { type: 'button', class: 'ghost ab-back', onclick: onClose }, '← ' + t('Proches')),
     h('div', { class: 'ab-pic' }, f.picture ? h('img', { src: f.picture, alt: '', width: 64, height: 64, referrerpolicy: 'no-referrer' }) : embedded(d.path, f.name), !isMe && d.path ? h('button', { type: 'button', class: 'ghost', onclick: () => photoEditor(K, pic, d.path, onSaved) }, t('Photo…')) : null),
@@ -92,7 +96,10 @@ export default async function card(K, { path, me, blank, groups, onSaved, onClos
       isMe ? h('p', { class: 'muted' }, t('Votre profil Nostr et votre fiche sont réunis : ce que vous changez ici est publié (champs « public ») et enregistré dans votre fiche chiffrée (tout le reste, qui ne quitte jamais votre uCloud).'))
         : d.pubkey ? [h('p', {}, h('span', { class: 'pill ok' }, d.hosted_here ? t('MULTIPASS de la station') : t('Clé Nostr')), d.faces ? ` · ${d.faces} ${t('visage(s) reconnu(s)')}` : ''),
           // Visio : une personne reliée à un MULTIPASS s'appelle d'ici (la sonnerie ne passe que si elle vous suit aussi).
-          h('p', { class: 'ck-acts' }, chatKey ? h('a', { class: 'btn', href: '#/chat?peer=' + chatKey }, '💬 ' + t('Écrire')) : null, h('button', { type: 'button', class: 'ghost', onclick: () => K.mod('m-call.js').then(m => m.call(K, d.pubkey, f.name), e => K.toast(e.message)) }, '📹 ' + t('Appeler')))] : h('p', { class: 'muted' }, t('Pas encore reliée à un MULTIPASS'), d.faces ? ` · ${d.faces} ${t('visage(s) reconnu(s)')}` : '')));
+          h('p', { class: 'ck-acts' }, chatKey ? h('a', { class: 'btn', href: '#/chat?peer=' + chatKey }, '💬 ' + t('Écrire')) : null, h('button', { type: 'button', class: 'ghost', onclick: () => K.mod('m-call.js').then(m => m.call(K, d.pubkey, f.name), e => K.toast(e.message)) }, '📹 ' + t('Appeler')),
+            // La fiche est le pivot de la personne : payer, lire ce qu'elle écrit, la ranger, sans chercher ailleurs.
+            h('button', { type: 'button', class: 'ghost', onclick: async () => (await K.mod('m-credit.js')).default(K, { mode: 'member', to: d.pubkey, label: f.name }) }, '💸 ' + t('Payer')),
+            h('a', { class: 'btn ghost', href: '#/write?tab=friends&who=' + d.pubkey }, '📰 ' + t('Ses articles'))), circle] : h('p', { class: 'muted' }, t('Pas encore reliée à un MULTIPASS'), d.faces ? ` · ${d.faces} ${t('visage(s) reconnu(s)')}` : '')));
 
   // Comparaison avec le profil Nostr de la personne : on prend chaque valeur, une par une.
   const compare = () => {

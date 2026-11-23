@@ -53,10 +53,12 @@ async function receive(root, K, me) {
     qr.replaceChildren(h('p', { class: 'pay-ask' }, r.amount_zen ? t('{0} Ẑen demandés', r.amount_zen) : t('Montant au choix de la personne')),
       qrImg(K, r.qr_svg, t('Mon code pour être payé')), h('p', { class: 'pay-who' }, me.email || ''));
   };
-  root.replaceChildren(h('h2', {}, t('Recevoir')),
-    h('section', { class: 'card' }, qr, h('p', { class: 'muted pay-help' }, t('Montrez ce code à la personne qui vous paie : elle le vise avec « Payer » dans son application.')), said),
-    h('section', { class: 'card' }, h('form', { class: 'pay-form', onsubmit: ev => { ev.preventDefault(); draw(); } },
-      h('label', { for: 'pay-amount' }, t('Demander un montant précis (Ẑen)'), amount), h('button', { type: 'submit' }, t('Mettre ce montant')))),
+  // Le code s'affiche tout de suite (montant libre) ; le montant précis se règle juste dessous, sur une ligne, sans changer d'écran.
+  root.replaceChildren(
+    h('section', { class: 'card' }, qr, said,
+      h('form', { class: 'pay-form pay-row', onsubmit: ev => { ev.preventDefault(); draw(); } },
+        h('label', { for: 'pay-amount' }, t('Montant précis (Ẑen)')), amount, h('button', { type: 'submit' }, t('Demander'))),
+      h('p', { class: 'muted pay-help' }, t('Montrez ce code à la personne qui vous paie : elle le vise avec « Payer » dans son application.'))),
     h('p', { class: 'pay-acts' }, h('a', { class: 'ck-btn', href: '#/payer' }, '📷 ', t('Payer quelqu\'un'))));
   await draw();
   // Dire quand l'argent arrive : le solde monte, ou une promesse arrive (réseau Ğ1 coupé).
@@ -82,6 +84,8 @@ async function face(root, K, qs, me, meet) {
   const video = h('video', { 'aria-label': t('Caméra'), muted: true, playsinline: true });
   const cam = h('div', { class: 'pay-cam' }, video, h('div', { class: 'frame' }));
   let stop = null, last = '', off = true, poll = 0, codeTimer = 0;
+  // Choisir la personne sans la filmer (proches) : sous la caméra, ou à sa place quand il n'y en a pas.
+  const pick = h('button', { type: 'button', class: 'ghost', onclick: () => chooseFriend() }, t('Choisir dans mes proches'));
   const halt = () => { off = true; stop?.(); stop = null; };
   const quiet = () => { halt(); clearInterval(poll); clearInterval(codeTimer); };
   K.cleanup(quiet);
@@ -139,12 +143,18 @@ async function face(root, K, qs, me, meet) {
     person(c);
   };
   const scan = async () => {
-    quiet(); last = ''; off = false; cam.classList.remove('hit');
+    quiet(); last = ''; off = false; cam.classList.remove('hit'); pick.hidden = false;
     hint.textContent = t('Visez le code de la personne.');
     panel.replaceChildren(cam, hint);
     try { const s = await watch(video, onText); if (off) s(); else stop = s; } // écran quitté pendant l'autorisation
-    catch (e) { halt(); hint.textContent = e?.name === 'NotAllowedError' ? t('La caméra est refusée : autorisez-la pour ce site dans les réglages du navigateur.') : t('Pas de caméra disponible ici : choisissez la personne dans vos proches.'); }
+    catch (e) {
+      halt(); hint.textContent = e?.name === 'NotAllowedError' ? t('La caméra est refusée : autorisez-la pour ce site dans les réglages du navigateur.') : t('Pas de caméra disponible ici : choisissez la personne dans vos proches.');
+      // Sans caméra, le cadre noir ne sert à rien : le geste possible prend toute la place.
+      panel.replaceChildren(hint, meet ? '' : h('p', { class: 'pay-acts' }, h('button', { type: 'button', class: 'big-btn', onclick: chooseFriend }, '👥 ', t('Choisir dans mes proches'))));
+      if (!meet) pick.hidden = true;
+    }
   };
+  const chooseFriend = async () => { quiet(); (await K.mod('m-credit.js')).default(K, { mode: 'member' }); };
   const find = () => {
     quiet();
     const out = h('ul', { class: 'files pay-found' });
@@ -165,9 +175,8 @@ async function face(root, K, qs, me, meet) {
   };
 
   if (!meet) {
-    root.replaceChildren(h('h2', {}, t('Payer')), panel,
-      h('p', { class: 'pay-acts' },
-        h('button', { type: 'button', class: 'ghost', onclick: async () => { quiet(); (await K.mod('m-credit.js')).default(K, { mode: 'member' }); } }, t('Choisir dans mes proches')),
+    root.replaceChildren(panel,
+      h('p', { class: 'pay-acts' }, pick,
         h('a', { class: 'ck-btn', href: '#/recevoir' }, '📲 ', t('Recevoir'))));
   } else {
     const tabs = [['code', '📲 ', 'Mon code'], ['scan', '📷 ', 'Scanner son code'], ['find', '🔎 ', 'Chercher']];
@@ -191,7 +200,7 @@ async function face(root, K, qs, me, meet) {
         h('button', { type: 'button', onclick: () => api(`/api/v1/me/meet/${x.hex}`, { method: 'POST', body: {} }).then(() => { K.toast(t('Vous êtes proches avec {0}', x.label), 1); ask(); }, e => K.toast(e.message, 0)) }, t('Accepter')), ' ',
         h('button', { type: 'button', class: 'ghost', onclick: () => { later.add(x.hex); ask(); } }, t('Plus tard'))))));
     }, () => {});
-    root.replaceChildren(h('h2', {}, t('Se rencontrer')), h('p', { class: 'muted' }, t('Montrez-vous vos codes, ou cherchez la personne par son nom.')), bar, asks, panel);
+    root.replaceChildren(h('p', { class: 'muted' }, t('Montrez-vous vos codes, ou cherchez la personne par son nom.')), bar, asks, panel);
     K.every(5000, ask); ask();
     const direct = parse(`${location.origin}/#/rencontre?${qs?.toString() || ''}`);
     if (direct && direct.to !== me.hex) return person(direct);

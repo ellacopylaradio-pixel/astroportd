@@ -29,6 +29,9 @@ nav a .ic { font-size: 1.05rem; line-height: 1; }
   nav a .ch-badge { position: absolute; top: .1rem; right: calc(50% - 1.6rem); margin: 0; }
   .segs { padding-inline: .8rem; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .segs a { white-space: nowrap; }
+  .segs.more-r { mask-image: linear-gradient(90deg, #000 calc(100% - 2.5rem), transparent); }
+  .segs.more-l { mask-image: linear-gradient(90deg, transparent, #000 2.5rem); }
+  .segs.more-l.more-r { mask-image: linear-gradient(90deg, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent); }
   .find { padding-inline: .8rem; }
   main { padding-bottom: 6rem; }
   .fab { bottom: calc(4.6rem + env(safe-area-inset-bottom)); }

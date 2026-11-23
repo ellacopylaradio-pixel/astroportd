@@ -451,6 +451,40 @@ async fn suggest_services(view: &mut Value) {
     });
     let found: Vec<Value> = futures_util::future::join_all(probes).await.into_iter().flatten().filter(|s| !taken.iter().any(|t| Some(t.as_str()) == s["name"].as_str() || Some(t.as_str()) == s["target"].as_str())).collect();
     view["suggest"] = json!(found);
+    // Tous les ports TCP qui écoutent ici (hors ceux de la station et ceux déjà offerts) : le Capitaine choisit dans la
+    // liste au lieu de connaître ses ports par cœur.
+    let taken_ports: Vec<u16> = taken.iter().filter_map(|t| t.parse::<std::net::SocketAddr>().ok()).map(|a| a.port()).collect();
+    let listening = tokio::task::spawn_blocking(|| crate::local_ports::list(Path::new("/proc"), std::process::id())).await.unwrap_or_default();
+    view["listening"] = json!(listening.into_iter().filter(|l| !taken_ports.contains(&l.port)).map(|l| {
+        let (name, label) = port_name(l.port, l.program.as_deref());
+        json!({ "port": l.port, "target": l.target, "local_only": l.loopback_only, "program": l.program, "name": name, "label": label })
+    }).collect::<Vec<_>>());
+}
+
+/// Libellés des ports courants qui ne sont pas dans [`SUGGESTIONS`] (affichés tels quels, comme eux).
+const KNOWN_PORTS: [(u16, &str, &str); 9] = [
+    (22, "ssh", "Console (SSH)"),
+    (80, "web", "Site web"),
+    (443, "web-https", "Site web (HTTPS)"),
+    (8080, "web-8080", "Site web"),
+    (5432, "postgresql", "Base de données (PostgreSQL)"),
+    (3306, "mysql", "Base de données (MySQL)"),
+    (11434, "ollama", "IA de discussion (Ollama)"),
+    (8188, "comfyui", "Images par IA (ComfyUI)"),
+    (1883, "mqtt", "Objets connectés (MQTT)"),
+];
+
+/// Nom de service proposé et libellé d'un port : le port connu d'abord, sinon le programme qui écoute, sinon `port-<n>`.
+fn port_name(port: u16, program: Option<&str>) -> (String, Option<&'static str>) {
+    if let Some((n, _, l)) = SUGGESTIONS.iter().find(|s| s.1 == port) {
+        return ((*n).to_owned(), Some(l));
+    }
+    if let Some((_, n, l)) = KNOWN_PORTS.iter().find(|s| s.0 == port) {
+        return ((*n).to_owned(), Some(l));
+    }
+    let clean: String = program.unwrap_or_default().to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '-' }).take(32).collect();
+    let clean = clean.trim_matches('-');
+    (if clean.is_empty() || clean.starts_with('_') { format!("port-{port}") } else { clean.to_owned() }, None)
 }
 
 /// Santé de la file `tasks` : par genre de tâche, combien attendent, tournent, ont réussi ou ont été abandonnées, et les
@@ -582,6 +616,18 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_listening_port_gets_a_valid_service_name() {
+        assert_eq!(port_name(5900, Some("wayvnc")), ("bureau-vnc".to_owned(), Some("Bureau à distance (VNC)")));
+        assert_eq!(port_name(11434, None).0, "ollama");
+        assert_eq!(port_name(7000, Some("Navidrome.bin")).0, "navidrome-bin");
+        assert_eq!(port_name(7001, Some("__")).0, "port-7001", "un nom qui commencerait par _ est refusé ailleurs");
+        assert_eq!(port_name(7002, None).0, "port-7002");
+        for (n, _) in [port_name(1, Some("Ünïcode prog")), port_name(2, Some(&"x".repeat(80)))] {
+            assert!(!n.is_empty() && n.len() <= 32 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'), "{n}");
+        }
+    }
 
     fn map(items: &[(u32, &str)]) -> BTreeMap<u32, String> {
         items.iter().map(|(k, v)| (*k, (*v).to_owned())).collect()

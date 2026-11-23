@@ -1,0 +1,34 @@
+/* Partages (m-services.js) : rangées « quoi · chez qui · action », pensées pour le pouce. */
+.sv-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; position: relative; }
+.sv-head h2 { margin: 0; }
+.sv-head + * { margin-top: .6rem; }
+.sv-sum { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .8rem; }
+.sv-list { list-style: none; padding: 0; margin: .4rem 0; display: grid; gap: .5rem; }
+.sv-row { display: flex; align-items: center; justify-content: space-between; gap: .4rem .8rem; flex-wrap: wrap; min-height: 48px; }
+.sv-list > .sv-row { padding: .35rem .6rem; border: 1px solid var(--line); border-radius: var(--r); }
+.sv-row.on, .sv-card.on { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.sv-main { display: flex; flex-direction: column; min-width: 0; }
+.sv-main small { overflow-wrap: anywhere; }
+.sv-act { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.sv-act select { max-width: 16rem; }
+label.sv-act { flex-wrap: nowrap; }
+.sv-card { padding: .5rem .7rem; border: 1px solid var(--line); border-radius: var(--r); }
+.sv-card > p { margin: .35rem 0; }
+.sv-reach { display: inline-flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.sv-reach code { overflow-wrap: anywhere; }
+.sv-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+.sv-chip > span { min-width: 0; }
+.sv-chip strong { white-space: nowrap; }
+.sv-chip { display: inline-flex; max-width: 100%; align-items: center; gap: .3rem; padding: .1rem .3rem .1rem .7rem; border-radius: 1rem; background: var(--panel2); font-size: .85rem; }
+.sv-sum .sv-chip { padding-right: .7rem; }
+.sv-chip.off { opacity: .6; text-decoration: line-through; }
+.sv-chip.warn { background: color-mix(in srgb, var(--warn) 20%, transparent); }
+.sv-x { min-width: 32px; min-height: 32px; padding: 0; border-radius: 50%; }
+.sv-fold { margin-top: .4rem; }
+.sv-fold > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--accent); }
+.sv-form { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .3rem 0; }
+.sv-form > input { flex: 1 1 10rem; min-width: 0; }
+@media (max-width: 520px) {
+  .sv-act { width: 100%; }
+  .sv-act select, .sv-form > * { flex: 1 1 100%; max-width: none; }
+}

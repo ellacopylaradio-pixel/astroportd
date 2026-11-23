@@ -26,7 +26,6 @@ export default {
 "Vous pouvez arrêter à tout moment ; ce qui a déjà été lu reste dans votre recherche.": "Puede detenerlo en cualquier momento; lo ya leído permanece en su búsqueda.",
 "C’est fait : la lecture de vos documents commence.": "Listo: comienza la lectura de sus documentos.",
 "Tout arrêter": "Detener todo",
-"Retirer {0}": "Quitar {0}",
 "{0} ne lit plus vos documents.": "{0} ya no lee sus documentos.",
 "Vos documents sont lus par ces stations amies, qui se partagent le travail :": "Sus documentos los leen estas estaciones amigas, que se reparten el trabajo:",
 "Vos documents sont lus par cette station amie :": "Sus documentos los lee esta estación amiga:",

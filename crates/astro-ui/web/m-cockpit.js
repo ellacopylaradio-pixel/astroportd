@@ -3,7 +3,7 @@
 // (le détail des stations est dans l'onglet Essaim et pairs).
 // Les règles (`analyze`) sont une fonction pure : tests/cockpit_rules.mjs les rejoue sans navigateur.
 const RANK = { down: 0, degraded: 1, info: 2, ok: 3 };
-const FLOORS = [['machine', '🖥️', 'Machine', '#/machine'], ['station', '📡', 'Station', '#/machine'], ['mesh', '🌐', 'Constellation', '#/planes'], ['services', '🔌', 'Services et accès', '#/options'], ['members', '👥', 'Membres', '#/members'], ['economy', '🪙', 'Économie', '#/coop']];
+const FLOORS = [['machine', '🖥️', 'Machine', '#/machine'], ['station', '📡', 'Station', '#/machine'], ['mesh', '🌐', 'Constellation', '#/planes'], ['services', '🔌', 'Services et accès', '#/services'], ['members', '👥', 'Membres', '#/members'], ['economy', '🪙', 'Économie', '#/coop']];
 const worst = (a, b) => (RANK[a] <= RANK[b] ? a : b);
 
 export function analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al, up }) {
@@ -25,8 +25,8 @@ export function analyze({ health, cs, ec, ac, tun, tk, dash, dns, en, al, up }) 
   if (dns?.failed) add('degraded', 'mesh', `${dns.failed} adresse(s) de la coopérative non enregistrée(s)`, dns.errors?.[0] || '', 'Configurer', '#/coop');
   // Services et accès
   for (const sv of tun?.services || []) {
-    if (sv.up === false && (sv.customized || sv.grants?.length)) add('degraded', 'services', `${sv.name} est réglé mais ne répond pas`, `Rien n'écoute sur ${sv.target || 'cette machine'} : les amis qui l'utilisent n'y arrivent pas.`, 'Régler', '#/options');
-    if (sv.name === 'ssh' && sv.mode === 'swarm') add('degraded', 'services', 'SSH est ouvert à tout le réseau', 'N\'importe quel membre peut tenter d\'entrer sur cette machine. Préférez « Capitaines amis ».', 'Restreindre', '#/options');
+    if (sv.up === false && (sv.customized || sv.grants?.length)) add('degraded', 'services', `${sv.name} est réglé mais ne répond pas`, `Rien n'écoute sur ${sv.target || 'cette machine'} : les amis qui l'utilisent n'y arrivent pas.`, 'Régler', '#/services');
+    if (sv.name === 'ssh' && sv.mode === 'swarm') add('degraded', 'services', 'SSH est ouvert à tout le réseau', 'N\'importe quel membre peut tenter d\'entrer sur cette machine. Préférez « Capitaines amis ».', 'Restreindre', '#/services');
   }
   const failed = (tk?.kinds || []).reduce((n, k) => n + (k.failed || 0), 0);
   if (failed) add('degraded', 'station', `${failed} tâche(s) abandonnée(s)`, 'Une analyse, un envoi ou une sauvegarde n\'a pas abouti : rien n\'est perdu, vous pouvez la relancer.', 'Voir la file', '#/options');
