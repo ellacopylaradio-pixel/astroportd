@@ -205,7 +205,10 @@ pub fn who_answers_at(domain: &str, listen: u16, target: u16) -> Answer {
         let mut s = TcpStream::connect_timeout(&addr, timeout).ok()?;
         s.set_read_timeout(Some(timeout)).ok()?;
         s.set_write_timeout(Some(timeout)).ok()?;
-        write!(s, "GET /.well-known/acme-challenge/astroportd-{token} HTTP/1.1\r\nHost: {domain}\r\nUser-Agent: astroportd\r\nConnection: close\r\n\r\n").ok()?;
+        // D'un seul bloc : écrite en morceaux, un serveur qui répond dès le premier
+        // et ferme laisse des octets non lus, et le RST qui s'ensuit efface sa réponse.
+        let req = format!("GET /.well-known/acme-challenge/astroportd-{token} HTTP/1.1\r\nHost: {domain}\r\nUser-Agent: astroportd\r\nConnection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).ok()?;
         let mut body = Vec::new();
         let _ = s.take(64 * 1024).read_to_end(&mut body);
         Some(String::from_utf8_lossy(&body).into_owned())
@@ -288,8 +291,15 @@ mod tests {
         let proxy_port = proxy.local_addr().unwrap().port();
         let t = std::thread::spawn(move || {
             let (mut c, _) = proxy.accept().unwrap();
+            // Lit toute la requête avant de répondre, comme un vrai serveur.
+            let mut req = Vec::new();
             let mut buf = [0u8; 1024];
-            let _ = c.read(&mut buf);
+            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                match c.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => req.extend_from_slice(&buf[..n]),
+                }
+            }
             let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nServer: openresty\r\nContent-Length: 0\r\n\r\n");
         });
         assert_eq!(who_answers_at("127.0.0.1", free_port(), proxy_port), Answer::Other("openresty".into()));

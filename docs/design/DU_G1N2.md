@@ -266,7 +266,7 @@ Tranché : préfixe `10101` sur `UPLANETNAME` ; date d'ouverture dans la configu
 
 1. **Numéros des nouveaux kinds** (30856 Vœu, 30857 action attestée, 30858 avis) : à confirmer, et à reporter dans
    `nostr-nips/` si on les publie.
-2. **Statut de personne fragile** : demandé par la personne et confirmé par un second résident (proposition § 11.4), ou
+2. **Statut de personne fragile** : demandé par la personne et confirmé par un second résident (proposition § 11.4), je dirai plutot 
    décidé par l'assemblée du lieu ?
 3. **Changement de station du bail** pendant une journée : vérifier par un test qu'aucune double création n'est possible
    (le `d = love:<date>` unique par auteur devrait suffire).
