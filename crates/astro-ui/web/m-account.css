@@ -64,3 +64,13 @@
 .bk-share { word-break: break-all; }
 /* Les copies (m-replication.js) s'affichent dans une carte repliée : pas de carte dans la carte. */
 #bk-copies .card { box-shadow: none; border: 0; background: none; padding: .4rem 0; }
+/* Carte « Intelligence artificielle » (m-ai.js) : deux familles, résultat du test, capacités. */
+.ai-fam { border: 1px solid var(--line); border-radius: var(--r); padding: .6rem .8rem; margin: .7rem 0; min-width: 0; }
+.ai-fam legend { font-weight: 700; padding: 0 .3rem; }
+.ai-fam > p { margin: .3rem 0; }
+.ai-res { margin-top: .4rem; }
+.ai-caps { list-style: none; padding: 0; margin: .4rem 0 0; display: flex; flex-wrap: wrap; gap: .3rem .8rem; }
+.ai-caps li { white-space: nowrap; }
+.ai-caps .ai-no, .ai-caps .ai-unk { color: var(--muted); }
+details .ai-caps { display: block; }
+details .ai-caps li { white-space: normal; padding: .15rem 0; }

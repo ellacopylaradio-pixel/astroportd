@@ -34,6 +34,9 @@ pub struct FetchLimits {
     pub max_redirects: u8,
     /// Autorise les adresses privées et locales. **Tests seulement** : aucune option de ligne de commande n'y mène.
     pub allow_private: bool,
+    /// **Boucle locale seulement** (`127.0.0.0/8`, `::1`) : un service de la station ou l'accès local à celui d'un ami
+    /// (tunnel DRAGON). Toute autre adresse, publique comprise, est refusée. Prime sur `allow_private`.
+    pub loopback_only: bool,
     /// Racines de confiance supplémentaires (autorité privée d'une constellation, tests).
     pub extra_roots: Vec<CertificateDer<'static>>,
 }
@@ -41,7 +44,7 @@ pub struct FetchLimits {
 impl FetchLimits {
     /// Réglages de production pour un fichier de `max_bytes` au plus.
     pub fn new(max_bytes: u64) -> Self {
-        Self { max_bytes, timeout: Duration::from_secs(20), max_redirects: 3, allow_private: false, extra_roots: Vec::new() }
+        Self { max_bytes, timeout: Duration::from_secs(20), max_redirects: 3, allow_private: false, loopback_only: false, extra_roots: Vec::new() }
     }
 }
 
@@ -141,7 +144,12 @@ fn tls_config(extra: &[CertificateDer<'static>]) -> Result<Arc<rustls::ClientCon
     Ok(Arc::new(config))
 }
 
-async fn resolve(host: &str, port: u16, allow_private: bool) -> Result<SocketAddr, FetchError> {
+async fn resolve(host: &str, port: u16, allow_private: bool, loopback_only: bool) -> Result<SocketAddr, FetchError> {
+    if loopback_only {
+        // Ni DNS ni nom quelconque : seuls « localhost » et une adresse de boucle locale écrite en clair.
+        let ip: IpAddr = if host.eq_ignore_ascii_case("localhost") { IpAddr::V4(Ipv4Addr::LOCALHOST) } else { host.trim_matches(['[', ']']).parse().map_err(|_| FetchError::Blocked(format!("{host} : boucle locale seulement")))? };
+        return if ip.is_loopback() { Ok(SocketAddr::new(ip, port)) } else { Err(FetchError::Blocked(format!("{ip} : boucle locale seulement"))) };
+    }
     if let Ok(ip) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
         return if allow_private || is_public(ip) { Ok(SocketAddr::new(ip, port)) } else { Err(FetchError::Blocked(ip.to_string())) };
     }
@@ -204,7 +212,7 @@ async fn fetch_inner(url: &str, limits: &FetchLimits, post: Option<Bytes>, extra
         }
         let host = current.host_str().ok_or_else(|| FetchError::BadUrl("hôte manquant".into()))?.to_owned();
         let port = current.port_or_known_default().ok_or_else(|| FetchError::BadUrl("port inconnu".into()))?;
-        let addr = resolve(&host, port, limits.allow_private).await?;
+        let addr = resolve(&host, port, limits.allow_private, limits.loopback_only).await?;
 
         let connect = async {
             let tcp = TcpStream::connect(addr).await.map_err(|e| FetchError::Connect(e.to_string()))?;

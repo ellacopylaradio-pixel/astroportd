@@ -434,7 +434,11 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
     }
     async fn ai_params(&self, who: &Principal) -> Result<Value, ApiError> {
         let ai = self.ai.as_ref().ok_or_else(|| ApiError::unavailable("paramètres IA non disponibles sur cette station"))?;
-        ai.get(&who.hex).await.map(|p| p.view()).map_err(ai_error)
+        ai.view_for(&who.hex).await.map_err(ai_error)
+    }
+    async fn test_ai(&self, who: &Principal, family: String) -> Result<Value, ApiError> {
+        let ai = self.ai.as_ref().ok_or_else(|| ApiError::unavailable("paramètres IA non disponibles sur cette station"))?;
+        ai.test(&who.hex, who.captain, &family).await.map_err(ai_error)
     }
     async fn set_ai_params(&self, who: &Principal, patch: Value) -> Result<Value, ApiError> {
         let ai = self.ai.as_ref().ok_or_else(|| ApiError::unavailable("paramètres IA non disponibles sur cette station"))?;

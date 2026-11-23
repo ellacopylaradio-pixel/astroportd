@@ -182,6 +182,7 @@ POST /api/v1/invites anon=401 member=400
 POST /api/v1/invites/remote-accept anon=401 member=422
 POST /api/v1/island/pay anon=401 member=501
 POST /api/v1/me/ai anon=401 member=200
+POST /api/v1/me/ai/test anon=401 member=400
 POST /api/v1/me/blog/image anon=401 member=400
 POST /api/v1/me/blog/preview anon=401 member=200
 POST /api/v1/me/blog/publish anon=401 member=400

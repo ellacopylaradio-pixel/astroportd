@@ -78,19 +78,9 @@ export default async function devicesPage(root, K) {
       h('div', { class: 'ac-head' }, h('span', { class: 'muted' }, t('Seulement s’il a fuité.')), tip('À faire seulement si vous pensez qu\'il a fuité : l\'ancien cesse de fonctionner tout de suite, et les clients WebDAV branchés avec lui (ordinateur, DAVx⁵…) devront être reconfigurés. Pour brancher un téléphone, créez plutôt un jeton d\'appareil (carte « Appareils »).')),
       h('p', {}, rotate)), shown);
 
-  // ── Assistants : un Ollama ou une clé d'API déclarés ici font apparaître BRO ──
-  const ai = h('section', { class: 'card', id: 'ai' }, head(t('Intelligence artificielle'), t('BRO n\'apparaît dans le menu que si vous déclarez ici un Ollama ou une clé d\'API. La clé est chiffrée pour vous seul : elle n\'est jamais réaffichée.')));
-  K.api('/api/v1/me/ai').then(p => {
-    const url = h('input', { id: 'ai-url', value: p.ollama_url || '', placeholder: 'http://127.0.0.1:11434', 'aria-label': t('Adresse d\'Ollama'), maxlength: 256, autocomplete: 'off' });
-    const prov = h('select', { id: 'ai-prov', 'aria-label': t('Fournisseur d\'API') }, [['', t('Aucun')], ['anthropic', 'Anthropic (Claude)'], ['gemini', 'Google Gemini']].map(([v, l]) => h('option', { value: v, selected: (p.provider || '') === v }, l)));
-    const key = h('input', { id: 'ai-key', type: 'password', placeholder: p.has_key ? t('Clé enregistrée : laisser vide pour la garder') : t('Clé d\'API'), autocomplete: 'off', 'aria-label': t('Clé d\'API'), maxlength: 256 });
-    const model = h('input', { id: 'ai-model', value: p.model || '', placeholder: t('Modèle (facultatif)'), 'aria-label': t('Modèle'), maxlength: 64, autocomplete: 'off' });
-    const send = async body => { try { await K.api('/api/v1/me/ai', { method: 'POST', body }); K.toast(t('Paramètres IA enregistrés'), 1); location.reload(); } catch (e) { K.toast(e.message); } };
-    ai.append(p.ollama_url || p.provider ? h('p', {}, h('span', { class: 'pill ok' }, t('Branché')), ' ', h('a', { href: '#/bro' }, t('Parler à BRO') + ' →')) : '',
-      h('label', { for: 'ai-url' }, t('Ollama (adresse)')), url, h('label', { for: 'ai-prov' }, t('Ou un fournisseur d\'API')), prov, h('label', { for: 'ai-key' }, t('Clé d\'API')), key, h('label', { for: 'ai-model' }, t('Modèle')), model,
-      h('p', {}, h('button', { onclick: () => send({ ollama_url: url.value.trim() || null, provider: prov.value || null, model: model.value.trim() || null, ...(key.value && { api_key: key.value }) }) }, t('Enregistrer')),
-        p.has_key ? [' ', K.sure(t('Retirer la clé'), () => send({ api_key: null }), t('Retirer la clé d\'API enregistrée ?'))] : ''));
-  }, e => ai.append(h('p', { class: 'err', role: 'alert' }, e.message)));
+  // ── Assistants : l'IA de la station ou d'un fournisseur fait apparaître BRO (carte m-ai.js) ──
+  const ai = h('section', { class: 'card', id: 'ai' });
+  K.mod('m-ai.js').then(m => m.default(ai, K), e => ai.append(h('p', { class: 'err', role: 'alert' }, e.message)));
 
   // ── Lecture de vos documents : sa station lit, ou une station amie que le membre choisit (m-reading.js) ──
   const reading = h('section', { class: 'card', id: 'reading' });
