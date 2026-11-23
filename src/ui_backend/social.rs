@@ -3,6 +3,7 @@
 //! La structure ne porte que les champs que ce domaine utilise ; elle est assemblée par `StationUi::into_router`.
 
 use super::*;
+use rusqlite::OptionalExtension;
 
 /// État du domaine « social ».
 pub struct SocialBackend<B: BlobStore> {
@@ -23,7 +24,14 @@ pub struct SocialBackend<B: BlobStore> {
     pub(super) ice: (Option<u16>, Option<[u8; 32]>, Vec<String>),
     pub(super) presence: Option<Arc<crate::presence::Presence>>,
     pub(super) people: Option<Arc<crate::person_keys::PersonKeys>>,
+    /// « Se rencontrer » : ajout d'un proche (liste de contacts signée, `Invites::follow`).
+    pub(super) invites: Option<Arc<crate::invites::Invites<B>>>,
 }
+
+/// « Se rencontrer » : une demande reçue reste montrée 30 minutes (le temps d'une rencontre), 10 au plus.
+const MEET_WINDOW_SECS: i64 = 1800;
+/// Personnes rendues au plus par une recherche dans la constellation.
+const MEET_FOUND: usize = 20;
 
 impl_auth!(SocialBackend);
 
@@ -168,6 +176,206 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
         let people = self.people.as_ref().ok_or_else(|| ApiError::unavailable("annuaire des UPlanet non disponible sur cette station"))?;
         let email = who.email.as_deref().ok_or_else(|| ApiError::bad_request("ce compte n'a pas d'email : rien à relier"))?;
         people.announce(&who.hex, email).await.map_err(ApiError::bad_request)
+    }
+    async fn meet(&self, who: &Principal, op: MeetOp) -> Result<Value, ApiError> {
+        let invites = self.invites.as_ref().ok_or_else(|| ApiError::unavailable("« Se rencontrer » n'est pas disponible sur cette station"))?;
+        let db = &self.services.db;
+        let fail = |e: astro_db::DbError| {
+            eprintln!("interface : se rencontrer : {e}");
+            ApiError::internal("proches illisibles")
+        };
+        // Où en est l'amitié : je le suis (mon graphe N¹), il me suit (sa liste de contacts).
+        let status = |me: String, to: String| async move {
+            db.readers()
+                .read(move |c| {
+                    let mine = c.query_row("SELECT 1 FROM social_graph WHERE owner_hex = ?1 AND pubkey = ?2 AND level = 1", [&me, &to], |r| r.get::<_, i64>(0)).optional()?.is_some();
+                    let back = c.query_row("SELECT 1 FROM nostr_events e JOIN nostr_tags t ON t.event_id = e.seq WHERE e.kind = 3 AND e.pubkey = ?1 AND t.name = 'p' AND t.value = ?2 LIMIT 1", [&to, &me], |r| r.get::<_, i64>(0)).optional()?.is_some();
+                    Ok((mine, back))
+                })
+                .await
+        };
+        // Rencontre attestée par `me` avec `to` : (how, verified).
+        let met = |me: String, to: String| async move {
+            db.readers()
+                .read(move |c| Ok(c.query_row("SELECT how, verified FROM meetings WHERE owner_hex = ?1 AND target_hex = ?2", [&me, &to], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? == 1))).optional()?))
+                .await
+        };
+        let q = match op {
+            MeetOp::Code => {
+                let now = u64::try_from(now_secs()).unwrap_or(0);
+                let proof = invites.meet_proof(&who.hex, now).ok_or_else(|| ApiError::unavailable("clé du compte introuvable sur cette station"))?;
+                let left = astro_economy::meet::SLOT_SECS - now % astro_economy::meet::SLOT_SECS;
+                return Ok(json!({ "proof": proof, "expires_in": left }));
+            }
+            MeetOp::Add { to, proof } => {
+                let now = u64::try_from(now_secs()).unwrap_or(0);
+                // Un code « rencontre » scanné doit être frais et signé par la personne : sinon on le dit, sans rien ajouter.
+                if let Some(p) = &proof {
+                    if !astro_economy::meet::verify_proof(&to, p, now) {
+                        return Err(ApiError::bad_request("ce code a expiré : demandez à la personne de le remontrer"));
+                    }
+                }
+                invites.follow(&who.hex, &to).await.map_err(|e| {
+                    eprintln!("interface : se rencontrer : {e}");
+                    ApiError::internal("ajout impossible pour l'instant")
+                })?;
+                // Attestation : jamais une nomination par-dessus une rencontre déjà prouvée (la plus récente l'emporte).
+                let how = if proof.is_some() { astro_economy::meet::QR } else { astro_economy::meet::NAMED };
+                let before = met(who.hex.clone(), to.clone()).await.map_err(fail)?;
+                let upgrade = match &before { None => true, Some((_, true)) => false, Some((h, false)) => how == astro_economy::meet::QR || h != how };
+                if upgrade {
+                    invites.attest_meeting(&who.hex, &to, how, proof.as_deref()).await.map_err(|e| {
+                        eprintln!("interface : se rencontrer : {e}");
+                        ApiError::internal("rencontre non enregistrée")
+                    })?;
+                }
+                Ok(to)
+            }
+            MeetOp::Status(to) => Ok(to),
+            MeetOp::List(q) => Err(q),
+        };
+        let q = match q {
+            Ok(to) => {
+                let (mine, back) = status(who.hex.clone(), to.clone()).await.map_err(fail)?;
+                let m = met(who.hex.clone(), to.clone()).await.map_err(fail)?;
+                let theirs = met(to.clone(), who.hex.clone()).await.map_err(fail)?;
+                let side = |m: Option<(String, bool)>| m.map(|(how, verified)| json!({ "how": how, "verified": verified }));
+                // Niveau de proximité (privé) : seulement pour quelqu'un que je suis.
+                let level = if mine {
+                    let (ranks, _) = crate::proximity::load(db, invites.keys().as_ref(), &who.hex).await.unwrap_or_default();
+                    Some(ranks.get(&to).copied().unwrap_or_else(|| crate::proximity::default_level(mine && back)))
+                } else {
+                    None
+                };
+                return Ok(json!({ "hex": to, "label": invites.display_name(&to).await, "i_follow": mine, "follows_me": back, "friends": mine && back,
+                    "met": side(m), "met_back": side(theirs), "level": level }));
+            }
+            Err(q) => q,
+        };
+        // Demandes : qui m'a ajouté récemment, sans que je l'aie ajouté en retour.
+        let (me, since) = (who.hex.clone(), now_secs() - MEET_WINDOW_SECS);
+        let asked: Vec<(String, i64)> = db
+            .readers()
+            .read(move |c| {
+                let mut st = c.prepare("SELECT e.pubkey, MAX(e.created_at) FROM nostr_events e JOIN nostr_tags t ON t.event_id = e.seq WHERE e.kind = 3 AND t.name = 'p' AND t.value = ?1 AND e.pubkey <> ?1 AND e.created_at >= ?2 AND NOT EXISTS (SELECT 1 FROM social_graph g WHERE g.owner_hex = ?1 AND g.pubkey = e.pubkey AND g.level = 1) GROUP BY e.pubkey ORDER BY 2 DESC LIMIT 10")?;
+                let rows = st.query_map(rusqlite::params![me, since], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(fail)?;
+        let mut requests = Vec::new();
+        for (hex, at) in asked {
+            requests.push(json!({ "hex": hex, "label": invites.display_name(&hex).await, "at": at }));
+        }
+        let mut out = json!({ "requests": requests });
+        if let Some(q) = q {
+            // MULTIPASS de la constellation connus ici : nom du profil, sinon début de l'email ; jamais l'email entier.
+            let me = who.hex.clone();
+            let all: Vec<(String, Option<String>, Option<String>, i64)> = db
+                .readers()
+                .read(move |c| {
+                    let mut st = c.prepare("SELECT i.hex, (SELECT json_extract(n.content, '$.name') FROM nostr_events n WHERE n.pubkey = i.hex AND n.kind = 0 ORDER BY n.created_at DESC LIMIT 1), i.email, i.hosted FROM identities i WHERE i.role IN ('multipass', 'captain') AND i.hex <> ?1")?;
+                    let rows = st.query_map([&me], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<Vec<_>, _>>()?;
+                    Ok(rows)
+                })
+                .await
+                .map_err(fail)?;
+            let mut found: Vec<(String, String, bool)> = all
+                .into_iter()
+                .filter_map(|(hex, name, email, hosted)| {
+                    let local = email.as_deref().and_then(|e| e.split('@').next()).unwrap_or_default().to_owned();
+                    let label = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| local.clone());
+                    (!label.is_empty() && (label.to_lowercase().contains(&q) || local.to_lowercase().contains(&q))).then_some((hex, label, hosted == 1))
+                })
+                .collect();
+            found.sort_by_key(|f| f.1.to_lowercase());
+            found.truncate(MEET_FOUND);
+            let mut people = Vec::new();
+            for (hex, label, here) in found {
+                let (mine, back) = status(who.hex.clone(), hex.clone()).await.map_err(fail)?;
+                people.push(json!({ "hex": hex, "label": label, "here": here, "i_follow": mine, "follows_me": back, "friends": mine && back }));
+            }
+            out["people"] = json!(people);
+        }
+        Ok(out)
+    }
+    async fn circles(&self, who: &Principal, set: Option<(String, Option<u8>)>) -> Result<Value, ApiError> {
+        use crate::proximity as px;
+        let invites = self.invites.as_ref().ok_or_else(|| ApiError::unavailable("les cercles ne sont pas disponibles sur cette station"))?;
+        let db = &self.services.db;
+        let fail = |e: String| {
+            eprintln!("interface : cercles : {e}");
+            ApiError::internal("cercles illisibles")
+        };
+        // Ceux que je suis : ami réciproque ou non, rencontre vérifiée ou non.
+        let me = who.hex.clone();
+        let rows: Vec<(String, bool, bool)> = db
+            .readers()
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT g.pubkey, EXISTS (SELECT 1 FROM nostr_events e JOIN nostr_tags t ON t.event_id = e.seq WHERE e.kind = 3 AND e.pubkey = g.pubkey AND t.name = 'p' AND t.value = ?1), \
+                     COALESCE((SELECT verified FROM meetings m WHERE m.owner_hex = ?1 AND m.target_hex = g.pubkey), 0) \
+                     FROM social_graph g WHERE g.owner_hex = ?1 AND g.level = 1 AND g.pubkey <> ?1 LIMIT 2000",
+                )?;
+                let r = st.query_map([&me], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1, r.get::<_, i64>(2)? == 1)))?.collect::<Result<Vec<_>, _>>()?;
+                Ok(r)
+            })
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        let (mut ranks, at) = px::load(db, invites.keys().as_ref(), &who.hex).await.map_err(fail)?;
+        if let Some((to, level)) = set {
+            let Some((_, friends, _)) = rows.iter().find(|r| r.0 == to) else {
+                return Err(ApiError::bad_request("ajoutez d'abord cette personne à vos proches"));
+            };
+            px::set(&mut ranks, &to, level, *friends).map_err(ApiError::bad_request)?;
+            let now = u64::try_from(now_secs()).unwrap_or(0);
+            let e = px::event(invites.keys().as_ref(), &who.hex, &ranks, now, at).map_err(fail)?;
+            invites.store_and_publish(e, "cercles").await.map_err(fail)?;
+        }
+        let mut people = Vec::with_capacity(rows.len());
+        for (hex, friends, met) in rows {
+            let ranked = ranks.get(&hex).copied();
+            let level = ranked.unwrap_or_else(|| px::default_level(friends));
+            people.push(json!({ "hex": hex, "label": invites.display_name(&hex).await, "level": level, "ranked": ranked.is_some(), "friends": friends, "met_verified": met }));
+        }
+        people.sort_by(|a, b| b["level"].as_u64().cmp(&a["level"].as_u64()).then_with(|| a["label"].as_str().map(str::to_lowercase).cmp(&b["label"].as_str().map(str::to_lowercase))));
+        Ok(json!({ "levels": px::LEVELS.iter().map(|(l, n)| json!({ "level": l, "name": n })).collect::<Vec<_>>(), "people": people }))
+    }
+    async fn wot(&self, who: &Principal) -> Result<Value, ApiError> {
+        use astro_economy::wot::{Cert, Params, Wot};
+        let invites = self.invites.as_ref().ok_or_else(|| ApiError::unavailable("la toile de confiance n'est pas disponible sur cette station"))?;
+        let fail = |e: String| {
+            eprintln!("interface : toile de confiance : {e}");
+            ApiError::internal("toile de confiance illisible")
+        };
+        // Rencontres prouvées seulement (revérifiées par cette station) ; racines : les Capitaines de la constellation.
+        let (certs, roots): (Vec<Cert>, std::collections::BTreeSet<String>) = self
+            .services
+            .db
+            .readers()
+            .read(|c| {
+                let mut st = c.prepare("SELECT owner_hex, target_hex, at FROM meetings WHERE verified = 1 LIMIT 200000")?;
+                let certs = st.query_map([], |r| Ok(Cert { from: r.get(0)?, to: r.get(1)?, at: u64::try_from(r.get::<_, i64>(2)?).unwrap_or(0) }))?.collect::<Result<Vec<_>, _>>()?;
+                let mut st = c.prepare("SELECT hex FROM identities WHERE role = 'captain'")?;
+                let roots = st.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+                Ok((certs, roots))
+            })
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        let now = u64::try_from(now_secs()).unwrap_or(0);
+        let me = who.hex.clone();
+        let (s, by, web) = tokio::task::spawn_blocking(move || {
+            let w = Wot::compute(&certs, &roots, now, Params::G1);
+            (w.standing(&me), w.certifiers(&me), (w.members.len(), w.referees.len(), roots.len()))
+        })
+        .await
+        .map_err(|e| fail(e.to_string()))?;
+        let mut names = Vec::new();
+        for hex in by.iter().take(20) {
+            names.push(invites.display_name(hex).await);
+        }
+        Ok(json!({ "member": s.member, "root": s.root, "certs": s.certs, "needed": s.needed, "reached_pct": s.reached_permille / 10, "mutual": s.mutual,
+                   "certifiers": names, "web": { "members": web.0, "referees": web.1, "roots": web.2 } }))
     }
     async fn presence(&self, who: &Principal, body: Option<Value>) -> Result<Value, ApiError> {
         let p = self.presence.as_ref().ok_or_else(|| ApiError::unavailable("la présence visio n'est pas disponible sur cette station"))?;

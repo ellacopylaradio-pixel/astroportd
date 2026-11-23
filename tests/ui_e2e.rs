@@ -2071,3 +2071,134 @@ async fn moving_in_completes_dates_places_and_descriptions_without_overwriting()
     let big = json!({ "items": vec![json!({ "path": "/x.jpg" }); 501] });
     assert_eq!(b.post("/api/v1/ucloud/import-meta", &alice, big).await.0, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn meeting_needs_both_gestures_and_never_exposes_an_email() {
+    let b = bench("meet", None).await;
+    let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
+    let (ha, hb) = (hex(&ALICE), hex(&BOB));
+    // Chercher dans la constellation : le nom, jamais l'email entier.
+    let (s, v) = b.get("/api/v1/me/meet?q=BO", &alice).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let found = v["people"].as_array().unwrap();
+    assert!(found.iter().any(|p| p["hex"] == hb.as_str() && p["label"] == "bob" && p["friends"] == false), "{v}");
+    assert!(!v.to_string().contains("@example.org"), "aucun email dans la recherche : {v}");
+    assert!(found.iter().all(|p| p["hex"] != ha.as_str()), "on ne se trouve pas soi-même");
+    // Alice ajoute Bob : une demande, pas encore une amitié.
+    let (s, v) = b.post_empty(&format!("/api/v1/me/meet/{hb}"), &alice).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["i_follow"].as_bool(), v["follows_me"].as_bool(), v["friends"].as_bool()), (Some(true), Some(false), Some(false)), "{v}");
+    // Bob voit la demande sur son téléphone, et l'accepte d'un geste.
+    let (_, v) = b.get("/api/v1/me/meet", &bob).await;
+    assert!(v["requests"].as_array().unwrap().iter().any(|r| r["hex"] == ha.as_str() && r["label"] == "alice"), "{v}");
+    let (_, v) = b.post_empty(&format!("/api/v1/me/meet/{ha}"), &bob).await;
+    assert_eq!(v["friends"], true, "{v}");
+    let (_, v) = b.get(&format!("/api/v1/me/meet/{hb}"), &alice).await;
+    assert_eq!(v["friends"], true, "Alice le voit aussi : {v}");
+    let (_, v) = b.get("/api/v1/me/meet", &bob).await;
+    assert_eq!(v["requests"].as_array().unwrap().len(), 0, "demande acceptée, plus montrée : {v}");
+    // Rejouer l'ajout ne change rien (pas de doublon dans la liste de contacts).
+    assert_eq!(b.post_empty(&format!("/api/v1/me/meet/{hb}"), &alice).await.1["friends"], true);
+    // Entrées hostiles.
+    assert_eq!(b.post_empty(&format!("/api/v1/me/meet/{ha}"), &alice).await.0, StatusCode::BAD_REQUEST, "soi-même");
+    assert_eq!(b.post_empty("/api/v1/me/meet/abc", &alice).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(b.get("/api/v1/me/meet?q=a", &alice).await.0, StatusCode::BAD_REQUEST, "recherche trop courte");
+    assert_eq!(b.get(&format!("/api/v1/me/meet?q={}", "x".repeat(65)), &alice).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&b.app, Method::POST, &format!("/api/v1/me/meet/{hb}"), None, &[], Vec::new()).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_scanned_meeting_code_is_proven_while_a_pick_from_the_list_is_only_named() {
+    let b = bench("meet-proof", None).await;
+    let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
+    let (ha, hb) = (hex(&ALICE), hex(&BOB));
+    // Bob montre son code « rencontre » : adresse, QR et preuve fraîche signée par sa clé.
+    let (s, code) = b.get("/api/v1/me/meet/code", &bob).await;
+    assert_eq!(s, StatusCode::OK, "{code}");
+    let url = code["url"].as_str().unwrap();
+    assert!(url.starts_with(&format!("https://station.test/#/rencontre?to={hb}&m=")) && code["qr_svg"].as_str().unwrap().contains("<svg"), "{url}");
+    let proof = url.split("&m=").nth(1).unwrap();
+    // Une preuve d'autrui (le code d'Alice présenté comme celui de Bob) est refusée, et rien n'est ajouté.
+    let (_, other) = b.get("/api/v1/me/meet/code", &alice).await;
+    let forged = other["url"].as_str().unwrap().split("&m=").nth(1).unwrap().to_owned();
+    assert_eq!(b.post(&format!("/api/v1/me/meet/{hb}"), &alice, json!({ "proof": forged })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(b.get(&format!("/api/v1/me/meet/{hb}"), &alice).await.1["i_follow"], false);
+    // Alice scanne le vrai code : rencontre prouvée.
+    let (s, v) = b.post(&format!("/api/v1/me/meet/{hb}"), &alice, json!({ "proof": proof })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["met"], json!({ "how": "qr", "verified": true }), "{v}");
+    // Bob, lui, choisit Alice dans la liste : simple nomination, jamais vérifiée.
+    let (_, v) = b.post_empty(&format!("/api/v1/me/meet/{ha}"), &bob).await;
+    assert_eq!((v["friends"].as_bool(), v["met"].clone(), v["met_back"].clone()), (Some(true), json!({ "how": "named", "verified": false }), json!({ "how": "qr", "verified": true })), "{v}");
+    // Rajouter Bob par la liste ne dégrade pas la rencontre prouvée d'Alice.
+    assert_eq!(b.post_empty(&format!("/api/v1/me/meet/{hb}"), &alice).await.1["met"], json!({ "how": "qr", "verified": true }));
+    // La projection est rejouable : l'attestation signée suffit à retrouver « vérifiée ».
+    let rows: Vec<(String, i64)> = b.db.readers().read(|c| { let mut st = c.prepare("SELECT how, verified FROM meetings ORDER BY how")?; let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?; Ok(r) }).await.unwrap();
+    assert_eq!(rows, vec![("named".to_owned(), 0), ("qr".to_owned(), 1)]);
+    assert_eq!(b.post(&format!("/api/v1/me/meet/{hb}"), &alice, json!({ "proof": "x".repeat(161) })).await.0, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn proximity_levels_are_private_encrypted_and_default_to_friend_or_contact() {
+    let b = bench("circles", None).await;
+    let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
+    let (ha, hb) = (hex(&ALICE), hex(&BOB));
+    // Avant d'être proches : rien à ranger, et ranger un inconnu est refusé.
+    assert_eq!(b.get("/api/v1/me/circles", &alice).await.1["people"].as_array().unwrap().len(), 0);
+    assert_eq!(b.post("/api/v1/me/circles", &alice, json!({ "hex": hb, "level": 5 })).await.0, StatusCode::BAD_REQUEST);
+    b.post_empty(&format!("/api/v1/me/meet/{hb}"), &alice).await;
+    let (_, v) = b.get("/api/v1/me/circles", &alice).await;
+    assert_eq!((v["people"][0]["level"].as_u64(), v["people"][0]["ranked"].as_bool()), (Some(1), Some(false)), "suivi sans retour : Contact par défaut ; {v}");
+    b.post_empty(&format!("/api/v1/me/meet/{ha}"), &bob).await;
+    assert_eq!(b.get("/api/v1/me/circles", &alice).await.1["people"][0]["level"], 3, "ami réciproque : Ami par défaut");
+    // Alice range Bob en Famille : la fiche et la liste le disent, Bob n'en sait rien.
+    let (s, v) = b.post("/api/v1/me/circles", &alice, json!({ "hex": hb, "level": 5 })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["people"][0]["level"].as_u64(), v["people"][0]["ranked"].as_bool(), v["levels"][0]["name"].as_str()), (Some(5), Some(true), Some("Famille")));
+    assert_eq!(b.get(&format!("/api/v1/me/meet/{hb}"), &alice).await.1["level"], 5);
+    assert_eq!(b.get(&format!("/api/v1/me/meet/{ha}"), &bob).await.1["level"], 3, "Bob ne voit que son propre classement");
+    // Un seul événement privé, chiffré : ni la clé de Bob ni le niveau n'y paraissent en clair.
+    let (content, tags): (String, String) = b.db.readers().read(|c| Ok(c.query_row("SELECT content, tags FROM nostr_events WHERE kind = 30078", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).await.unwrap();
+    assert!(!content.contains(&hb) && !tags.contains(&hb) && tags.contains("uplanet/proximity"), "{tags}");
+    // Retour au défaut, et entrées hostiles.
+    assert_eq!(b.post("/api/v1/me/circles", &alice, json!({ "hex": hb, "level": null })).await.1["people"][0]["ranked"], false);
+    for bad in [json!({ "hex": hb, "level": 6 }), json!({ "hex": hb, "level": 0 }), json!({ "hex": "abc", "level": 3 }), json!({ "hex": ha, "level": 3 })] {
+        assert_eq!(b.post("/api/v1/me/circles", &alice, bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// Toile de confiance N² : seules les rencontres prouvées certifient ; les Capitaines sont les racines ; il en faut 5.
+#[tokio::test]
+async fn the_web_of_trust_counts_only_proven_meetings_from_members_and_needs_five() {
+    let b = bench("wot", None).await;
+    let alice = basic("alice@example.org", &ALICE);
+    let ha = hex(&ALICE);
+    let captains: Vec<String> = (1..=6u8).map(|i| format!("{:02x}", 0xc0 + i).repeat(32)).collect();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    for c in &captains {
+        b.db.writer().execute("INSERT INTO identities(hex, role) VALUES (?1, 'captain')", vec![c.clone().into()]).await.unwrap();
+        for d in captains.iter().filter(|d| *d != c) {
+            b.db.writer().execute("INSERT INTO meetings(owner_hex, target_hex, how, verified, at, src_event) VALUES (?1, ?2, 'qr', 1, ?3, 'x')", vec![c.clone().into(), d.clone().into(), now.into()]).await.unwrap();
+        }
+    }
+    let meet = |from: &str, how: &str, ok: i64| {
+        let (f, h, t) = (from.to_owned(), how.to_owned(), ha.clone());
+        let db = b.db.clone();
+        async move { db.writer().execute("INSERT OR REPLACE INTO meetings(owner_hex, target_hex, how, verified, at, src_event) VALUES (?1, ?2, ?3, ?4, ?5, 'x')", vec![f.into(), t.into(), h.into(), ok.into(), now.into()]).await.unwrap() }
+    };
+    // Quatre Capitaines ont scanné le code d'Alice, un cinquième l'a seulement choisie dans une liste.
+    for c in &captains[..4] {
+        meet(c, "qr", 1).await;
+    }
+    meet(&captains[4], "named", 0).await;
+    let (s, v) = b.get("/api/v1/me/wot", &alice).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let roots = v["web"]["roots"].as_u64().unwrap(); // les 6 + le Capitaine de la station de test
+    assert_eq!((v["member"].as_bool(), v["certs"].as_u64(), v["needed"].as_u64(), v["web"]["members"].as_u64(), roots), (Some(false), Some(4), Some(5), Some(7), 7), "{v}");
+    // Le cinquième la rencontre vraiment : elle entre dans la toile.
+    meet(&captains[4], "qr", 1).await;
+    let v = b.get("/api/v1/me/wot", &alice).await.1;
+    assert_eq!((v["member"].as_bool(), v["certs"].as_u64(), v["reached_pct"].as_u64(), v["web"]["members"].as_u64()), (Some(true), Some(5), Some(100), Some(roots + 1)), "{v}");
+    assert_eq!(v["certifiers"].as_array().map(Vec::len), Some(5));
+    assert!(!v.to_string().contains('@'), "jamais d'email : {v}");
+}

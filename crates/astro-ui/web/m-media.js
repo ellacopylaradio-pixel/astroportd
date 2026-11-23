@@ -33,10 +33,11 @@ function player(K) {
     h('button', { class: 'ghost', 'aria-label': t('Suivant'), onclick: () => P.go(P.at + 1) }, '⏭'), audio,
     h('button', { class: 'ghost', 'aria-label': t('Fermer le lecteur'), onclick: () => { audio.pause(); audio.removeAttribute('src'); bar.hidden = true; document.body.classList.remove('mm-on'); } }, '✕'));
   document.body.append(bar);
-  P = { queue: [], at: 0, audio, async go(i) {
+  P = { queue: [], at: 0, seq: 0, audio, async go(i) {
     if (i < 0 || i >= P.queue.length) return;
     P.at = i;
-    const it = P.queue[i], [u] = await playUrls(K, [it.path]);
+    const my = ++P.seq, it = P.queue[i], [u] = await playUrls(K, [it.path]);
+    if (my !== P.seq) return; // « suivant » pressé entre-temps : seule la dernière demande joue
     if (!u) return K.toast(t('Ce fichier ne se lit pas'), 0);
     bar.hidden = false; document.body.classList.add('mm-on');
     label.replaceChildren(h('b', {}, it.title), h('small', { class: 'muted' }, it.music?.artist || ''));

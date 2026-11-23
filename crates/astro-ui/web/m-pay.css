@@ -1,0 +1,33 @@
+/* Payer et recevoir par QR (m-pay.js). Le QR reste noir sur blanc dans tous les thèmes : sinon il ne se lit pas. */
+.pay-qr { display: grid; justify-items: center; gap: .5rem; text-align: center; }
+.pay-qr img { width: min(78vw, 20rem); height: auto; aspect-ratio: 1; background: #fff; padding: .6rem; border-radius: .8rem; box-shadow: 0 1px 6px rgba(0, 0, 0, .18); }
+.pay-ask { font-size: 1.5rem; font-weight: 600; margin: 0; }
+.pay-who { margin: 0; overflow-wrap: anywhere; }
+.pay-help, .pay-hint { text-align: center; }
+.pay-got:empty { display: none; }
+.pay-got { font-size: 1.2rem; text-align: center; font-weight: 600; }
+.pay-form { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; }
+.pay-form label { flex: 1 1 12rem; display: grid; gap: .3rem; }
+.pay-form button { min-height: 48px; }
+.pay-cam { position: relative; max-width: 26rem; margin: 0 auto; aspect-ratio: 3 / 4; border-radius: .8rem; overflow: hidden; background: #000; }
+.pay-cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pay-cam .frame { position: absolute; inset: 20% 12%; border: 3px solid rgba(255, 255, 255, .9); border-radius: 1rem; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .35); }
+.pay-cam.hit .frame { border-color: #4be38a; }
+.pay-acts { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: center; }
+.pay-acts > * { min-height: 48px; }
+.big-btn { font-size: 1.1rem; padding-inline: 1.4rem; }
+/* Se rencontrer : trois vues au pouce, la fiche d'une personne, les résultats de recherche. */
+.pay-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem; }
+.pay-tabs button { min-height: 48px; padding-inline: .3rem; }
+.pay-tabs button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.pay-name { font-size: 1.5rem; margin: 0 0 .3rem; overflow-wrap: anywhere; text-align: center; }
+.pay-found { padding: 0; }
+.pay-pick { width: 100%; min-height: 48px; text-align: left; }
+#meet-q { width: 100%; min-height: 48px; }
+/* Cercle de la personne (fiche) et écran Mes cercles (m-circles.js charge aussi cette feuille). */
+.pay-level { text-align: center; }
+.pay-level select, .ci-list select { min-height: 44px; }
+.ci-list { padding: 0; }
+.ci-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .4rem .8rem; }
+.ci-who { overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: no-preference) { .pay-cam .frame { transition: border-color .15s; } }

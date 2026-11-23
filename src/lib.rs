@@ -89,6 +89,8 @@ pub mod systemd_unit;
 pub mod presence;
 pub mod geo_lease;
 pub mod intrusion_guard;
+pub mod island;
+pub mod proximity;
 pub mod member_primo;
 pub mod primal_init;
 pub mod settlement;

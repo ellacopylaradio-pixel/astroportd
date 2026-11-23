@@ -175,7 +175,8 @@ export default function files(root, toolbox, ctx) {
   const mvSel = h('button', { class: 'ghost', disabled: true, onclick: () => chooser(sel()) }, t('Déplacer…'));
   const delSel = K.sure(t('Supprimer'), async () => { await delAll(sel()); }, t('Définitif : la suppression ne peut pas être annulée.'));
   const delBtn = delSel.querySelector('button'); delBtn.disabled = true;
-  const sync = () => { const s = sel(), ok = s.length && !s.some(locked); mvSel.disabled = delBtn.disabled = !ok; };
+  // Changer la sélection désarme « Supprimer » : on ne supprime que ce qui était coché au moment de confirmer.
+  const sync = () => { const s = sel(), ok = s.length && !s.some(locked); mvSel.disabled = delBtn.disabled = !ok; if (delBtn.dataset.armed) delBtn._disarm(); };
   root.addEventListener('change', sync);
   if (open) {
     const add = h('button', { 'aria-expanded': 'false', onclick: () => { menu.hidden = !menu.hidden; add.setAttribute('aria-expanded', String(!menu.hidden)); } }, '＋ ' + t('Ajouter'));

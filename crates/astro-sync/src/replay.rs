@@ -209,9 +209,9 @@ mod tests {
     async fn a_rent_that_arrives_before_the_payer_s_did_is_caught_up() {
         let (dir, db) = db("rent");
         db.writer().batch(vec![Projector::mark_hosted(&hex(&NODE), "node"), Projector::mark_hosted(&hex(&ALICE), "multipass")]).await.unwrap();
-        // Virement de Bob (clé du même membre, inconnue ici) vers le NODE : rien à constater tant que son DID n'est pas là.
+        // Virement N² de Bob (clé du même membre) vers le NODE : signé par le payeur seul, ce n'est jamais un loyer.
         let transfer = ev(&BOB, 30_852, 5, vec![tag("d", "1"), tag("p", &hex(&NODE)), tag("amount", "12.5"), tag("prev", "genesis"), tag("t", "g1-n2")], "");
-        ingest_event(db.writer(), transfer.clone(), "t").await.unwrap();
+        ingest_event(db.writer(), transfer, "t").await.unwrap();
         // Preuve de loyer 30851 du NODE pour l'email d'Alice, avant que la station connaisse cet email.
         let proof = ev(&NODE, 30_851, 6, vec![tag("d", "w1"), tag("type", "rent"), tag("s", "OK"), tag("email", "alice@example.org"), tag("amount", "3")], "");
         ingest_event(db.writer(), proof.clone(), "t").await.unwrap();
@@ -222,9 +222,7 @@ mod tests {
         let did = |s: &[u8; 32], ts| ev(s, 30_800, ts, vec![tag("d", "did"), tag("email", "alice@example.org")], "{}");
         ingest_event(db.writer(), did(&ALICE, 7), "t").await.unwrap();
         ingest_event(db.writer(), did(&BOB, 8), "t").await.unwrap();
-        let mut want = vec![(transfer.id, 1250), (proof.id, 300)];
-        want.sort();
-        assert_eq!(rents(db.clone()).await, want, "les deux loyers sont rattrapés, montants en centimes");
+        assert_eq!(rents(db.clone()).await, vec![(proof.id, 300)], "le loyer attesté est rattrapé (centimes) ; le virement N² ne compte pas");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

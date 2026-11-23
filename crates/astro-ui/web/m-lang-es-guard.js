@@ -30,4 +30,7 @@ export default {
 "Une partie de vos fichiers n'a plus de marge : votre station la remet à l'abri chez un autre gardien dès qu'il a de la place.": "Una parte de tus archivos ya no tiene margen: tu estación la vuelve a poner a salvo con otro guardián en cuanto tenga espacio.",
 "Réparation en cours : un gardien ne répondait plus, votre station refait sa part chez un autre.": "Reparación en curso: un guardián ya no respondía, tu estación rehace su parte con otro.",
 "Rangement en cours : votre station regroupe vos fichiers pour prendre moins de place chez vos amis.": "Orden en curso: tu estación reagrupa tus archivos para ocupar menos espacio en casa de tus amigos.",
+"{0} (même station)": "{0} (misma estación)",
+"En tête : vos proches sur un autre Astroport, du cercle le plus proche au plus lointain (Mes cercles).": "Primero: tus allegados en otro Astroport, del círculo más cercano al más lejano (Mis círculos).",
+"Vos proches sont tous sur cette station : un gardien doit surtout être sur un autre Astroport, pour survivre à une panne de la vôtre.": "Todos tus allegados están en esta estación: un guardián debe estar sobre todo en otro Astroport, para sobrevivir a una avería de la tuya.",
 };

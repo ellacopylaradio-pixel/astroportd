@@ -1,0 +1,26 @@
+'use strict';
+// Dictionnaire en, écran m-circles.js.
+export default {
+"Cercle de {0}": "{0}'s circle",
+"rencontré en personne": "met in person",
+"pas encore réciproque": "not mutual yet",
+"Personne pour l'instant.": "Nobody yet.",
+"Rangez vos proches du plus proche au plus lointain. C'est privé : personne, pas même eux, ne sait où vous les avez rangés.": "Arrange your close ones from closest to most distant. It is private: nobody, not even them, knows where you placed them.",
+"Vous ne suivez encore personne.": "You don't follow anyone yet.",
+"Famille": "Family",
+"Ami": "Friend",
+"Connaissance": "Acquaintance",
+"Ceux sur qui vous comptez en toutes circonstances.": "Those you can count on, whatever happens.",
+"Vos intimes.": "Your intimates.",
+"Vos amis : tout ami réciproque commence ici.": "Your friends: every mutual friend starts here.",
+"Des personnes que vous connaissez un peu.": "People you know a little.",
+"Vous les suivez, sans plus.": "You follow them, nothing more.",
+"Toile de confiance": "Web of trust",
+"Capitaine : vous en êtes membre d'office ; vos rencontres y font entrer les autres.": "Captain: you are a member by right; your meetings bring the others in.",
+"Vous êtes dans la toile : {0} rencontres prouvées avec des membres.": "You are in the web: {0} proven meetings with members.",
+"Rencontres prouvées avec des membres : {0} sur {1}.": "Proven meetings with members: {0} of {1}.",
+"Montrez votre code « Se rencontrer » à des membres : chaque code scanné face à face compte.": "Show your “Meet” code to members: every code scanned face to face counts.",
+"C'est assez, mais dans un même coin de la toile : rencontrez des membres d'autres groupes.": "That is enough, but all in one corner of the web: meet members of other groups.",
+"Vous y tiennent : {0}.": "Holding you in: {0}.",
+"La toile compte {0} membres. Elle préparera un dividende universel entre nous ; il n'est pas encore actif.": "The web has {0} members. It will prepare a universal dividend between us; it is not active yet.",
+};

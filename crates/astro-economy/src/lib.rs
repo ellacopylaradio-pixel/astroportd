@@ -1,6 +1,7 @@
 //! Moteur comptable coopératif : registre Ğ1-N², règle des 3×1/3, Love Ledger.
 //!
 //! - [`ledger`] : validation intégrale du kind 30852 (signatures, chaînage `prev`, anti-double dépense, pas de découvert) ;
+//! - [`island`] : ISLAND-1 « Ğ1 en différé » : promesses de Ğ1 plafonnées au dernier solde connu plus les DU, réglées au retour de la chaîne ;
 //! - [`split`] : ventilation d'un surplus en `IMPOT` / prime du Capitaine / `CASH` / `RnD` / `ASSETS` ;
 //! - [`love`] : clôture hebdomadaire et bascule en *Bénévolat Actif* quand la trésorerie ne couvre plus les charges ;
 //! - [`store`] : traduction en requêtes SQL (garde d'idempotence `done`, `love_ledger`, `journal`).
@@ -9,6 +10,9 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod island;
+pub mod meet;
+pub mod wot;
 pub mod ledger;
 pub mod love;
 pub mod split;

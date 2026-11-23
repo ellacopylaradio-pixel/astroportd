@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire en, phrases communes. Les écrans de `parts` ont aussi m-lang-en-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account agents beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write';
+export const parts = 'account agents beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles';
 export default {
 "{0} message(s) non lu(s)": "{0} unread message(s)",
 "trouvée par ce qu’elle montre": "found by what it shows",
@@ -544,4 +544,19 @@ export default {
 "Brouillon": "Draft",
 "Public": "Public",
 "Coffre": "Vault",
+"Payer": "Pay",
+"Recevoir": "Receive",
+"Se rencontrer": "Meet",
+"Mes cercles": "My circles",
+"Ğ1 en différé": "Deferred Ğ1",
+"Île": "Island",
+"Île Ğ1": "Ğ1 island",
+"Réseau Ğ1 coupé : vos envois deviennent des promesses, réglées en Ğ1 dès son retour.": "Ğ1 network down: what you send becomes a promise, settled in Ğ1 as soon as it is back.",
+"Promesse de {0} Ẑen faite à {1} : réglée en Ğ1 au retour du réseau": "Promise of {0} Ẑen made to {1}: settled in Ğ1 when the network is back",
+"Promis, réglé au retour du réseau": "Promised, settled when the network is back",
+"Vous pourrez encore promettre": "You will still be able to promise",
+"Réseau Ğ1 coupé : ceci est une promesse. Votre station la réglera en Ğ1 depuis votre portefeuille dès le retour du réseau ; gardez-y de quoi la payer.": "Ğ1 network down: this is a promise. Your station will settle it in Ğ1 from your wallet as soon as the network is back; keep enough in it to pay.",
+"{0} promesse(s) en attente de règlement en Ğ1.": "{0} promise(s) waiting to be settled in Ğ1.",
+"Vous pouvez encore promettre {0} Ẑen.": "You can still promise {0} Ẑen.",
+"Voir mes promesses": "See my promises",
 };

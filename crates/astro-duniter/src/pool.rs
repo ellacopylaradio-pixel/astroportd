@@ -213,6 +213,10 @@ impl<K: Connector> Chain for RpcPool<K> {
     fn existential_deposit(&self) -> Amount {
         Amount(self.ed.load(Ordering::Relaxed))
     }
+
+    async fn ud_status(&self, who: &Account) -> Result<crate::UdStatus, ChainError> {
+        self.read(|c| async move { c.ud_status(who).await }).await
+    }
 }
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ mod signer;
 
 pub use account::{Account, AccountError};
 pub use astro_core::{Amount, AmountError};
-pub use chain::{Balance, Chain, ChainError, SubxtChain, TransferEvent, TransferMode, TxOutcome};
+pub use chain::{Balance, Chain, ChainError, SubxtChain, TransferEvent, TransferMode, TxOutcome, UdStatus};
 pub use offline::{ChainInfo, sign_transfer_offline};
 pub use notify::{FundsNotifier, IncomingFunds};
 pub use pool::{Connector, PoolConfig, RpcPool, SubxtConnector};

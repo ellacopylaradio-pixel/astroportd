@@ -68,6 +68,11 @@ pub mod kind {
     pub const ZEN_ISSUANCE: u32 = 30851;
     /// Ledger Ğ1-N².
     pub const LEDGER_N2: u32 = 30852;
+    /// Ouverture de crédit d'une île (ISLAND-1, « Ğ1 en différé »), signée par le NODE. 30853 est retiré (ancienne attestation de build).
+    pub const ISLAND_CREDIT: u32 = 30854;
+    /// Attestation de rencontre (« Se rencontrer ») : QR scanné avec preuve de présence, ou liaison par nomination
+    /// (`astro_economy::meet`) ; remplaçable par `d` = clé de la personne rencontrée.
+    pub const MEETING: u32 = 30855;
     /// Paramètres applicatifs utilisateur (un `d` par usage).
     pub const APP_PARAMS: u32 = 31903;
 }

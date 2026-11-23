@@ -36,14 +36,17 @@ pub struct Projector;
 
 impl Projector {
     /// Kinds projetés.
-    pub const KINDS: [u32; 6] = [kind::CONTACTS, kind::DID, kind::ECONOMIC_HEALTH, kind::ZEN_ISSUANCE, kind::LEDGER_N2, kind::APP_PARAMS];
+    pub const KINDS: [u32; 8] = [kind::CONTACTS, kind::DID, kind::ECONOMIC_HEALTH, kind::ZEN_ISSUANCE, kind::LEDGER_N2, kind::ISLAND_CREDIT, kind::MEETING, kind::APP_PARAMS];
 
     /// Requêtes à exécuter dans la transaction d'insertion de `e`. Vide si le kind n'est pas projeté.
     pub fn plan(e: &Event) -> Result<Vec<Statement>, ProjectError> {
         match e.kind {
             kind::CONTACTS => Ok(contacts(e, true)),
             kind::DID => did(e),
+            kind::LEDGER_N2 if astro_economy::island::is_promise(e) => island_promise(e),
             kind::LEDGER_N2 => ledger(e),
+            kind::ISLAND_CREDIT => island_credit(e),
+            kind::MEETING => meeting(e),
             kind::ECONOMIC_HEALTH => Ok(economic_health(e)),
             kind::ZEN_ISSUANCE => zen_issuance(e),
             kind::APP_PARAMS => Ok(app_params(e)),
@@ -95,6 +98,9 @@ impl Projector {
         [
             "DELETE FROM ledger_n2",
             "DELETE FROM rent_payments",
+            "DELETE FROM island_credits",
+            "DELETE FROM island_promises",
+            "DELETE FROM meetings",
             "DELETE FROM capital_assets",
             "DELETE FROM kv WHERE scope = 'lifecycle'",
             "DELETE FROM identities WHERE hosted = 0",
@@ -324,8 +330,9 @@ fn hex_to_npub(hex_pubkey: &str) -> Option<String> {
     bech32::encode::<bech32::Bech32>(bech32::Hrp::parse("npub").ok()?, &bytes).ok()
 }
 
-/// Kind 30852 : transaction du registre Ğ1-N². Contrôles structurels ; solde, gel et autorités de `mint`
-/// relèvent de la politique du relai.
+/// Kind 30852 : transaction du registre Ğ1-N². Contrôles structurels seulement : le solde, le gel sur fork et les autorités
+/// de `mint` ne sont PAS encore vérifiés (ni ici ni dans le relai ; `astro_economy::ledger::Ledger` existe mais n'est pas
+/// branché). Tant que ce n'est pas fait, la table `ledger_n2` est une trace, jamais une preuve de paiement.
 fn ledger(e: &Event) -> Result<Vec<Statement>, ProjectError> {
     let one = |name: &'static str| -> Result<&str, ProjectError> {
         let mut it = tags_named(e, name);
@@ -349,27 +356,57 @@ fn ledger(e: &Event) -> Result<Vec<Statement>, ProjectError> {
         return Err(ProjectError::BadLedger("tag t=g1-n2 absent"));
     }
     let is_mint = tags_named(e, "t").any(|t| t == "mint");
-    let mut out = vec![Statement::new(
+    // Un virement N² n'est jamais un loyer constaté : signé par le payeur seul, sans contrôle de solde ni de chaîne,
+    // il permettrait à un membre de se déclarer « à jour » sans rien payer. Le loyer vient du 30851 attesté par la station.
+    Ok(vec![Statement::new(
         "INSERT OR IGNORE INTO ledger_n2(event_id, author, dest, amount, prev, d, is_mint, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         vec![text(&e.id), text(&e.pubkey), text(dest), text(amount), text(prev), text(d), Value::Integer(i64::from(is_mint)), int(e.created_at)],
-    )];
-    if !is_mint {
-        out.push(rent_from_transfer(e, dest, amount));
-    }
-    Ok(out)
+    )])
 }
 
-/// Un virement du MULTIPASS (ou de sa clé LOVE, rattachée par l'email) vers un NODE ou le Capitaine hébergés ici
-/// est un **loyer constaté**. Dépendance à l'état exprimée en SQL : le résultat ne dépend pas de l'ordre d'arrivée.
-fn rent_from_transfer(e: &Event, dest: &str, amount: &str) -> Statement {
-    Statement::new(
-        "INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind) \
-         SELECT ?1, m.hex, ?3, ?4, 30852 FROM identities p \
-         JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email)) \
-         WHERE p.hex = ?2 AND p.role IN ('multipass', 'love') \
-           AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = ?5 AND d.hosted = 1 AND d.role IN ('node', 'captain'))",
-        vec![text(&e.id), text(&e.pubkey), int(e.created_at), Value::Integer(cents(amount)), text(dest)],
-    )
+/// Kind 30854 : ouverture de crédit d'une île (ISLAND-1), vérifiée (signature, île ouverte par son auteur). Le plus récent
+/// instantané d'un membre l'emporte, quel que soit l'ordre d'arrivée.
+fn island_credit(e: &Event) -> Result<Vec<Statement>, ProjectError> {
+    let o = astro_economy::island::Opening::from_event(e).ok_or(ProjectError::BadLedger("ouverture d'île invalide"))?;
+    let c = o.credit;
+    let n = |v: u64| Value::Integer(i64::try_from(v).unwrap_or(i64::MAX));
+    Ok(vec![Statement::new(
+        "INSERT OR REPLACE INTO island_credits(island, member_hex, node_hex, g1, opening, ud, ud_period, ud_until, at, src_event) \
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 \
+         WHERE NOT EXISTS (SELECT 1 FROM island_credits WHERE island = ?1 AND member_hex = ?2 AND (at > ?9 OR (at = ?9 AND src_event > ?10)))",
+        vec![text(&o.island), text(&o.member), text(&o.node), text(&o.g1), n(c.opening.0), n(c.ud.0), n(c.ud_period), n(c.ud_until), n(c.from), text(&e.id)],
+    )])
+}
+
+/// Kind 30855 : rencontre attestée ; la preuve de présence est revérifiée ici (fonction pure), la plus récente l'emporte
+/// (événement remplaçable : c'est aussi la seule qu'un replay retrouve).
+fn meeting(e: &Event) -> Result<Vec<Statement>, ProjectError> {
+    let m = astro_economy::meet::Meeting::from_event(e).ok_or(ProjectError::MissingTag("p"))?;
+    Ok(vec![Statement::new(
+        "INSERT OR REPLACE INTO meetings(owner_hex, target_hex, how, verified, at, src_event) SELECT ?1, ?2, ?3, ?4, ?5, ?6 \
+         WHERE NOT EXISTS (SELECT 1 FROM meetings WHERE owner_hex = ?1 AND target_hex = ?2 AND (at > ?5 OR (at = ?5 AND src_event > ?6)))",
+        vec![text(&m.owner), text(&m.target), text(m.how), Value::Integer(i64::from(m.verified)), int(m.at), text(&e.id)],
+    )])
+}
+
+/// Kind 30852 `t=island` : promesse d'île, rangée « en attente » ; sa validité dépend de toute la chaîne du payeur et
+/// est recalculée par `island::revalidate` (station), jamais ici.
+fn island_promise(e: &Event) -> Result<Vec<Statement>, ProjectError> {
+    let tx = astro_economy::Tx::from_event(e).map_err(|_| ProjectError::BadLedger("promesse d'île mal formée"))?;
+    let island = astro_economy::island::island_of(e).ok_or(ProjectError::MissingTag("island"))?;
+    let g1 = e.tag_value("g1").ok_or(ProjectError::MissingTag("g1"))?;
+    let mut out = vec![Statement::new(
+        "INSERT OR IGNORE INTO island_promises(event_id, island, author, dest, dest_g1, amount, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        vec![text(&e.id), text(island), text(&e.pubkey), text(&tx.dest), text(g1), Value::Integer(i64::try_from(tx.amount.0).unwrap_or(i64::MAX)), int(e.created_at)],
+    )];
+    // La promesse embarque l'ouverture de crédit de son payeur, signée par son NODE : une station coupée de celle-ci (la panne
+    // en touche souvent plusieurs) la vérifie seule. Elle n'est prise que si elle vise bien ce payeur et cette île.
+    if let Ok(opening) = serde_json::from_str::<Event>(&e.content) {
+        if astro_economy::island::Opening::from_event(&opening).is_some_and(|o| o.member == e.pubkey && o.island == island) {
+            out.extend(island_credit(&opening)?);
+        }
+    }
+    Ok(out)
 }
 
 /// `12.34` → 1234 centimes ; toute valeur illisible vaut 0 (le loyer est constaté, le montant reste indicatif).

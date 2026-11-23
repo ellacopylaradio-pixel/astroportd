@@ -30,4 +30,7 @@ export default {
 "Une partie de vos fichiers n'a plus de marge : votre station la remet à l'abri chez un autre gardien dès qu'il a de la place.": "Part of your files has no margin left: your station puts it back in safety with another guardian as soon as one has room.",
 "Réparation en cours : un gardien ne répondait plus, votre station refait sa part chez un autre.": "Repair under way: a guardian stopped answering, your station is redoing his share with another one.",
 "Rangement en cours : votre station regroupe vos fichiers pour prendre moins de place chez vos amis.": "Tidying under way: your station is regrouping your files to take less room at your friends'.",
+"{0} (même station)": "{0} (same station)",
+"En tête : vos proches sur un autre Astroport, du cercle le plus proche au plus lointain (Mes cercles).": "First: your close ones on another Astroport, from the closest circle to the furthest (My circles).",
+"Vos proches sont tous sur cette station : un gardien doit surtout être sur un autre Astroport, pour survivre à une panne de la vôtre.": "All your close ones are on this station: a guardian should above all be on another Astroport, to survive a breakdown of yours.",
 };

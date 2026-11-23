@@ -3,6 +3,7 @@
 // au porteur. Les parts du billet ne sont gardées qu'en mémoire, jamais écrites ni journalisées, et envoyées une seule fois.
 import { classify, amount as money, shortAddr, verdict } from '/ui/scan-rules.js';
 import { t, locale, localize } from '/ui/scan-i18n.js';
+import { makeReader, watch } from '/ui/scan-cam.js';
 const amount = c => money(c, locale);
 
 const $ = s => document.querySelector(s);
@@ -29,53 +30,22 @@ function show(id) {
 }
 const hint = t => { $('#hint').textContent = t || ''; };
 
-// ── Caméra : BarcodeDetector quand il existe, sinon jsQR (chargé seulement alors) ───────────────────────────────
-let jsqrLoading = null;
-const loadJsqr = () => window.jsQR ? Promise.resolve() : (jsqrLoading ||= new Promise((ok, ko) => { const s = el('script', { src: '/ui/jsqr.min.js' }); s.onload = ok; s.onerror = () => ko(new Error('lecteur QR indisponible')); document.head.append(s); }));
-async function makeReader() {
-  if ('BarcodeDetector' in window) {
-    try {
-      if (!BarcodeDetector.getSupportedFormats || (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) {
-        const d = new BarcodeDetector({ formats: ['qr_code'] });
-        return async src => (await d.detect(src))[0]?.rawValue || null;
-      }
-    } catch { /* repli sur jsQR */ }
-  }
-  await loadJsqr();
-  const canvas = el('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
-  return async src => {
-    const w = src.videoWidth || src.width, h = src.videoHeight || src.height;
-    if (!w || !h) return null;
-    const k = Math.min(1, 720 / Math.max(w, h)); canvas.width = Math.round(w * k); canvas.height = Math.round(h * k);
-    ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
-    const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    return window.jsQR(d.data, d.width, d.height, { inversionAttempts: 'attemptBoth' })?.data || null;
-  };
-}
+// ── Caméra : lecteur partagé (scan-cam.js) ───────────────────────────────────────────────────────────────────────
 async function startCamera() {
   if (st.cam) return;
-  if (!navigator.mediaDevices?.getUserMedia) return hint(t('noCam'));
+  st.cam = 1; // une seule caméra, même si l'on clique deux fois pendant l'autorisation
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio: false });
-    const video = $('#video'); video.srcObject = stream; await video.play();
-    const read = await makeReader();
-    st.cam = { stream, timer: 0 };
+    st.cam = await watch($('#video'), onText);
     $('#cam').hidden = false; $('#cam-on').hidden = true;
-    const loop = async () => {
-      if (!st.cam) return;
-      try { const text = await read(video); if (text) onText(text); } catch { /* image sans QR : on continue */ }
-      if (st.cam) st.cam.timer = setTimeout(loop, 160);
-    };
-    loop();
   } catch (e) {
     st.cam = null;
-    hint(e && e.name === 'NotAllowedError' ? t('camDenied') : t('camFail'));
+    hint(e && e.name === 'NotAllowedError' ? t('camDenied') : navigator.mediaDevices?.getUserMedia ? t('camFail') : t('noCam'));
   }
 }
 function stopCamera() {
-  if (!st.cam) return;
-  clearTimeout(st.cam.timer); st.cam.stream.getTracks().forEach(t => t.stop()); st.cam = null;
-  $('#video').srcObject = null; $('#cam').hidden = true; $('#cam-on').hidden = st.mode === 'dest';
+  if (typeof st.cam !== 'function') return;
+  st.cam(); st.cam = null;
+  $('#cam').hidden = true; $('#cam-on').hidden = st.mode === 'dest';
 }
 function flash() { const c = $('#cam'); c.classList.add('hit'); setTimeout(() => c.classList.remove('hit'), 350); navigator.vibrate?.(40); }
 

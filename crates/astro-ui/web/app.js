@@ -268,12 +268,15 @@ tr(document.body); new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEa
 }
 // Écrans lourds chargés à la demande (hors budget de la coque) : ils reçoivent la boîte à outils ci-dessous.
 // Confirmation sans boîte bloquante : un premier clic arme le bouton (et dit ce qui va se passer), le second exécute ; il se désarme seul après 5 s.
+// `b._disarm()` : l'écran désarme le bouton quand ce qu'il confirmerait change (ex. la sélection de fichiers).
 const sure = (label, run, why, attrs) => {
-  const note = h('small', { class: 'muted', role: 'status' }), b = h('button', { class: 'ghost', ...attrs, onclick: ev => {
-    if (b.dataset.armed) { delete b.dataset.armed; note.textContent = ''; return run(ev); }
+  let timer = 0;
+  const note = h('small', { class: 'muted', role: 'status' }), disarm = () => { clearTimeout(timer); delete b.dataset.armed; b.textContent = label; note.textContent = ''; }, b = h('button', { class: 'ghost', ...attrs, onclick: ev => {
+    if (b.dataset.armed) { disarm(); return run(ev); }
     b.dataset.armed = 1; b.textContent = t('Confirmer ?'); note.textContent = ' ' + (why || '');
-    setTimeout(() => { delete b.dataset.armed; b.textContent = label; note.textContent = ''; }, 5000);
+    timer = setTimeout(disarm, 5000);
   } }, label);
+  b._disarm = disarm;
   return h('span', {}, b, note);
 };
 const K = { req, auth: authHeader, sure, mod, t, lang, setLang, login: (u, p) => store.set('basic', btoa(`${u}:${p}`)), h, api, toast, when, bytes, span, pill, table, open, blob: blobUrl, tiles, every, enc, del, picker, mark, photos, dav: v => { if (v) dav = v; }, davRoot: () => dav, cleanup: f => cleanups.push(f), planeHref: (n, hash) => planeHref && planeHref(n, hash), listen: f => { listeners.add(f); cleanups.push(() => listeners.delete(f)); }, chatUnread: n => badge(n), feed, listeners };

@@ -28,6 +28,10 @@ pub trait CoopApi: Auth {
     fn set_hosting_defaults(&self, _who: &Principal, _quota_bytes: Option<u64>, _weekly_zen: Option<u64>) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("hébergement non réglable sur cette station")) }
     }
+    /// Île « Ğ1 en différé » : `me` et `pay` pour le membre, `status`, `open`, `close` pour le Capitaine.
+    fn island(&self, _who: &Principal, _op: &'static str, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("île (Ğ1 en différé) non activée sur cette station")) }
+    }
     /// Configuration coopérative de la constellation (Capitaine) : sections, valeurs en clair, secrets masqués.
     fn coop_config(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("configuration coopérative non disponible sur cette station")) }
@@ -108,6 +112,12 @@ pub(super) fn routes<B: CoopApi>() -> Router<Arc<UiState<B>>> {
         .route("/UPLANET/HEX", get(uplanet_hex::<B>))
         .route("/UPLANET/G1HEX", get(uplanet_g1hex::<B>))
         .route("/api/v1/station/coop", get(coop_get::<B>).post(coop_set::<B>))
+        .route("/api/v1/island", get(island_me::<B>))
+        .route("/api/v1/island/pay", post(island_pay::<B>))
+        .route("/api/v1/station/island", get(island_status::<B>))
+        .route("/api/v1/station/island/open", post(island_open::<B>))
+        .route("/api/v1/station/island/close", post(island_close::<B>))
+        .route("/api/v1/station/island/auto", post(island_auto::<B>))
 .route("/api/v1/station/alerts", get(alerts_get::<B>))
 .route("/api/v1/station/alerts/{id}/done", post(alert_done::<B>))
 .route("/api/v1/station/alerts/{id}/delete", post(alert_delete::<B>))
@@ -129,6 +139,7 @@ pub(super) fn routes<B: CoopApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/me/zen/recipients", post(member_zen_recipients::<B>))
         .route("/api/v1/me/zen/preview", post(member_zen_preview::<B>))
         .route("/api/v1/me/zen/send", post(member_zen_send::<B>))
+        .route("/api/v1/me/zen/receive", get(member_zen_receive::<B>))
         .route("/api/v1/station/oc/donations", get(oc_donations::<B>))
         .route("/api/v1/station/oc/peek", get(oc_peek::<B>))
         .route("/api/v1/station/oc/sync", post(oc_sync::<B>))
@@ -137,6 +148,33 @@ pub(super) fn routes<B: CoopApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/station/fuel", get(fuel::<B>))
         .route("/api/v1/station/accounts/{hex}/hosting", post(account_hosting::<B>))
         .route("/api/v1/station/hosting", get(hosting_defaults::<B>).post(set_hosting_defaults::<B>))
+}
+
+/// Île « Ğ1 en différé » du membre : crédit disponible, promesses envoyées et reçues.
+async fn island_me<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    no_store(reply(st.backend.island(&p, "me", Value::Null).await))
+}
+
+/// Promesse de Ğ1 pendant une coupure : `{ to, g1, amount }`.
+async fn island_pay<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<Value>) -> Response {
+    no_store(reply(st.backend.island(&p, "pay", body).await))
+}
+
+async fn island_status<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    reply(st.backend.island(&p, "status", Value::Null).await)
+}
+
+async fn island_open<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    reply(st.backend.island(&p, "open", Value::Null).await)
+}
+
+async fn island_close<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    reply(st.backend.island(&p, "close", Value::Null).await)
+}
+
+/// Ouverture automatique de l'île : `{ minutes: 1..1440 | null }` (null : seulement à la main).
+async fn island_auto<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain, Json(body): Json<Value>) -> Response {
+    reply(st.backend.island(&p, "auto", body).await)
 }
 
 async fn constellation<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
@@ -293,6 +331,29 @@ async fn zen_credit_send<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Captain(
 
 async fn member_zen_recipients<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
     no_store(reply(st.backend.zen_credit(&p, "member_recipients", Value::Null).await))
+}
+
+/// Montant demandé dans un QR « Recevoir » : 1 à 1 000 000 Ẑen entiers, ou rien (le payeur choisit).
+#[derive(Deserialize)]
+struct ReceiveQuery {
+    amount: Option<u32>,
+}
+
+/// « Recevoir » : l'adresse `<station>/#/payer?to=<clé>[&a=<Ẑen>]` du membre et son QR. Le payeur la scanne depuis son
+/// application (seules la clé et le montant comptent, quelle que soit sa station) ; l'appareil photo d'un téléphone l'ouvre
+/// sur cette station. Aucun nom dans le QR : le payeur voit celui que SA station connaît, jamais un nom choisi par le QR.
+async fn member_zen_receive<B: CoopApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap, Authed(p): Authed, Query(q): Query<ReceiveQuery>) -> Response {
+    let amount = match q.amount {
+        None | Some(0) => None,
+        Some(a @ 1..=1_000_000) => Some(a),
+        Some(_) => return reply(Err(ApiError::bad_request("montant de 1 à 1 000 000 Ẑen"))),
+    };
+    let mut url = format!("{}/#/payer?to={}", origin_of(&st, &headers).trim_end_matches('/'), p.hex);
+    if let Some(a) = amount {
+        url.push_str(&format!("&a={a}"));
+    }
+    let Some(svg) = crate::qr::svg(&url) else { return reply(Err(ApiError::unavailable("QR impossible pour cette adresse"))) };
+    private(Json(json!({ "url": url, "qr_svg": svg, "hex": p.hex, "amount_zen": amount })).into_response())
 }
 
 async fn member_zen_preview<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<Value>) -> Response {

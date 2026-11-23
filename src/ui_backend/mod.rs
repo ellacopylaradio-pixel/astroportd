@@ -8,7 +8,7 @@ use astro_bro::{AnyEmbedder, MemoryStore, Meta, OllamaClient, Slot};
 use astro_core::Amount;
 use astro_dav::{BlobStore, DavState};
 use astro_p2p::routing::haversine_km;
-use astro_ui::api::{Applicant, AssignTarget, BookOp, ChatOp, ReadingOp};
+use astro_ui::api::{Applicant, AssignTarget, BookOp, ChatOp, MeetOp, ReadingOp};
 use astro_ui::api::{AccountApi, Auth, CoopApi, FacesApi, OnboardApi, SocialApi, StationApi, UcloudApi};
 use astro_ui::{ApiError, Principal, Status, Subsystem};
 use axum::http::{HeaderMap, Uri};
@@ -90,6 +90,7 @@ pub struct StationUi<B: BlobStore> {
     billet: Option<BilletFn>,
     /// Versement de Ẑen par le Capitaine (même forme d'appel que les billets).
     zen_credit: Option<BilletFn>,
+    island: Option<IslandFn>,
     site: Option<Arc<crate::public_site::Site<B>>>,
     admin: Option<AdminFn>,
     account: Option<Arc<crate::account::AccountService>>,
@@ -141,6 +142,9 @@ pub type ConstellationFn = Arc<dyn Fn(String, Option<(u64, usize)>) -> std::pin:
 
 /// Acceptation de la charte : `(Capitaine, empreinte)` ; rend `{ version, sha256, at }`.
 pub type CharterFn = Arc<dyn Fn(String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
+
+/// Île « Ğ1 en différé » : `(opération, clé du compte, corps)` → réponse (voir [`crate::island::Island::handle`]).
+pub type IslandFn = Arc<dyn Fn(&'static str, String, Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, crate::island::IslandFail>> + Send>> + Send + Sync>;
 
 /// Ğ1Billet : `(adresse du client, opération, corps)`.
 pub type BilletFn = Arc<dyn Fn(Option<std::net::IpAddr>, &'static str, Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, crate::billet::BilletError>> + Send>> + Send + Sync>;
@@ -212,7 +216,7 @@ pub type SendFn = Arc<dyn Fn(String, Vec<String>, Vec<String>) -> std::pin::Pin<
 impl<B: BlobStore> StationUi<B> {
     /// Assemble l'interface.
     pub fn new(services: Arc<StationServices>, dav: Arc<DavState<B>>, memory: Option<Arc<BroMemory>>, ollama: Option<Arc<OllamaClient>>, faces_enabled: bool) -> Self {
-        Self { services, dav, memory, ollama, faces_enabled, thumbs_fn: None, pending_fn: None, friends_fn: None, backup: None, media_friends: None, replicate_fn: None, send_fn: None, coop: None, constellation: None, charter: None, billet: None, zen_credit: None, site: None, admin: None, account: None, contacts: None, invites: None, welcome: None, agents: None, cosurf: None, pull: None, organize: None, board: astro_facecloud::board::BoardCache::new(), registrar: None, stations: None, feedback: None, oc: None, setup: None, conf_path: None, planes_home: None, unit_exe: None, ai: None, reading: None, seer: None, book: None, chat: None, people: None, ice: (None, None, Vec::new()), presence: None }
+        Self { services, dav, memory, ollama, faces_enabled, thumbs_fn: None, pending_fn: None, friends_fn: None, backup: None, media_friends: None, replicate_fn: None, send_fn: None, coop: None, constellation: None, charter: None, billet: None, zen_credit: None, island: None, site: None, admin: None, account: None, contacts: None, invites: None, welcome: None, agents: None, cosurf: None, pull: None, organize: None, board: astro_facecloud::board::BoardCache::new(), registrar: None, stations: None, feedback: None, oc: None, setup: None, conf_path: None, planes_home: None, unit_exe: None, ai: None, reading: None, seer: None, book: None, chat: None, people: None, ice: (None, None, Vec::new()), presence: None }
     }
 
     /// Annuaire des clés d'une même personne dans plusieurs UPlanet.
@@ -352,6 +356,12 @@ impl<B: BlobStore> StationUi<B> {
         self
     }
 
+    /// Active l'île « Ğ1 en différé » (promesses pendant une coupure de Duniter, règlement au retour).
+    pub fn with_island(mut self, f: IslandFn) -> Self {
+        self.island = Some(f);
+        self
+    }
+
     /// Active la vérification et l'encaissement des Ğ1Billets (page publique `/scan`).
     pub fn with_billet(mut self, f: BilletFn) -> Self {
         self.billet = Some(f);
@@ -445,8 +455,8 @@ impl<B: BlobStore> StationUi<B> {
         astro_ui::api::Routes::new(activity, public_origin)
             .ucloud(Arc::new(UcloudBackend { services: self.services.clone(), dav: self.dav.clone(), friends_fn: self.friends_fn.clone(), backup: self.backup.clone(), media_friends: self.media_friends.clone(), replicate_fn: self.replicate_fn.clone(), site: self.site.clone(), pull: self.pull.clone(), organize: self.organize.clone(), send_fn: self.send_fn.clone(), seer: self.seer.clone() }))
             .faces(Arc::new(FacesBackend { services: self.services.clone(), dav: self.dav.clone(), faces_enabled: self.faces_enabled, thumbs_fn: self.thumbs_fn.clone(), pending_fn: self.pending_fn.clone(), contacts: self.contacts.clone(), board: self.board, book: self.book.clone() }))
-            .coop(Arc::new(CoopBackend { services: self.services.clone(), dav: self.dav.clone(), coop: self.coop.clone(), constellation: self.constellation.clone(), charter: self.charter.clone(), billet: self.billet.clone(), zen_credit: self.zen_credit.clone(), stations: self.stations.clone(), oc: self.oc.clone() }))
-            .social(Arc::new(SocialBackend { services: self.services.clone(), dav: self.dav.clone(), memory: self.memory.clone(), contacts: self.contacts.clone(), agents: self.agents.clone(), cosurf: self.cosurf.clone(), ai: self.ai.clone(), reading: self.reading.clone(), book: self.book.clone(), chat: self.chat.clone(), ice: self.ice.clone(), presence: self.presence.clone(), people: self.people.clone() }))
+            .coop(Arc::new(CoopBackend { services: self.services.clone(), dav: self.dav.clone(), coop: self.coop.clone(), constellation: self.constellation.clone(), charter: self.charter.clone(), billet: self.billet.clone(), zen_credit: self.zen_credit.clone(), island: self.island.clone(), stations: self.stations.clone(), oc: self.oc.clone() }))
+            .social(Arc::new(SocialBackend { services: self.services.clone(), dav: self.dav.clone(), memory: self.memory.clone(), contacts: self.contacts.clone(), agents: self.agents.clone(), cosurf: self.cosurf.clone(), ai: self.ai.clone(), reading: self.reading.clone(), book: self.book.clone(), chat: self.chat.clone(), ice: self.ice.clone(), presence: self.presence.clone(), people: self.people.clone(), invites: self.invites.clone() }))
             .account(Arc::new(AccountBackend { services: self.services.clone(), dav: self.dav.clone(), billet: self.billet.clone(), site: self.site.clone(), account: self.account.clone(), registrar: self.registrar.clone(), feedback: self.feedback.clone(), ai: self.ai.clone() }))
             .onboarding(Arc::new(OnboardBackend { services: self.services.clone(), dav: self.dav.clone(), backup: self.backup.clone(), invites: self.invites.clone(), welcome: self.welcome.clone(), registrar: self.registrar.clone(), stations: self.stations.clone(), setup: self.setup.clone() }))
             .station(Arc::new(StationBackend { services: self.services.clone(), dav: self.dav.clone(), ollama: self.ollama.clone(), faces_enabled: self.faces_enabled, admin: self.admin.clone(), conf_path: self.conf_path.clone(), probe: Mutex::new(None), planes_home: self.planes_home.clone(), unit_exe: self.unit_exe.clone(), ice: self.ice.clone() }))

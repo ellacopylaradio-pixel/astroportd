@@ -49,6 +49,19 @@ impl Balance {
     }
 }
 
+/// Ce que la chaîne verse en dividende universel à un compte (pour promettre des DU à venir sans la chaîne).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UdStatus {
+    /// Le compte porte une identité **membre** de la toile de confiance : il reçoit le DU.
+    pub member: bool,
+    /// DU en vigueur (centimes de Ğ1), le même pour tous les membres.
+    pub ud: Amount,
+    /// Période de création du DU, en secondes.
+    pub period_secs: u64,
+    /// Secondes d'adhésion restantes à l'instant de la lecture (`None` : pas membre ou inconnu).
+    pub membership_left_secs: Option<u64>,
+}
+
 /// Politique de virement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferMode {
@@ -97,6 +110,12 @@ pub trait Chain: Send + Sync + 'static {
 
     /// Dépôt existentiel.
     fn existential_deposit(&self) -> Amount;
+
+    /// Dividende universel du compte : membre ou non, DU en vigueur, période, adhésion restante. Par défaut : non pris
+    /// en charge (une île ne promet alors aucun DU, seulement le solde connu).
+    fn ud_status(&self, _who: &Account) -> impl Future<Output = Result<UdStatus, ChainError>> + Send {
+        async { Err(ChainError::Invalid("dividende universel : non pris en charge par ce client".into())) }
+    }
 }
 
 /// Implémentation sur un nœud RPC (`wss://…` ou `ws://…`).
@@ -175,6 +194,24 @@ impl Chain for SubxtChain {
 
     fn existential_deposit(&self) -> Amount {
         self.existential_deposit
+    }
+
+    async fn ud_status(&self, who: &Account) -> Result<UdStatus, ChainError> {
+        use astro_g1_runtime::runtime::runtime_types::pallet_identity::types::IdtyStatus;
+        let storage = self.client.storage().at_latest().await.map_err(connection)?;
+        let ud = storage.fetch(&runtime::storage().universal_dividend().current_ud()).await.map_err(connection)?.unwrap_or(0);
+        let period_ms = self.client.constants().at(&runtime::constants().universal_dividend().ud_creation_period()).map_err(connection)?;
+        let none = UdStatus { member: false, ud: Amount(ud), period_secs: period_ms / 1000, membership_left_secs: None };
+        let Some(idx) = storage.fetch(&runtime::storage().identity().identity_index_of(who.account_id())).await.map_err(connection)? else { return Ok(none) };
+        let member = storage.fetch(&runtime::storage().identity().identities(idx)).await.map_err(connection)?.is_some_and(|v| matches!(v.status, IdtyStatus::Member));
+        if !member {
+            return Ok(none);
+        }
+        let expire_on = storage.fetch(&runtime::storage().membership().membership(idx)).await.map_err(connection)?.map(|m| m.expire_on);
+        let number = storage.fetch(&runtime::storage().system().number()).await.map_err(connection)?.unwrap_or(0);
+        let block_ms = self.client.constants().at(&runtime::constants().babe().expected_block_time()).map_err(connection)?;
+        let left = expire_on.map(|e| u64::from(e.saturating_sub(number)).saturating_mul(block_ms) / 1000);
+        Ok(UdStatus { member: true, membership_left_secs: left, ..none })
     }
 }
 

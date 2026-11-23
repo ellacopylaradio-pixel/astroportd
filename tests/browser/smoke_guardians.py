@@ -18,7 +18,9 @@ def check(cond, msg):
     print(('OK   ' if cond else 'FAIL ') + msg)
     if not cond: failures.append(msg)
 
-FRIENDS = [dict(hex='aa' * 32, label='Léa'), dict(hex='bb' * 32, label='Paul'), dict(hex='cc' * 32, label='Marie')]
+# Rangés par la station, le conseillé d'abord : un autre Astroport, puis le cercle le plus proche, puis rencontré en personne.
+FRIENDS = [dict(hex='aa' * 32, label='Léa', same_station=False, level=5, met_verified=True), dict(hex='bb' * 32, label='Paul', same_station=False, level=3, met_verified=False),
+           dict(hex='cc' * 32, label='Marie', same_station=True, level=5, met_verified=False)]
 def backup(guardians, safety=None, restore=None):
     return dict(mine=None, friends=FRIENDS, hosting=[], rescue_friends=len(guardians), guardians=guardians, safety=safety or dict(permille=None, next_permille=None, files_permille=None), restore=restore)
 G = lambda label, same=False, files=True, p=None: dict(label=label, same_station=same, files=files, availability=p)
@@ -42,6 +44,14 @@ with sync_playwright() as pw:
         check(page.locator('#ac-guard p.err[role=alert]').count() == 1, f'{tag} : alerte rouge annoncée')
         check('une part seule' in txt.lower() and page.locator('#gd-friend option').count() == 3, f'{tag} : la phrase sur la carte + un gardien, et le choix d’un proche')
         noscroll('aucun gardien'); page.screenshot(path=str(OUT / f'guardians-0-{tag}.png'), full_page=True)
+        opts = page.locator('#gd-friend option').all_inner_texts()
+        check(opts[0] == '🏠 Léa ✓' and opts[2] == '🏠 Marie (même station)' and page.locator('#gd-friend').input_value() == 'aa' * 32, f'{tag} : le gardien conseillé en tête et choisi d’avance, la même station signalée')
+        check('En tête : vos proches sur un autre Astroport' in txt, f'{tag} : la règle du conseil est dite')
+        # Tous les proches sur cette station : le dire, et proposer de rencontrer quelqu'un d'ailleurs.
+        STATE['backup'] = dict(backup([G('Bob', same=True)]), friends=[FRIENDS[2]])
+        page.reload(); page.wait_for_selector('#ac-guard')
+        check('doit surtout être sur un autre Astroport' in guard() and page.locator('#ac-guard a[href="#/rencontre"]').count() == 1, f'{tag} : proches tous ici, invitation à se rencontrer')
+        noscroll('proches tous ici'); page.screenshot(path=str(OUT / f'guardians-here-{tag}.png'), full_page=True)
 
         # Un gardien sans recul : pas de chiffre inventé.
         STATE['backup'] = backup([G('Léa')])

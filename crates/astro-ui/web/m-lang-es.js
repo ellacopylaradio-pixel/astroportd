@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire es, phrases communes. Les écrans de `parts` ont aussi m-lang-es-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account agents beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write';
+export const parts = 'account agents beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles';
 export default {
 "{0} message(s) non lu(s)": "{0} mensaje(s) sin leer",
 "trouvée par ce qu’elle montre": "encontrada por lo que muestra",
@@ -545,4 +545,19 @@ export default {
 "Brouillon": "Borrador",
 "Public": "Público",
 "Coffre": "Caja fuerte",
+"Payer": "Pagar",
+"Recevoir": "Cobrar",
+"Se rencontrer": "Conocerse",
+"Mes cercles": "Mis círculos",
+"Ğ1 en différé": "Ğ1 diferida",
+"Île": "Isla",
+"Île Ğ1": "Isla Ğ1",
+"Réseau Ğ1 coupé : vos envois deviennent des promesses, réglées en Ğ1 dès son retour.": "Red Ğ1 caída: tus envíos se convierten en promesas, pagadas en Ğ1 en cuanto vuelva.",
+"Promesse de {0} Ẑen faite à {1} : réglée en Ğ1 au retour du réseau": "Promesa de {0} Ẑen hecha a {1}: se pagará en Ğ1 cuando vuelva la red",
+"Promis, réglé au retour du réseau": "Prometido, se paga cuando vuelva la red",
+"Vous pourrez encore promettre": "Aún podrás prometer",
+"Réseau Ğ1 coupé : ceci est une promesse. Votre station la réglera en Ğ1 depuis votre portefeuille dès le retour du réseau ; gardez-y de quoi la payer.": "Red Ğ1 caída: esto es una promesa. Tu estación la pagará en Ğ1 desde tu monedero en cuanto vuelva la red; deja en él lo necesario.",
+"{0} promesse(s) en attente de règlement en Ğ1.": "{0} promesa(s) pendiente(s) de pago en Ğ1.",
+"Vous pouvez encore promettre {0} Ẑen.": "Aún puedes prometer {0} Ẑen.",
+"Voir mes promesses": "Ver mis promesas",
 };

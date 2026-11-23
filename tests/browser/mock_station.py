@@ -12,6 +12,12 @@ WEB = Path(__file__).resolve().parents[2] / 'crates' / 'astro-ui' / 'web'
 random.seed(7)
 MIME = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json'}
 
+def qr_svg(text):
+    """Vrai QR (bibliothèque qrcode), comme `astro_ui::qr::svg` : noir sur blanc, marge comprise."""
+    import qrcode, qrcode.image.svg
+    buf = io.BytesIO(); qrcode.make(text, image_factory=qrcode.image.svg.SvgPathFillImage, border=4).save(buf); return buf.getvalue().decode()
+
+
 def make_faces():
     faces, fid = [], 1
     def add(name, pub, group, gsize, x, y, named, sug=None):
@@ -122,6 +128,26 @@ FRIENDS = dict(items=[
          author='11' * 32, author_label='Léa', seeders=[dict(hex='11' * 32, label='Léa')], copied=None, asked_at=None, error=None)],
     friends=[dict(hex='11' * 32, label='Léa', at=1, error=None), dict(hex='22' * 32, label='Paul', at=1, error='tunnel : connexion fermée')])
 
+# Île « Ğ1 en différé » (m-island.js, m-credit.js) : réseau Ğ1 coupé, île ouverte, une promesse envoyée et une reçue.
+def island_state():
+    return dict(open=True, island='aaaaaaaaaaaaaaaa-1790000000', opened_at=1790000000, credit=True, available='15.00', available_zen='150.00', frozen=False, promises=[
+        dict(id='p1', sent=True, author='aa' * 32, dest='ab' * 32, amount='5.00', amount_zen='50.00', at=1790000300, state='accepted', reason=None, settled=None, node='aa' * 32, known_station=True),
+        dict(id='p2', sent=False, author='ef' * 32, dest='aa' * 32, amount='2.00', amount_zen='20.00', at=1790000600, state='accepted', reason=None, settled=None, node='ff' * 32, known_station=False)])
+ISLAND_STATION = dict(open=True, island='aaaaaaaaaaaaaaaa-1790000000', opened_at=1790000000, snapshot_at=1789990000, snapshot_members=12, down_since=1789996000, auto_after_secs=1800,
+                      promises=dict(accepted=7, refused=1), settlements=dict(), neighbors=[dict(island='ffffffffffffffff-1790000100', node='ff' * 32, members=4, at=1790000100, known_station=True, promises=3)], at=1790001000)
+
+# « Se rencontrer » (m-pay.js) : je suis 'aa'*32 ; Léa et Marc sont déjà des proches ; Zoé est dans la constellation.
+MEET_NAMES = {'ab' * 32: 'Léa', 'cd' * 32: 'Marc', '12' * 32: 'Zoé', 'ef' * 32: 'efefefef', '34' * 32: 'Hugo'}
+MEET = dict(mine={'ab' * 32, 'cd' * 32}, back={'ab' * 32, 'cd' * 32}, met={}, asks=[], ranks={})
+def meet_level(x): return MEET['ranks'].get(x, 3 if x in MEET['back'] else 1) if x in MEET['mine'] else None
+def meet_status(x):
+    m = MEET['met'].get(x)
+    return dict(hex=x, label=MEET_NAMES.get(x, x[:8]), i_follow=x in MEET['mine'], follows_me=x in MEET['back'], friends=x in MEET['mine'] and x in MEET['back'], met=m, met_back=None, level=meet_level(x))
+def circles():  # Mes cercles (m-circles.js) : ceux que je suis, du plus proche au plus lointain
+    people = [dict(hex=x, label=MEET_NAMES.get(x, x[:8]), level=meet_level(x), ranked=x in MEET['ranks'], friends=x in MEET['back'], met_verified=bool(MEET['met'].get(x, {}).get('verified'))) for x in MEET['mine']]
+    return dict(levels=[], people=sorted(people, key=lambda p: (-p['level'], p['label'].lower())))
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def send(self, code, body, ctype='application/json'):
@@ -143,6 +169,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, dict(where='unknown'))
         if p == '/restore': return self.send(200, (WEB / 'restore.html').read_bytes(), 'text/html')
         if p == '/claim': return self.send(200, (WEB / 'claim.html').read_bytes(), 'text/html')
+        if p == '/scan': return self.send(200, (WEB / 'scan.html').read_bytes(), 'text/html')  # Ğ1Billets : lecteur partagé avec « Payer »
         if p.startswith('/i/'): return self.send(200, (WEB / 'invite.html').read_bytes(), 'text/html')
         if p == '/api/v1/invites': return self.send(200, INVITES)
         if p == '/api/v1/invite/' + 'b2' * 16: return self.send(410, dict(error='ce lien a expiré : demandez-en un nouveau', code='invite_expired'))
@@ -186,6 +213,24 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/me':
             if not (self.headers.get('Authorization') or '').startswith(('Basic ', 'Nostr ')): self.send(401, dict(error='authentification requise'))
             return self.send(200, dict(hex='aa' * 32, email='alice@example.org', captain=True, ai=STATE.get('ai', True)))
+        if p == '/api/v1/me/meet/code':
+            proof = f'{int(__import__("time").time()) // 120}.' + 'ab' * 64
+            url = f'http://127.0.0.1:{self.server.server_port}/#/rencontre?to={"aa" * 32}&m={proof}'
+            return self.send(200, dict(url=url, qr_svg=qr_svg(url), hex='aa' * 32, expires_in=60))
+        if p.startswith('/api/v1/me/meet/'): return self.send(200, meet_status(p.rsplit('/', 1)[1]))
+        if p == '/api/v1/me/circles': return self.send(200, circles())
+        if p == '/api/v1/me/wot': return self.send(200, STATE.get('wot') or dict(member=False, root=False, certs=3, needed=5, reached_pct=100, mutual=1, certifiers=['Léa', 'Marc', 'Ana'], web=dict(members=42, referees=30, roots=4)))
+        if p == '/api/v1/me/meet':
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query).get('q', [''])[0].lower()
+            out = dict(requests=[dict(hex=x, label=MEET_NAMES[x], at=1) for x in MEET['asks'] if x not in MEET['mine']])
+            if q: out['people'] = [dict(meet_status(x), here=x != '12' * 32) for x, n in MEET_NAMES.items() if q in n.lower()]
+            return self.send(200, out)
+        if p.startswith('/api/v1/me/zen/receive'):  # « Recevoir » (m-pay.js) : un vrai QR, que smoke_pay.py relit
+            from urllib.parse import urlparse, parse_qs
+            a = parse_qs(urlparse(self.path).query).get('amount', [None])[0]
+            url = f'http://127.0.0.1:{self.server.server_port}/#/payer?to={"aa" * 32}' + (f'&a={a}' if a else '')
+            return self.send(200, dict(url=url, qr_svg=qr_svg(url), hex='aa' * 32, amount_zen=int(a) if a else None))
         if p == '/api/v1/me/ai': return self.send(200, dict(ollama_url=None, provider=None, has_key=False, model=None, declared=STATE.get('ai', True)))
         if p == '/api/v1/station/coop': return self.send(200, COOP)
         if p == '/api/v1/account/site': return self.send(200, dict(name='alice', files=0, has_index=True, visits=0, host_url=None, path_url='/site/alice/'))
@@ -195,6 +240,8 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/account/images': return self.send(200, dict(images=[], used=0, quota=1000000))
         if p == '/api/v1/contacts': return self.send(200, CONTACTS)
         if p == '/api/v1/me/links': return self.send(200, dict(plane='origin', siblings=['zen1'], keys=[dict(plane='origin', hex='aa' * 32, via='fiche'), dict(plane='zen1', hex='ee' * 32, via='station')]))
+        if p == '/api/v1/island': return self.send(200, STATE.setdefault('island', island_state()))
+        if p == '/api/v1/station/island': return self.send(200, ISLAND_STATION)
         if p == '/api/v1/friends': return self.send(200, dict(friends=[dict(hex='ab' * 32, label='Léa', hosted=False), dict(hex='cd' * 32, label='Marc', hosted=True)]))
         if p == '/api/v1/chat':
             c = STATE['chat']; unread = sum(1 for m in c if not m['mine'] and not STATE.get('chat_read'))
@@ -202,7 +249,8 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/chat/messages': return self.send(200, dict(peer='ab' * 32, messages=STATE['chat'], more=False))
         if p == '/api/v1/chat/settings': return self.send(200, dict(receipts=STATE.get('receipts', True)))
         if p == '/health': return self.send(200, dict(status='ok'))
-        if p == '/api/v1/me/footprint': return self.send(200, dict(disk=dict(used_bytes=2_400_000_000, files=5321, quota_bytes=10_000_000_000, unlimited=False, tier='Basic', by_kind=dict(ucloud=dict(photo=1_500_000_000, video=600_000_000, music=120_000_000, doc=40_000_000, other=20_000_000), public=dict(photo=90_000_000, doc=30_000_000)), spread=STATE.get('spread'))))
+        if p == '/api/v1/me/footprint': return self.send(200, dict(disk=dict(used_bytes=2_400_000_000, files=5321, quota_bytes=10_000_000_000, unlimited=False, tier='Basic', by_kind=dict(ucloud=dict(photo=1_500_000_000, video=600_000_000, music=120_000_000, doc=40_000_000, other=20_000_000), public=dict(photo=90_000_000, doc=30_000_000)), spread=STATE.get('spread')),
+                                                                    opex=dict(total_28d_cents=400, weekly_rent_cents=100, rent_28d_cents=400), capex=dict(assets=[], zencard=False, net_cents=0, value_cents=0, amortized_cents=0)))  # Mes Ẑen (m-money.js)
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/faces/folders': return self.send(200, dict(folders=[dict(dir='/Images/2026/10', faces=12, todo=9), dict(dir='/Images/2026/09', faces=4, todo=0)]))
         if p == '/api/v1/faces/board':
@@ -307,6 +355,32 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get('Content-Length', 0)); body = json.loads(self.rfile.read(n) or b'{}'); p = self.path
         STATE['posts'].append((p, body))
+        if p == '/api/v1/me/circles':
+            if body['hex'] not in MEET['mine']: return self.send(400, dict(error="ajoutez d'abord cette personne à vos proches"))
+            if body.get('level') is None: MEET['ranks'].pop(body['hex'], None)
+            else: MEET['ranks'][body['hex']] = body['level']
+            return self.send(200, circles())
+        if p.startswith('/api/v1/me/meet/'):
+            x = p.rsplit('/', 1)[1]
+            if (body.get('proof') or '').startswith('1.'): return self.send(400, dict(error="ce code a expiré : demandez à la personne de le remontrer"))
+            MEET['mine'].add(x); MEET['met'].setdefault(x, dict(how='qr' if body.get('proof') else 'named', verified=bool(body.get('proof'))))
+            return self.send(200, meet_status(x))
+        if p == '/api/v1/me/zen/preview' and STATE.get('island', {}).get('open'):
+            g1 = body['amount_zen'] * 10
+            return self.send(200, dict(kind='member', payer='member', to=body['to'], email='lea@example.org', address='g1LsRGbH5st3WZfdF2SpknxM12W1THsmU5iFzwgKWLHDQqZDq', amount_zen_cents=body['amount_zen'] * 100, g1_cents=g1,
+                                       activation_g1_cents=0, payer_g1_cents=1500, payer_after_g1_cents=1500 - g1, payer_after_zen_cents=(1500 - g1) * 10, split=[], max_zen=10000, island=dict(island='aaaaaaaaaaaaaaaa-1790000000', available_g1_cents=1500)))
+        if p == '/api/v1/me/zen/send' and STATE.get('island', {}).get('open'): return self.send(200, dict(ok=True, island=True, promise=dict(id='p3'), amount_zen_cents=body['amount_zen'] * 100))
+        if p == '/api/v1/me/zen/preview':  # hors île : le nom vient de la station du payeur, jamais du QR
+            g1 = body['amount_zen'] * 10
+            return self.send(200, dict(kind='member', payer='member', to=body['to'], email='lea@example.org' if body['to'] == 'ab' * 32 else body['to'][:8], address='g1LsRGbH5st3WZfdF2SpknxM12W1THsmU5iFzwgKWLHDQqZDq', amount_zen_cents=body['amount_zen'] * 100, g1_cents=g1,
+                                       activation_g1_cents=0, payer_g1_cents=1500, payer_after_g1_cents=1500 - g1, payer_after_zen_cents=(1500 - g1) * 10, split=[], max_zen=10000))
+        if p == '/api/v1/me/zen/send': return self.send(200, dict(ok=True, amount_zen_cents=body['amount_zen'] * 100))
+        if p.startswith('/api/v1/station/island/'):
+            op = p.rsplit('/', 1)[1]
+            if op == 'open': ISLAND_STATION['open'] = True
+            if op == 'close': ISLAND_STATION['open'] = False
+            if op == 'auto': ISLAND_STATION['auto_after_secs'] = None if body.get('minutes') is None else body['minutes'] * 60
+            return self.send(200, dict(ok=True))
         if p == '/api/v1/faces/thumbs': return self.send(200, dict(thumbs={str(i): thumb(i) for i in body['ids']}, failed=[]))
         if p == '/api/v1/station/planes': return self.send(200, dict(name=body['name'], http='127.0.0.1:8092', p2p='/ip4/0.0.0.0/tcp/4102', swarm_key_path='/x/zen2/swarm.key', created_key='/key/swarm/psk/1.0.0/\\n/base16/\\n' + 'ab' * 32))
         if p == '/api/v1/me/ai':

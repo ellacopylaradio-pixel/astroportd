@@ -148,7 +148,8 @@ export default async function contacts(root, K, qs) {
         h('p', { class: 'muted' }, n ? t('Une question à la fois : « Est-ce Léa ? », « Qui est-ce ? ». Chaque réponse range les visages dans la fiche de la personne.') : t('La station analyse vos nouvelles photos : les visages à ranger apparaîtront ici.'))),
       h('span', { class: 'ab-sas-go' }, h('button', { onclick: go(n ? '#/people/tri?grand' : '#/people/tri') }, n ? t('Ranger les visages') : t('Table de tri'))));
   }, () => {});
-  root.replaceChildren(h('h2', {}, t('Proches')), sas, tabs, tools, selbar, main);
+  const meet = h('p', { class: 'ck-acts' }, h('a', { class: 'ck-btn', href: '#/rencontre' }, '🤝 ' + t('Se rencontrer')), h('a', { class: 'ck-btn', href: '#/cercles' }, '⭕ ' + t('Mes cercles')));  // QR face à face, ou recherche dans la constellation
+  root.replaceChildren(h('h2', {}, t('Proches')), meet, sas, tabs, tools, selbar, main);
   // Lien direct vers une fiche (`#/people?c=/Contacts/…vcf`, depuis la recherche).
   const want = qs?.get?.('c');
   if (want) select({ path: want }); else show0();

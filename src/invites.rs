@@ -845,9 +845,43 @@ impl<B: BlobStore> Invites<B> {
         (done, skipped)
     }
 
+    /// Preuve de présence de `who` à l'instant `at` (code « rencontre » montré à l'écran), signée avec sa clé.
+    pub fn meet_proof(&self, who: &str, at: u64) -> Option<String> {
+        let secret = self.keys.secret(who)?;
+        astro_economy::meet::proof(&secret, at)
+    }
+
+    /// `who` atteste sa rencontre avec `target` (kind 30855, `how` = `qr` avec la preuve, ou `named`) : rangée et projetée
+    /// tout de suite, puis publiée.
+    pub async fn attest_meeting(&self, who: &str, target: &str, how: &str, proof: Option<&str>) -> Result<(), String> {
+        let secret = self.keys.secret(who).ok_or("clé du compte introuvable sur cette station")?;
+        let created_at = u64::try_from(now()).unwrap_or(0);
+        let event = UnsignedEvent { created_at, kind: kind::MEETING, tags: astro_economy::meet::tags(target, how, proof), content: String::new() }.sign(&secret).map_err(|e| e.to_string())?;
+        self.store_and_publish(event, "rencontre").await
+    }
+
+    /// Clés des comptes hébergés (signature et déchiffrement pour soi-même : niveaux de proximité).
+    pub fn keys(&self) -> &Arc<dyn KeySource> {
+        &self.keys
+    }
+
+    /// Range et projette `event` tout de suite, puis le publie ; un échec de publication est dit au Capitaine (`what`).
+    pub async fn store_and_publish(&self, event: Event, what: &'static str) -> Result<(), String> {
+        self.store_event(event.clone()).await?;
+        let (publish, bus) = (self.publish.clone(), self.activity.clone());
+        tokio::spawn(async move {
+            if let Err(why) = publish(event).await {
+                if let Some(bus) = bus {
+                    bus.publish_to(Audience::Captain, "alert", "invite", format!("{what} non publiée ({why})"), None);
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// `who` suit `target` : nouvelle liste de contacts (kind 3) signée avec la clé de `who`, rangée et projetée tout de
     /// suite (le double suivi doit être visible avant l'envoi des photos), puis publiée sur les relais.
-    async fn follow(&self, who: &str, target: &str) -> Result<(), String> {
+    pub async fn follow(&self, who: &str, target: &str) -> Result<(), String> {
         let secret = self.keys.secret(who).ok_or("clé du compte introuvable sur cette station")?;
         let w = who.to_owned();
         let latest: Option<(String, String, i64)> = self

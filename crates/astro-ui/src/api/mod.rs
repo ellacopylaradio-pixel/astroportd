@@ -394,7 +394,7 @@ pub struct UiState<B> {
 pub use ucloud::{MediaWork, UcloudApi};
 pub use faces::FacesApi;
 pub use coop::CoopApi;
-pub use social::SocialApi;
+pub use social::{MeetOp, SocialApi};
 pub use account::AccountApi;
 pub use onboarding::OnboardApi;
 pub use station::StationApi;
@@ -804,6 +804,22 @@ mod tests {
         assert!(url.starts_with("http://station.test/s/abc#") && url.len() > 64 + 20, "{url}");
         assert_eq!(v["expires_at"], 720 * 3600, "durée bornée à 30 jours");
         assert!(v["qr_svg"].as_str().unwrap().contains("<svg"));
+    }
+
+    #[tokio::test]
+    async fn receive_gives_the_members_pay_address_and_qr_without_any_name() {
+        let bus = ActivityBus::new();
+        assert_eq!(call(app(&bus), Method::GET, "/api/v1/me/zen/receive", false, None).await.0, StatusCode::UNAUTHORIZED);
+        let (s, v, _) = call(app(&bus), Method::GET, "/api/v1/me/zen/receive?amount=12", true, None).await;
+        assert_eq!(s, StatusCode::OK);
+        let (url, hex) = (v["url"].as_str().unwrap(), v["hex"].as_str().unwrap());
+        assert_eq!(url, format!("http://station.test/#/payer?to={hex}&a=12"), "seuls la clé et le montant voyagent");
+        assert!(v["qr_svg"].as_str().unwrap().contains("<svg"));
+        let (_, v, _) = call(app(&bus), Method::GET, "/api/v1/me/zen/receive", true, None).await;
+        assert!(!v["url"].as_str().unwrap().contains("&a="), "sans montant, le payeur choisit");
+        for bad in ["amount=1000001", "amount=-3", "amount=abc"] {
+            assert_eq!(call(app(&bus), Method::GET, &format!("/api/v1/me/zen/receive?{bad}"), true, None).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        }
     }
 
     #[tokio::test]

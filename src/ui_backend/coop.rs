@@ -15,6 +15,7 @@ pub struct CoopBackend<B: BlobStore> {
     pub(super) charter: Option<CharterFn>,
     pub(super) billet: Option<BilletFn>,
     pub(super) zen_credit: Option<BilletFn>,
+    pub(super) island: Option<IslandFn>,
     pub(super) stations: Option<Arc<crate::beacon::Stations>>,
     pub(super) oc: Option<Arc<crate::oc_member::OcMember>>,
 }
@@ -30,6 +31,15 @@ impl<B: BlobStore> CoopBackend<B> {
 }
 
 impl<B: BlobStore> CoopApi for CoopBackend<B> {
+    async fn island(&self, who: &Principal, op: &'static str, body: Value) -> Result<Value, ApiError> {
+        use crate::island::IslandFail as F;
+        let f = self.island.as_ref().ok_or_else(|| ApiError::unavailable("île (Ğ1 en différé) non activée sur cette station"))?;
+        f(op, who.hex.clone(), body).await.map_err(|e| match e {
+            F::Closed | F::Frozen | F::Short { .. } | F::NoCredit => ApiError::conflict(e.to_string()),
+            F::Invalid(m) => ApiError::bad_request(m),
+            F::Internal(m) => ApiError::internal(m),
+        })
+    }
     async fn zen_credit(&self, who: &Principal, op: &'static str, body: Value) -> Result<Value, ApiError> {
         let f = self.zen_credit.as_ref().ok_or_else(|| ApiError::unavailable("versement de Ẑen non activé sur cette station"))?;
         f(None, op, who_body(who, body)).await.map_err(billet_api_error)

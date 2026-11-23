@@ -225,6 +225,11 @@ pub struct ServeArgs {
     /// Ẑen au plus par donateur et par jour.
     #[arg(long, default_value_t = 500)]
     zen_per_day: u64,
+    /// ISLAND-1 « Ğ1 en différé » : minutes sans réponse de Duniter avant que la station ouvre seule une île (ses MULTIPASS
+    /// promettent alors des Ğ1, au plus leur dernier solde connu plus leurs DU, réglées en Ğ1 au retour de la chaîne).
+    /// Absent : jamais d'île automatique.
+    #[arg(long)]
+    island_after: Option<u64>,
     /// Désactive la synchronisation continue N¹/N² : sans elle, la station ne réplique plus les profils et événements
     /// de ses amis et de leurs amis (relais des stations de la constellation, joints par le maillage P2P).
     #[arg(long)]
@@ -811,6 +816,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     let ui_chain = chain.clone();
     let billet_chain = chain.clone();
     let zen_credit_chain = chain.clone();
+    let island_chain = chain.clone();
     let peer_id = p2p_handle.as_ref().map(|h| h.peer_id().to_string()).or_else(|| station.discovered.as_ref().map(|d| d.node.peer_id.clone()));
     let services_peer = peer_id.clone();
     let info = StationInfo { node_hex: node_hex.clone(), peer_id, domain: public_domain(&a).cloned(), started: std::time::Instant::now() };
@@ -986,6 +992,20 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         println!("Ğ1Billets : vérification et encaissement actifs → /scan{}", if squid_urls.is_empty() { " (sans indexeur Ğ1 --squid-url : l'origine du billet et le destinataire ne peuvent pas être vérifiés, l'encaissement est refusé)" } else { "" });
     }
     tasks::nightly(&parts, &memory, &backup, &billets, &mut background).await?;
+    // ISLAND-1 « Ğ1 en différé » : instantané des soldes tant que la chaîne répond, île pendant une coupure, règlement en Ğ1 au retour.
+    let island = match (island_chain, &station.node_secret) {
+        (Some(chain), Some(secret)) => {
+            let keys: Arc<dyn KeySource> = Arc::new(FileKeySource::new(&secrets_dir));
+            let svc = Arc::new(astroportd::island::Island::new(db.clone(), chain, secrets_dir.clone(), keys, node_hex.clone(), **secret, publish_fn(&event_publisher), activity.clone(), a.island_after.map(|m| m.saturating_mul(60))));
+            background.push(tokio::spawn(svc.clone().run(stop_watch.clone())));
+            match a.island_after {
+                Some(m) => println!("Île (Ğ1 en différé) : ouverte seule après {m} min sans Duniter ; règlement en Ğ1 au retour de la chaîne"),
+                None => println!("Île (Ğ1 en différé) : instantanés des soldes et règlement actifs ; ouverture à la main (Ma station) ou seule avec --island-after <minutes>"),
+            }
+            Some(svc)
+        }
+        _ => None,
+    };
     // Inscription d'un MULTIPASS : `uplanet_name` (voir plus haut) désigne la constellation.
     let registrar = {
         let secret = station.secret.clone();
@@ -1271,6 +1291,13 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     if let Some(f) = pending_fn {
         ui = ui.with_pending_shares(f);
     }
+    let island_deferred: Option<Arc<dyn astroportd::island::Deferred>> = island.clone().map(|i| i as Arc<dyn astroportd::island::Deferred>);
+    if let Some(isl) = island {
+        ui = ui.with_island(Arc::new(move |op, hex, body| {
+            let isl = isl.clone();
+            Box::pin(async move { isl.handle(op, &hex, &body).await })
+        }));
+    }
     if let Some(b) = billets {
         ui = ui.with_billet(Arc::new(move |ip, op, body| {
             let b = b.clone();
@@ -1280,6 +1307,9 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     // Versement de Ẑen par le Capitaine (circuit du `UPLANET.official.sh -l`) : il lui faut la chaîne et les comptes hébergés.
     if let (Some(chain), Some(dir)) = (zen_credit_chain, &station.nostr_dir) {
         let mut zc = astroportd::zen_credit::ZenCredit::new(db.clone(), chain, ui_wallets.clone(), dir.clone(), activity.clone());
+        if let Some(d) = island_deferred.clone() {
+            zc = zc.with_deferred(d);
+        }
         // Contrôle primal (indexeur squid) : un membre peut alors payer un MULTIPASS hébergé ailleurs dans la constellation.
         if !squid_urls.is_empty() {
             let sp = Arc::new(astroportd::funds::SquidPrimal::new(squid_urls.clone()));

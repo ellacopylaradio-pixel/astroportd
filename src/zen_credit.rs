@@ -133,19 +133,40 @@ pub struct ZenCredit<C: Chain> {
     gate: tokio::sync::Mutex<()>,
     retry_delay: Duration,
     primal: Option<PrimalFn>,
+    /// Île « Ğ1 en différé » : quand elle est ouverte, l'envoi d'un membre à un proche devient une promesse (même écran).
+    deferred: Option<Arc<dyn crate::island::Deferred>>,
 }
 
 type R<T> = Result<T, BilletError>;
 
+/// Une raison d'île dite au membre, dans la forme d'erreur du circuit d'envoi.
+fn island_error(e: crate::island::IslandFail) -> BilletError {
+    use crate::island::IslandFail as F;
+    match e {
+        F::Short { have } => BilletError::Refused("zen_credit_island_short", format!("réseau Ğ1 coupé : vous pouvez promettre au plus {have} Ğ1 jusqu'à son retour")),
+        F::Frozen => BilletError::Refused("zen_credit_island_frozen", e.to_string()),
+        F::NoCredit => BilletError::Refused("zen_credit_island_no_credit", "réseau Ğ1 coupé, et votre solde n'était pas connu de la station avant la coupure : envoi impossible jusqu'à son retour".into()),
+        F::Closed => BilletError::Refused("zen_credit_island_closed", e.to_string()),
+        F::Invalid(m) => BilletError::Invalid("zen_credit_island_invalid", m),
+        F::Internal(m) => BilletError::Failed("zen_credit_island", m),
+    }
+}
+
 impl<C: Chain> ZenCredit<C> {
     /// `accounts_dir` : dossier des comptes (`~/.zen/game/nostr`), où se trouve le `.secret.dunikey` de chaque MULTIPASS.
     pub fn new(db: Arc<Db>, chain: Arc<C>, wallets: Arc<Wallets>, accounts_dir: PathBuf, activity: ActivityBus) -> Self {
-        Self { db, chain, wallets, accounts_dir, activity, gate: tokio::sync::Mutex::new(()), retry_delay: Duration::from_secs(15), primal: None }
+        Self { db, chain, wallets, accounts_dir, activity, gate: tokio::sync::Mutex::new(()), retry_delay: Duration::from_secs(15), primal: None, deferred: None }
     }
 
     /// Contrôle primal : sans lui, un membre ne peut payer qu'un MULTIPASS hébergé ici.
     pub fn with_primal(mut self, primal: PrimalFn) -> Self {
         self.primal = Some(primal);
+        self
+    }
+
+    /// Île : pendant une coupure de Duniter, « Envoyer des Ẑen » à un proche fait une promesse réglée au retour de la chaîne.
+    pub fn with_deferred(mut self, d: Arc<dyn crate::island::Deferred>) -> Self {
+        self.deferred = Some(d);
         self
     }
 
@@ -195,6 +216,12 @@ impl<C: Chain> ZenCredit<C> {
         }
         let zc = Self::zen_cents_of(body)?;
         let target = body.get("to").and_then(Value::as_str).unwrap_or("");
+        // Île ouverte : même geste, mais une promesse au lieu d'un virement ; l'écran est averti (`island`).
+        if let Some(d) = &self.deferred {
+            if let Some(isl) = d.quote(hex).await.map_err(island_error)? {
+                return self.member_island(op, body, hex, target, zc, isl, d.as_ref()).await;
+            }
+        }
         let (kind, to) = if target == "cash" {
             (Kind::Cash, None)
         } else {
@@ -205,6 +232,39 @@ impl<C: Chain> ZenCredit<C> {
             "send" => {
                 let to_hex = to.as_ref().map(|p| p.hex.clone());
                 self.send(hex, body, kind, to_hex.as_deref(), Some(me), zc).await
+            }
+            _ => Err(BilletError::Invalid("zen_credit_bad_op", "opération inconnue".into())),
+        }
+    }
+
+    /// Envoi d'un membre pendant une île : aperçu (`preview`) ou promesse (`send`, confirmée, rejouable par `credit_id`).
+    /// Le destinataire doit être un proche dont le portefeuille est connu ; la trésorerie attend le retour de la chaîne.
+    #[allow(clippy::too_many_arguments)]
+    async fn member_island(&self, op: &str, body: &Value, hex: &str, target: &str, zc: u64, isl: Value, d: &dyn crate::island::Deferred) -> R<Value> {
+        if target == "cash" {
+            return Err(BilletError::Refused("zen_credit_island_cash", "réseau Ğ1 coupé : pendant la coupure, les envois vont seulement à vos proches ; la trésorerie attendra le retour du réseau".into()));
+        }
+        // Pas de contrôle primal ici : l'indexeur est injoignable comme la chaîne ; le portefeuille est celui de l'identité connue.
+        let to = self.member_party(&Self::hex_of(body)?, false).await?;
+        let g1 = zc / ZEN_CENTS_PER_G1_CENT;
+        let available = isl["available_g1_cents"].as_u64().unwrap_or(0);
+        match op {
+            "preview" => {
+                let after = available.saturating_sub(g1);
+                Ok(json!({
+                    "kind": "member", "payer": "member", "to": to.hex, "email": to.email, "address": to.account.ss58(),
+                    "amount_zen_cents": zc, "g1_cents": g1, "activation_g1_cents": 0,
+                    "payer_g1_cents": available, "payer_after_g1_cents": after, "payer_after_zen_cents": zen_of_g1(after),
+                    "split": [], "max_zen": MAX_ZEN_PER_CREDIT, "island": isl,
+                }))
+            }
+            "send" => {
+                if body.get("confirm").and_then(Value::as_bool) != Some(true) {
+                    return Err(BilletError::Invalid("zen_credit_unconfirmed", "versement non confirmé".into()));
+                }
+                let id = body.get("credit_id").and_then(Value::as_str).filter(|s| (8..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')).ok_or_else(|| BilletError::Invalid("zen_credit_bad_id", "identifiant de versement invalide".into()))?;
+                let promise = d.promise(hex, &to.hex, &to.account.ss58(), g1, id).await.map_err(island_error)?;
+                Ok(json!({ "ok": true, "island": true, "promise": promise, "amount_zen_cents": zc, "g1_cents": g1 }))
             }
             _ => Err(BilletError::Invalid("zen_credit_bad_op", "opération inconnue".into())),
         }

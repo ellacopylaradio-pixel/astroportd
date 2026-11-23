@@ -348,8 +348,9 @@ CREATE TABLE IF NOT EXISTS love_ledger (
   src_event  TEXT
 ) STRICT;
 
--- Loyers constatés (projection des kinds 30852 et 30851 `type=rent`) : le dernier de chaque compte reconstruit son
--- statut de cycle de vie lors d'un replay (voir `astro_lifecycle::rebuild`).
+-- Loyers constatés (projection du kind 30851 `type=rent`, attesté par un NODE ou le Capitaine hébergés) : le dernier de chaque
+-- compte reconstruit son statut de cycle de vie lors d'un replay (voir `astro_lifecycle::rebuild`). `src_kind` admet encore
+-- 30852 pour les bases existantes, mais un virement Ğ1-N² n'est plus compté comme loyer (voir les déclencheurs ci-dessous).
 CREATE TABLE IF NOT EXISTS rent_payments (
   event_id     TEXT PRIMARY KEY,
   owner_hex    TEXT NOT NULL,           -- MULTIPASS qui paie
@@ -358,28 +359,15 @@ CREATE TABLE IF NOT EXISTS rent_payments (
   src_kind     INTEGER NOT NULL CHECK (src_kind IN (30851, 30852))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS rent_owner ON rent_payments(owner_hex, at DESC);
--- Ordre d'arrivée quelconque : un loyer (30852 vers un NODE/Capitaine hébergé, ou 30851 `type=rent`) arrivé AVANT le DID qui
--- fait connaître son payeur (email, rôle) ou avant l'hébergement d'un des comptes n'a rien pu constater ; il est rattrapé
--- ici dès que l'identité apparaît ou change (même règle que `astro_sync::projector`, montant en centimes entiers).
-CREATE TRIGGER IF NOT EXISTS identities_rent_catch_up_ai AFTER INSERT ON identities BEGIN
-  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
-    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
-    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
-    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
-    WHERE p.role IN ('multipass', 'love') AND p.hex = NEW.hex
-      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
-  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
-    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
-    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
-    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
-    WHERE p.role IN ('multipass', 'love') AND m.hex = NEW.hex
-      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
-  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
-    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
-    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
-    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
-    WHERE p.role IN ('multipass', 'love') AND l.dest = NEW.hex
-      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+-- Ordre d'arrivée quelconque : un loyer 30851 `type=rent` arrivé AVANT le DID qui fait connaître son payeur (email, rôle)
+-- ou avant l'hébergement d'un des comptes n'a rien pu constater ; il est rattrapé ici dès que l'identité apparaît ou change
+-- (même règle que `astro_sync::projector`, montant en centimes entiers).
+-- Un virement Ğ1-N² (30852) n'est PAS un loyer : il est signé par le payeur seul, sans contrôle de solde ni de chaîne `prev`
+-- (le relai ne valide pas encore le registre). Les déclencheurs sont recréés à chaque ouverture (DROP puis CREATE) pour qu'une
+-- base d'avant cette règle perde les anciens rattrapages 30852 ; les loyers 30852 déjà comptés sont retirés.
+DELETE FROM rent_payments WHERE src_kind = 30852;
+DROP TRIGGER IF EXISTS identities_rent_catch_up_ai;
+CREATE TRIGGER identities_rent_catch_up_ai AFTER INSERT ON identities BEGIN
   INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
     SELECT json_extract(d.value, '$.event_id'), m.hex, d.at, (CASE WHEN instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') = 0 THEN CAST(COALESCE(json_extract(d.value, '$.tags.amount'), '0') AS INTEGER) * 100 ELSE CAST(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), 1, instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') + 1) || '00', 1, 2) AS INTEGER) END), 30851 FROM identities m
     JOIN done d ON d.key >= 'zen_issuance:' AND d.key < 'zen_issuance;' AND json_valid(d.value)
@@ -388,25 +376,8 @@ CREATE TRIGGER IF NOT EXISTS identities_rent_catch_up_ai AFTER INSERT ON identit
     WHERE m.hex = NEW.hex AND m.hosted = 1 AND m.role = 'multipass' AND json_extract(d.value, '$.event_id') IS NOT NULL
       AND EXISTS (SELECT 1 FROM identities a WHERE a.hex = substr(d.key, 14, 64) AND a.hosted = 1 AND a.role IN ('node', 'captain'));
 END;
-CREATE TRIGGER IF NOT EXISTS identities_rent_catch_up_au AFTER UPDATE OF email, role, hosted ON identities BEGIN
-  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
-    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
-    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
-    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
-    WHERE p.role IN ('multipass', 'love') AND p.hex = NEW.hex
-      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
-  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
-    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
-    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
-    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
-    WHERE p.role IN ('multipass', 'love') AND m.hex = NEW.hex
-      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
-  INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
-    SELECT l.event_id, m.hex, l.created_at, (CASE WHEN instr(l.amount, '.') = 0 THEN CAST(l.amount AS INTEGER) * 100 ELSE CAST(substr(l.amount, 1, instr(l.amount, '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(l.amount, instr(l.amount, '.') + 1) || '00', 1, 2) AS INTEGER) END), 30852 FROM identities p
-    JOIN identities m ON m.hosted = 1 AND m.role = 'multipass' AND (m.hex = p.hex OR (p.email IS NOT NULL AND m.email = p.email))
-    JOIN ledger_n2 l ON l.author = p.hex AND l.is_mint = 0
-    WHERE p.role IN ('multipass', 'love') AND l.dest = NEW.hex
-      AND EXISTS (SELECT 1 FROM identities d WHERE d.hex = l.dest AND d.hosted = 1 AND d.role IN ('node', 'captain'));
+DROP TRIGGER IF EXISTS identities_rent_catch_up_au;
+CREATE TRIGGER identities_rent_catch_up_au AFTER UPDATE OF email, role, hosted ON identities BEGIN
   INSERT OR IGNORE INTO rent_payments(event_id, owner_hex, at, amount_cents, src_kind)
     SELECT json_extract(d.value, '$.event_id'), m.hex, d.at, (CASE WHEN instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') = 0 THEN CAST(COALESCE(json_extract(d.value, '$.tags.amount'), '0') AS INTEGER) * 100 ELSE CAST(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), 1, instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') - 1) AS INTEGER) * 100 + CAST(substr(substr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), instr(COALESCE(json_extract(d.value, '$.tags.amount'), '0'), '.') + 1) || '00', 1, 2) AS INTEGER) END), 30851 FROM identities m
     JOIN done d ON d.key >= 'zen_issuance:' AND d.key < 'zen_issuance;' AND json_valid(d.value)
@@ -416,12 +387,74 @@ CREATE TRIGGER IF NOT EXISTS identities_rent_catch_up_au AFTER UPDATE OF email, 
       AND EXISTS (SELECT 1 FROM identities a WHERE a.hex = substr(d.key, 14, 64) AND a.hosted = 1 AND a.role IN ('node', 'captain'));
 END;
 
--- Tout ce que le cycle de vie et la clôture hebdomadaire comptent comme loyer : les loyers du registre Ğ1-N² ci-dessus ET
+-- Tout ce que le cycle de vie et la clôture hebdomadaire comptent comme loyer : les loyers attestés (30851) ci-dessus ET
 -- les virements d'hébergement faits par la station sur la Ğ1 (journal `hosting_fee`, montant en centimes de ẑ).
 CREATE VIEW IF NOT EXISTS rents(owner_hex, at, amount_cents) AS
   SELECT owner_hex, at, amount_cents FROM rent_payments
   UNION ALL
   SELECT json_extract(data, '$.owner'), at, CAST(json_extract(data, '$.zen') AS INTEGER) * 100 FROM journal WHERE stream = 'hosting_fee';
+
+-- ISLAND-1 « Ğ1 en différé » (`src/island.rs`, `astro_economy::island`). Montants en centimes de Ğ1.
+-- État LOCAL : dernier instantané Ğ1 de chaque MULTIPASS hébergé, pris tant que la chaîne répond (base du crédit d'île).
+CREATE TABLE IF NOT EXISTS g1_snapshot (
+  hex        TEXT PRIMARY KEY,         -- MULTIPASS
+  wallet     TEXT NOT NULL,            -- portefeuille Ğ1 (SS58)
+  spendable  INTEGER NOT NULL CHECK (spendable >= 0),   -- dépensable, réserve déduite
+  ud         INTEGER NOT NULL CHECK (ud >= 0),          -- DU en vigueur si membre, 0 sinon
+  ud_period  INTEGER NOT NULL,         -- secondes
+  ud_until   INTEGER NOT NULL,         -- fin d'adhésion connue (secondes Unix)
+  at         INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+-- Projection (kind 30855) : rencontres attestées (« Se rencontrer »), la plus récente par (auteur, personne rencontrée).
+-- `how` : 'qr' (code scanné, preuve de présence jointe) ou 'named' (choisi dans une liste, un lien, un code de paiement).
+-- `verified` : preuve revérifiée (signée par la personne rencontrée, datée de l'attestation) ; contre les faux comptes,
+-- Ğ1-N² ne compte que les rencontres vérifiées (astro_economy::meet).
+CREATE TABLE IF NOT EXISTS meetings (
+  owner_hex  TEXT NOT NULL,
+  target_hex TEXT NOT NULL,
+  how        TEXT NOT NULL CHECK (how IN ('qr', 'named')),
+  verified   INTEGER NOT NULL CHECK (verified IN (0, 1)),
+  at         INTEGER NOT NULL,
+  src_event  TEXT NOT NULL,
+  PRIMARY KEY (owner_hex, target_hex)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS meetings_target ON meetings(target_hex);
+-- Projection (kind 30854) : crédits ouverts dans une île, un par membre.
+CREATE TABLE IF NOT EXISTS island_credits (
+  island     TEXT NOT NULL,
+  member_hex TEXT NOT NULL,
+  node_hex   TEXT NOT NULL,
+  g1         TEXT NOT NULL,
+  opening    INTEGER NOT NULL,
+  ud         INTEGER NOT NULL,
+  ud_period  INTEGER NOT NULL,
+  ud_until   INTEGER NOT NULL,
+  at         INTEGER NOT NULL,
+  src_event  TEXT NOT NULL,
+  PRIMARY KEY (island, member_hex)
+) STRICT, WITHOUT ROWID;
+-- Projection (kind 30852 `t=island`) : promesses ; `state` est recalculé par `island::revalidate` depuis l'ENSEMBLE des
+-- promesses du payeur (jamais selon l'ordre d'arrivée).
+CREATE TABLE IF NOT EXISTS island_promises (
+  event_id   TEXT PRIMARY KEY,
+  island     TEXT NOT NULL,
+  author     TEXT NOT NULL,
+  dest       TEXT NOT NULL,
+  dest_g1    TEXT NOT NULL,
+  amount     INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  state      TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'accepted', 'refused')),
+  reason     TEXT
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS island_promises_author ON island_promises(island, author);
+CREATE INDEX IF NOT EXISTS island_promises_dest ON island_promises(dest, created_at DESC);
+-- État LOCAL : règlement en vraie Ğ1 des promesses acceptées. Noté AVANT l'envoi ; `unknown` n'est JAMAIS rejoué.
+CREATE TABLE IF NOT EXISTS island_settle (
+  event_id   TEXT PRIMARY KEY,
+  state      TEXT NOT NULL CHECK (state IN ('sending', 'paid', 'unknown', 'short')),
+  at         INTEGER NOT NULL,
+  detail     TEXT
+) STRICT, WITHOUT ROWID;
 
 -- Permis Oracle (kinds 30500-30504).
 CREATE TABLE IF NOT EXISTS permit_defs (

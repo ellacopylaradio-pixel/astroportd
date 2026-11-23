@@ -26,10 +26,16 @@ export default function guardCards(bk, K, refresh) {
           : c.repairing ? h('p', { class: 'muted', role: 'status' }, t('Réparation en cours : un gardien ne répondait plus, votre station refait sa part chez un autre.'))
             : c.compacting ? h('p', { class: 'muted', role: 'status' }, t('Rangement en cours : votre station regroupe vos fichiers pour prendre moins de place chez vos amis.')) : '');
     }
-    const others = (bk.friends || []).filter(f => !g.some(x => x.label === f.label));
+    // Proches rangés par la station, le conseillé d'abord : un autre Astroport, puis le cercle le plus proche, puis rencontré.
+    const others = (bk.friends || []).filter(f => !g.some(x => x.label === f.label)), away = others.filter(f => !f.same_station).length;
+    const ICO = { 5: '🏠', 4: '💛', 3: '🤝', 2: '👋', 1: '📇' };
     if (others.length) {
-      const pick = h('select', { id: 'gd-friend', 'aria-label': t('Proche à qui le demander') }, others.map(f => h('option', { value: f.hex }, f.label)));
+      const pick = h('select', { id: 'gd-friend', 'aria-label': t('Proche à qui le demander') }, others.map(f => h('option', { value: f.hex },
+        `${ICO[f.level] || ''} ${f.same_station ? t('{0} (même station)', f.label) : f.label}${f.met_verified ? ' ✓' : ''}`.trim())));
       guard.append(h('label', { for: 'gd-friend' }, t('Demander à un proche de devenir gardien')), pick,
+        away ? h('p', { class: 'muted small' }, t('En tête : vos proches sur un autre Astroport, du cercle le plus proche au plus lointain (Mes cercles).'))
+          : h('p', { class: 'warn' }, t('Vos proches sont tous sur cette station : un gardien doit surtout être sur un autre Astroport, pour survivre à une panne de la vôtre.'), ' ',
+            h('a', { href: '#/rencontre' }, t('Se rencontrer'))),
         h('p', {}, h('button', { onclick: ev => { ev.target.disabled = true; K.api('/api/v1/backup', { method: 'POST', body: { enabled: true, host: pick.value } }).then(() => { K.toast(t('Demande envoyée au proche'), 1); refresh(); }, e => { ev.target.disabled = false; K.toast(e.message); }); } }, t('Lui demander'))),
         n ? h('p', { class: 'muted small' }, t('Chaque gardien reçoit une part de vos nouveaux fichiers ; quelques-uns suffisent pour tout retrouver.')) : '');
     }

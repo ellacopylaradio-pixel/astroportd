@@ -5,16 +5,23 @@ const zen = c => (c == null ? '—' : (c / 100).toFixed(2));
 export default async function money(root, K) {
   const { h, t, api, bytes } = K;
   const draw = async () => {
-    const [d, fp, me] = await Promise.all([api('/api/v1/dashboard'), api('/api/v1/me/footprint'), api('/api/v1/me')]);
+    const [d, fp, me, isle] = await Promise.all([api('/api/v1/dashboard'), api('/api/v1/me/footprint'), api('/api/v1/me'), api('/api/v1/island').catch(() => null)]);
+    // Île : réseau Ğ1 coupé, ou des promesses encore à régler. Rien à voir sinon.
+    const pending = (isle?.promises || []).filter(p => p.state === 'accepted' && p.settled !== 'paid').length;
     const b = d.balance, e = d.energy, w = d.sovereignty, k = fp.disk, ox = fp.opex, cx = fp.capex;
     const pct = k.quota_bytes ? k.used_bytes / k.quota_bytes : 0;
     const card = (title, ...kids) => h('section', { class: 'card' }, h('h2', {}, t(title)), ...kids);
     const big = (v, unit) => h('p', { class: 'big' }, v, h('small', { class: 'muted' }, ' ' + unit));
     root.replaceChildren(
       h('h2', {}, t('Mes Ẑen')),
+      ...(isle?.open || pending ? [h('section', { class: 'card' },
+        h('p', { class: isle.open ? 'degraded' : 'muted', role: 'status' }, '🏝️ ', isle.open ? t('Réseau Ğ1 coupé : vos envois deviennent des promesses, réglées en Ğ1 dès son retour.') : t('{0} promesse(s) en attente de règlement en Ğ1.', pending)),
+        isle.open && isle.credit ? h('p', {}, t('Vous pouvez encore promettre {0} Ẑen.', isle.available_zen)) : null,
+        h('p', {}, h('a', { class: 'ck-btn', href: '#/island' }, t('Voir mes promesses'))))] : []),
       h('div', { class: 'grid' },
         card('Solde',
           b.error ? h('p', { class: 'degraded', role: 'status' }, b.error) : [big(zen(b.zen_cents), 'Ẑen'), h('p', { class: 'muted' }, `${zen(b.g1_cents)} Ğ1`), b.stale ? h('p', { class: 'muted' }, t('Dernier solde connu : le réseau est lent.')) : null,
+            h('p', { class: 'ck-acts' }, h('a', { class: 'ck-btn', href: '#/payer' }, '📷 ' + t('Payer')), h('a', { class: 'ck-btn', href: '#/recevoir' }, '📲 ' + t('Recevoir'))),
             h('p', {}, h('button', { type: 'button', class: 'ghost', onclick: async () => (await K.mod('m-credit.js')).default(K, me.captain ? { to: me.hex } : { mode: 'member' }) }, me.captain ? t('Verser des Ẑen') : t('Envoyer des Ẑen')))]),
         card('Durée couverte',
           e.weeks == null ? h('p', { class: 'muted' }, t('Solde indisponible.')) : [

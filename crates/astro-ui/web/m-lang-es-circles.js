@@ -1,0 +1,26 @@
+'use strict';
+// Dictionnaire es, écran m-circles.js.
+export default {
+"Cercle de {0}": "Círculo de {0}",
+"rencontré en personne": "conocido en persona",
+"pas encore réciproque": "aún no recíproco",
+"Personne pour l'instant.": "Nadie por ahora.",
+"Rangez vos proches du plus proche au plus lointain. C'est privé : personne, pas même eux, ne sait où vous les avez rangés.": "Ordene a sus allegados del más cercano al más lejano. Es privado: nadie, ni siquiera ellos, sabe dónde los ha puesto.",
+"Vous ne suivez encore personne.": "Aún no sigue a nadie.",
+"Famille": "Familia",
+"Ami": "Amigo",
+"Connaissance": "Conocido",
+"Ceux sur qui vous comptez en toutes circonstances.": "Aquellos con quienes cuenta pase lo que pase.",
+"Vos intimes.": "Sus íntimos.",
+"Vos amis : tout ami réciproque commence ici.": "Sus amigos: todo amigo recíproco empieza aquí.",
+"Des personnes que vous connaissez un peu.": "Personas que conoce un poco.",
+"Vous les suivez, sans plus.": "Los sigue, nada más.",
+"Toile de confiance": "Red de confianza",
+"Capitaine : vous en êtes membre d'office ; vos rencontres y font entrer les autres.": "Capitán: eres miembro de oficio; tus encuentros hacen entrar a los demás.",
+"Vous êtes dans la toile : {0} rencontres prouvées avec des membres.": "Estás en la red: {0} encuentros probados con miembros.",
+"Rencontres prouvées avec des membres : {0} sur {1}.": "Encuentros probados con miembros: {0} de {1}.",
+"Montrez votre code « Se rencontrer » à des membres : chaque code scanné face à face compte.": "Muestra tu código «Encontrarse» a miembros: cada código escaneado cara a cara cuenta.",
+"C'est assez, mais dans un même coin de la toile : rencontrez des membres d'autres groupes.": "Es suficiente, pero todo en un mismo rincón de la red: encuéntrate con miembros de otros grupos.",
+"Vous y tiennent : {0}.": "Te sostienen: {0}.",
+"La toile compte {0} membres. Elle préparera un dividende universel entre nous ; il n'est pas encore actif.": "La red tiene {0} miembros. Preparará un dividendo universal entre nosotros; todavía no está activo.",
+};

@@ -22,6 +22,20 @@ pub trait SocialApi: Auth {
     fn book(&self, _who: &Principal, _op: BookOp) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("le carnet d'adresses n'est pas disponible sur cette station")) }
     }
+    /// « Se rencontrer » ([`MeetOp`]). Jamais d'email complet dans les réponses.
+    fn meet(&self, _who: &Principal, _op: MeetOp) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("« Se rencontrer » n'est pas disponible sur cette station")) }
+    }
+    /// « Mes cercles » : niveaux de proximité, privés. `set` = `(clé, niveau 1..=5 | None pour le défaut)`.
+    /// Rend `{ levels, people: [{ hex, label, level, ranked, friends, met_verified }] }`.
+    fn circles(&self, _who: &Principal, _set: Option<(String, Option<u8>)>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("les cercles ne sont pas disponibles sur cette station")) }
+    }
+    /// Toile de confiance N² (`astro_economy::wot`) vue par le membre : `{ member, root, certs, needed, reached_pct,
+    /// mutual, certifiers: [noms], web: { members, referees, roots } }`. Seules les rencontres prouvées comptent.
+    fn wot(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("la toile de confiance n'est pas disponible sur cette station")) }
+    }
     /// Présence visio : `{ reachable, friends: { hex: statut } }` ; `body` (POST) change le choix `reachable` ou l'état `in_call`.
     fn presence(&self, _who: &Principal, _body: Option<Value>) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("la présence visio n'est pas disponible sur cette station")) }
@@ -172,6 +186,11 @@ pub(super) fn routes<B: SocialApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/call/signal", post(call_signal::<B>))
         .route("/api/v1/call/ice", get(call_ice::<B>))
         .route("/api/v1/presence", get(presence_get::<B>).post(presence_set::<B>))
+        .route("/api/v1/me/meet", get(meet_list::<B>))
+        .route("/api/v1/me/circles", get(circles_get::<B>).post(circles_set::<B>))
+        .route("/api/v1/me/wot", get(wot_get::<B>))
+        .route("/api/v1/me/meet/code", get(meet_code::<B>))
+        .route("/api/v1/me/meet/{hex}", get(meet_get::<B>).post(meet_follow::<B>))
         .route("/api/v1/bro/say", post(bro_say::<B>))
         .route("/api/v1/agents", get(agents_list::<B>).post(agents_enroll::<B>))
         .route("/api/v1/agents/revoke", post(agents_revoke::<B>))
@@ -379,6 +398,120 @@ async fn chat_messages<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p
 
 async fn call_signal<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
     reply(st.backend.chat(&p, ChatOp::Signal(b)).await)
+}
+
+async fn wot_get<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    private(reply(st.backend.wot(&p).await))
+}
+
+async fn circles_get<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    private(reply(st.backend.circles(&p, None).await))
+}
+
+/// Ranger une personne : `{ "hex": "<clé>", "level": 1..5 | null }`.
+#[derive(Deserialize)]
+struct CircleBody {
+    hex: String,
+    level: Option<u8>,
+}
+
+async fn circles_set<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<CircleBody>) -> Response {
+    let to = match meet_target(&p, &b.hex) {
+        Ok(h) => h,
+        Err(e) => return reply(Err(e)),
+    };
+    if b.level.is_some_and(|l| !(1..=5).contains(&l)) {
+        return reply(Err(ApiError::bad_request("niveau de 1 (Contact) à 5 (Famille)")));
+    }
+    private(reply(st.backend.circles(&p, Some((to, b.level))).await))
+}
+
+/// Opération « Se rencontrer ».
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MeetOp {
+    /// Demandes reçues (`requests` : qui vient d'ajouter ce membre) et, avec une recherche, les MULTIPASS de la
+    /// constellation dont le nom la contient (`people`).
+    List(Option<String>),
+    /// Où en est le lien avec cette clé : `i_follow`, `follows_me`, `friends`, `met` (rencontre attestée : `how`, `verified`).
+    Status(String),
+    /// Ajouter cette clé à ses proches. Avec la preuve de présence d'un code « rencontre » scanné (`qr`), sinon liaison par
+    /// nomination (`named`) : Ğ1-N² ne compte, contre les faux comptes, que les rencontres prouvées.
+    Add {
+        /// Clé de la personne.
+        to: String,
+        /// Preuve de présence lue dans son code « rencontre ».
+        proof: Option<String>,
+    },
+    /// Ma preuve de présence du moment (`proof`, `expires_in`), pour mon code « rencontre ».
+    Code,
+}
+
+/// Recherche « Se rencontrer » : 2 à 64 caractères.
+#[derive(Deserialize)]
+struct MeetQuery {
+    q: Option<String>,
+}
+
+async fn meet_list<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(m): Query<MeetQuery>) -> Response {
+    let q = m.q.map(|q| q.trim().to_lowercase()).filter(|q| !q.is_empty());
+    if q.as_ref().is_some_and(|q| !(2..=64).contains(&q.chars().count())) {
+        return reply(Err(ApiError::bad_request("recherche de 2 à 64 caractères")));
+    }
+    private(reply(st.backend.meet(&p, MeetOp::List(q)).await))
+}
+
+/// Clé d'un MULTIPASS (64 hexadécimaux, minuscules), autre que la sienne.
+fn meet_target(p: &Principal, hex: &str) -> Result<String, ApiError> {
+    let h = hex.to_ascii_lowercase();
+    if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request("clé attendue (64 hexadécimaux)"));
+    }
+    if h == p.hex {
+        return Err(ApiError::bad_request("c'est votre propre code"));
+    }
+    Ok(h)
+}
+
+async fn meet_get<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Path(hex): Path<String>) -> Response {
+    match meet_target(&p, &hex) {
+        Ok(h) => private(reply(st.backend.meet(&p, MeetOp::Status(h)).await)),
+        Err(e) => reply(Err(e)),
+    }
+}
+
+/// Corps facultatif de l'ajout : `{ "proof": "<tranche>.<signature>" }` (code « rencontre » scanné).
+#[derive(Deserialize, Default)]
+struct MeetBody {
+    proof: Option<String>,
+}
+
+async fn meet_follow<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Path(hex): Path<String>, body: axum::body::Bytes) -> Response {
+    let b: MeetBody = if body.is_empty() { MeetBody::default() } else {
+        match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return reply(Err(ApiError::bad_request("JSON attendu : { \"proof\": \"…\" }"))),
+        }
+    };
+    if b.proof.as_ref().is_some_and(|x| x.len() > 160) {
+        return reply(Err(ApiError::bad_request("preuve trop longue")));
+    }
+    match meet_target(&p, &hex) {
+        Ok(to) => private(reply(st.backend.meet(&p, MeetOp::Add { to, proof: b.proof }).await)),
+        Err(e) => reply(Err(e)),
+    }
+}
+
+/// Mon code « rencontre » : `<station>/#/rencontre?to=<clé>&m=<preuve>` et son QR. La preuve change toutes les 2 minutes :
+/// l'écran le redemande à chaque minute.
+async fn meet_code<B: SocialApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap, Authed(p): Authed) -> Response {
+    let v = match st.backend.meet(&p, MeetOp::Code).await {
+        Ok(v) => v,
+        Err(e) => return reply(Err(e)),
+    };
+    let Some(proof) = v["proof"].as_str() else { return reply(Err(ApiError::internal("preuve indisponible"))) };
+    let url = format!("{}/#/rencontre?to={}&m={proof}", origin_of(&st, &headers).trim_end_matches('/'), p.hex);
+    let Some(svg) = crate::qr::svg(&url) else { return reply(Err(ApiError::internal("QR impossible"))) };
+    private(Json(json!({ "url": url, "qr_svg": svg, "hex": p.hex, "expires_in": v["expires_in"] })).into_response())
 }
 
 async fn presence_get<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {

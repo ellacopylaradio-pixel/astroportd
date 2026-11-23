@@ -351,6 +351,31 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         sent
     }
 
+    /// Proches réciproques à qui demander d'être gardien, **le conseillé d'abord** : un gardien doit surtout être sur un **autre
+    /// Astroport** (sur cette station, il tomberait avec elle), puis le plus proche cercle (`proximity`, Famille d'abord), puis
+    /// rencontré en personne (preuve QR, `meetings.verified`). Chacun porte `same_station`, `level`, `met_verified`.
+    async fn guardian_candidates(&self, owner: &str) -> Result<Vec<Value>, String> {
+        let friends = self.sharing.friends(owner).await?;
+        // Cercles illisibles (clé absente) : on garde le niveau par défaut plutôt que de priver le membre de ses gardiens.
+        let ranks = crate::proximity::load(&self.db, self.keys.as_ref(), owner).await.map(|r| r.0).unwrap_or_default();
+        let o = owner.to_owned();
+        let met: std::collections::HashSet<String> = self
+            .db
+            .readers()
+            .read(move |c| {
+                let mut s = c.prepare("SELECT target_hex FROM meetings WHERE owner_hex = ?1 AND verified = 1")?;
+                Ok(s.query_map([o], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?)
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut list: Vec<(bool, u8, bool, String, String)> = friends
+            .into_iter()
+            .map(|f| (f.hosted, ranks.get(&f.hex).copied().unwrap_or(crate::proximity::default_level(true)), met.contains(&f.hex), f.label, f.hex))
+            .collect();
+        list.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(b.2.cmp(&a.2)).then_with(|| a.3.to_lowercase().cmp(&b.3.to_lowercase())));
+        Ok(list.into_iter().map(|(same, level, met, label, hex)| json!({ "hex": hex, "label": label, "same_station": same, "level": level, "met_verified": met })).collect())
+    }
+
     async fn hosted_here(&self, hex: &str) -> bool {
         let h = hex.to_owned();
         self.db.readers().read(move |c| Ok(c.query_row("SELECT 1 FROM identities WHERE hex = ?1 AND hosted = 1", [h], |r| r.get::<_, i64>(0)).optional()?.is_some())).await.unwrap_or(false)
@@ -440,7 +465,7 @@ impl<O: Outbox, B: BlobStore> PrivateBackup<O, B> {
         }
         let o = owner.to_owned();
         let rescue = self.db.readers().read(move |c| Ok(c.query_row("SELECT COUNT(*) FROM kv WHERE scope = ?1 AND key LIKE ?2", rusqlite::params![SHARE_SENT, format!("{o}:%")], |r| r.get::<_, i64>(0))?)).await.unwrap_or(0);
-        let friends = self.sharing.friends(owner).await?.into_iter().map(|f| json!({ "hex": f.hex, "label": f.label })).collect::<Vec<_>>();
+        let friends = self.guardian_candidates(owner).await?;
         let at = now();
         let guardians = self.guardians(owner, at).await;
         let mut gjson = Vec::new();
@@ -3016,6 +3041,31 @@ mod tests {
         let st = n.backup.status(&alice).await.unwrap();
         assert_eq!(st["guardians"].as_array().map(Vec::len), Some(2));
         assert_eq!(st["safety"]["permille"], 900, "même station : ne compte pas");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// Gardien conseillé : d'abord un proche sur un **autre Astroport**, puis le cercle le plus proche (Mes cercles, privé),
+    /// puis rencontré en personne ; un proche de la même station vient en dernier, même rangé en Famille.
+    #[tokio::test]
+    async fn the_advised_guardian_is_on_another_astroport_then_in_the_closest_circle() {
+        const DAN: [u8; 32] = [0xD5; 32];
+        let (alice, bob, carol, dan) = (hex(&ALICE), hex(&BOB), hex(&CAROL), hex(&DAN));
+        let n = node("advise", &[(&ALICE, "alice@example.org"), (&BOB, "bob@example.org")], &[(&CAROL, "carol@example.org"), (&DAN, "dan@example.org")], "12D3KooWAdvise", None, None).await;
+        for (sk, who) in [(&BOB, &bob), (&CAROL, &carol), (&DAN, &dan)] {
+            n.db.writer().execute("INSERT INTO social_graph(owner_hex, pubkey, level, updated_at) VALUES (?1, ?2, 1, 0)", vec![alice.clone().into(), who.clone().into()]).await.unwrap();
+            give(&n.db, UnsignedEvent { created_at: 10, kind: 3, tags: vec![vec!["p".into(), alice.clone()]], content: String::new() }.sign(sk).unwrap()).await;
+        }
+        let order = |st: &Value| st["friends"].as_array().unwrap().iter().map(|f| f["hex"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let st = n.backup.status(&alice).await.unwrap();
+        assert_eq!(order(&st), [carol.clone(), dan.clone(), bob.clone()], "ailleurs d'abord, puis par nom");
+        assert_eq!((&st["friends"][2]["same_station"], &st["friends"][0]["level"]), (&json!(true), &json!(3)), "Ami par défaut");
+        // Alice range Dan en Famille et Bob aussi (même station) ; elle a rencontré Carol en personne.
+        let ranks: crate::proximity::Ranks = [(dan.clone(), 5), (bob.clone(), 5)].into_iter().collect();
+        give(&n.db, crate::proximity::event(n.backup.keys.as_ref(), &alice, &ranks, 20, 0).unwrap()).await;
+        n.db.writer().execute("INSERT INTO meetings(owner_hex, target_hex, how, verified, at, src_event) VALUES (?1, ?2, 'qr', 1, 30, 'x')", vec![alice.clone().into(), carol.clone().into()]).await.unwrap();
+        let st = n.backup.status(&alice).await.unwrap();
+        assert_eq!(order(&st), [dan, carol, bob], "Famille d'abord, mais jamais la même station avant un autre Astroport");
+        assert_eq!((&st["friends"][0]["level"], &st["friends"][1]["met_verified"]), (&json!(5), &json!(true)));
         let _ = std::fs::remove_dir_all(&n.dir);
     }
 

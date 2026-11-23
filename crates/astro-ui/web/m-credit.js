@@ -4,6 +4,9 @@
 // rejouer après une panne reprend le versement sans jamais payer deux fois.
 //  - Capitaine (`mode` absent) : verser du Ğ1 maître à un MULTIPASS, en crédit d'usage ou en part sociale (satellite, constellation).
 //  - Membre (`mode: 'member'`) : envoyer de son propre solde à la trésorerie de la coopérative ou à un proche réciproque.
+//    Réseau Ğ1 coupé et île ouverte par la station : même geste, mais l'envoi devient une PROMESSE réglée en Ğ1 au retour du
+//    réseau (le serveur bascule seul) ; l'écran le dit avant, dans le récapitulatif et après.
+//    `note` : un mot montré avant le formulaire (« Payer » par QR : proche ou non).
 const c2 = c => (c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const short = a => a && a.length > 16 ? `${a.slice(0, 6)}…${a.slice(-6)}` : (a || '');
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`).replace(/[^A-Za-z0-9-]/g, '');
@@ -22,6 +25,8 @@ export default async function credit(K, opts = {}) {
   try { list = await K.api(`${base}/recipients`, { method: 'POST', body: {} }); }
   catch (e) { body.replaceChildren(h('p', { class: 'err', role: 'alert' }, e.message)); return; }
   const max = list.max_zen;
+  const isle = member ? await K.api('/api/v1/island').catch(() => null) : null;
+  const warn = isle?.open ? h('p', { class: 'degraded', role: 'status' }, '🏝️ ', t('Réseau Ğ1 coupé : vos envois deviennent des promesses, réglées en Ğ1 dès son retour.')) : null;
   // Le chat propose d'envoyer à un MULTIPASS hors de cette liste (constellation) : il s'y ajoute, le serveur vérifie.
   if (member && opts.to && !list.recipients.some(r => r.to === opts.to)) list.recipients.push({ to: opts.to, label: opts.label || opts.to.slice(0, 8) });
   if (!list.recipients.length) { body.replaceChildren(h('p', { class: 'muted' }, t('Aucun destinataire sur cette station.'))); return; }
@@ -44,10 +49,11 @@ export default async function credit(K, opts = {}) {
     if (k !== key) { key = k; id = newId(); } // une autre demande est un autre versement
     try {
       const q = await K.api(`${base}/preview`, { method: 'POST', body: req });
-      const who = q.email || t('la trésorerie de la coopérative');
+      const who = q.email || t('la trésorerie de la coopérative'), isl = q.island;
       const send = () => K.api(`${base}/send`, { method: 'POST', body: { ...req, credit_id: id, confirm: true } }).then(r => {
-        K.toast(t('{0} Ẑen envoyés à {1}', req.amount_zen, who), 1);
-        body.replaceChildren(h('p', { class: 'ok', role: 'status' }, '✅ ', t('{0} Ẑen envoyés à {1}', req.amount_zen, who)), h('menu', {}, h('button', { type: 'button', onclick: () => dlg.close() }, t('Fermer'))));
+        const said = r.island ? t('Promesse de {0} Ẑen faite à {1} : réglée en Ğ1 au retour du réseau', req.amount_zen, who) : t('{0} Ẑen envoyés à {1}', req.amount_zen, who);
+        K.toast(said, 1);
+        body.replaceChildren(h('p', { class: 'ok', role: 'status' }, r.island ? '🏝️ ' : '✅ ', said), h('menu', {}, h('button', { type: 'button', onclick: () => dlg.close() }, t('Fermer'))));
         opts.done?.(req.amount_zen); // le chat annonce le versement dans la conversation
         return r;
       }, e => { err.textContent = e.message; });
@@ -56,14 +62,15 @@ export default async function credit(K, opts = {}) {
         h('dl', { class: 'cr-sum' },
           h('dt', {}, t('Destinataire')), h('dd', {}, who, q.address ? [h('br'), h('code', { title: q.address }, short(q.address))] : null),
           h('dt', {}, t('Montant')), h('dd', { class: 'big' }, `${c2(q.amount_zen_cents)} Ẑen`),
-          h('dt', {}, member ? t('Débité de votre portefeuille') : t('Débité du Ğ1 maître')), h('dd', {}, `${c2(q.g1_cents)} Ğ1`, q.activation_g1_cents ? ` (${t('dont {0} Ğ1 d\'activation du nouveau compte', c2(q.activation_g1_cents))})` : ''),
-          h('dt', {}, member ? t('Il vous restera') : t('Reste sur le maître')), h('dd', {}, `${c2(q.payer_after_g1_cents)} Ğ1 ≈ ${c2(q.payer_after_zen_cents)} Ẑen`),
+          h('dt', {}, isl ? t('Promis, réglé au retour du réseau') : member ? t('Débité de votre portefeuille') : t('Débité du Ğ1 maître')), h('dd', {}, `${c2(q.g1_cents)} Ğ1`, q.activation_g1_cents ? ` (${t('dont {0} Ğ1 d\'activation du nouveau compte', c2(q.activation_g1_cents))})` : ''),
+          h('dt', {}, isl ? t('Vous pourrez encore promettre') : member ? t('Il vous restera') : t('Reste sur le maître')), h('dd', {}, `${c2(q.payer_after_g1_cents)} Ğ1 ≈ ${c2(q.payer_after_zen_cents)} Ẑen`),
           q.split?.length ? [h('dt', {}, t('Répartition')), h('dd', {}, q.split.map(x => h('div', {}, `${x.label} : ${c2(x.zen_cents)} Ẑen`)))] : null),
+        isl ? h('p', { class: 'degraded', role: 'status' }, '🏝️ ', t('Réseau Ğ1 coupé : ceci est une promesse. Votre station la réglera en Ğ1 depuis votre portefeuille dès le retour du réseau ; gardez-y de quoi la payer.')) :
         h('p', { class: 'muted' }, member ? t('Le virement part de votre portefeuille, depuis cette station. Il est définitif.') : t('Le versement passe par un portefeuille de la coopérative (UPLANETNAME ou SOCIETY), comme le faisait la commande historique : la première transaction du MULTIPASS reste le Ğ1 maître.')),
         K.sure(t('Envoyer {0} Ẑen', req.amount_zen), send, t('{0} Ẑen quittent {1} vers {2}', req.amount_zen, member ? t('votre portefeuille') : t('le Ğ1 maître'), who), { class: '' }));
     } catch (e) { step.replaceChildren(); err.textContent = e.message; }
   };
-  body.replaceChildren(h('form', { class: 'cr-form', onsubmit: ask },
+  body.replaceChildren(warn || '', opts.note || '', h('form', { class: 'cr-form', onsubmit: ask },
     h('label', { for: 'cr-to' }, t('À qui ?'), to),
     kind ? h('label', { for: 'cr-kind' }, t('Genre de versement'), kind) : null,
     h('label', { for: 'cr-amount' }, t('Montant (Ẑen, 1 à {0})', max), amount),
