@@ -18,10 +18,15 @@ export function steps({ dash, faces, friends, backup, me, devices, reading }) {
 }
 
 // « Pour vous » : ce qui attend un geste du membre aujourd'hui (3 au plus), tiré de l'état réel ; rien = encart absent.
-export function news({ faces, shares, backup, fp }) {
+export function news({ faces, shares, backup, fp, agents }) {
   const list = [], sug = (faces?.suggestions || []).length, unk = faces?.unknown || 0, pv = fp?.privacy;
   // Un ami qui a perdu sa station attend ma confirmation : toujours en tête.
   for (const r of (backup?.hosting || []).filter(x => x.rescue).slice(0, 2)) list.push({ icon: '🆘', text: ['{0} a perdu sa station et vous demande de l\'aide', r.label], label: 'Répondre', href: '#/backup' });
+  // Un agent attend une réponse (elle expire au bout de 30 minutes) : la plus récente, juste après l'appel à l'aide d'un ami.
+  const ask = (agents?.requests || []).find(r => r.state === 'pending');
+  // L'appelant : le nom donné à l'agent, et le programme qui parle s'il dit autre chose (« OpenClaw (Claude Code 2.1) »).
+  const caller = a => (a.client && !a.client.toLowerCase().startsWith(a.agent.toLowerCase()) ? `${a.agent} (${a.client})` : a.agent);
+  if (ask) list.push({ icon: '🤖', text: [ask.mode === 'navigateur' ? '{0} voudrait agir sur {1} pour vous' : '{0} demande l\'accès à {1}', caller(ask), ask.site], label: 'Répondre', href: '#/agents' });
   // Après un rétablissement : les fichiers reviennent de chez les amis.
   const rs = backup?.restore;
   if (rs && rs.state !== 'done') list.push({ icon: '📦', text: ['Vos fichiers reviennent : {0} ami(s) ont renvoyé, {1} attendu(s)', rs.returned.length, rs.waiting.length], label: 'Voir', href: '#/backup' });
@@ -43,7 +48,7 @@ export default async function home(root, K) {
   K.mod('m-beta.js').then(m => beta.replaceChildren(...m.card(K)), () => { beta.hidden = true; });
   const draw = async () => {
     const health = await fetch('/health').then(r => r.json()).catch(() => null);
-    const [me, dash, faces, friends, backup, fp, devices, shares, reading] = await Promise.all([K.api('/api/v1/me'), K.api('/api/v1/dashboard'), soft('/api/v1/faces'), soft('/api/v1/friends'), soft('/api/v1/backup'), soft('/api/v1/me/footprint'), soft('/api/v1/devices'), soft('/api/v1/faces/pending-shares'), soft('/api/v1/me/reading')]);
+    const [me, dash, faces, friends, backup, fp, devices, shares, reading, agents] = await Promise.all([K.api('/api/v1/me'), K.api('/api/v1/dashboard'), soft('/api/v1/faces'), soft('/api/v1/friends'), soft('/api/v1/backup'), soft('/api/v1/me/footprint'), soft('/api/v1/devices'), soft('/api/v1/faces/pending-shares'), soft('/api/v1/me/reading'), soft('/api/v1/agents/requests')]);
     const s = steps({ dash, faces, friends, backup, me, devices, reading }), nFriends = (friends?.friends || []).length, nDevices = (devices?.devices || []).length;
     const disk = fp?.disk, full = disk && !disk.unlimited && disk.quota_bytes && disk.used_bytes / disk.quota_bytes >= .9;
     const tile = (icon, title, line, href) => h('a', { class: 'card hm-tile', href }, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, icon), h('strong', {}, t(title)), h('span', { class: 'muted' }, line));
@@ -57,7 +62,7 @@ export default async function home(root, K) {
     root.replaceChildren(...[
       h('section', { class: 'hm-hero' }, h('h2', {}, first ? t('Bonjour {0}', first) : t('Bonjour')), h('p', { class: 'muted' }, s.files ? t('{0} fichier(s) chiffré(s) sur votre station, à vous seul.', s.files) : t('Votre espace est prêt. Commencez par y déposer quelques photos.'))),
       full ? h('p', { class: 'degraded', role: 'status' }, t('Votre espace est presque plein ({0} %).', Math.round(100 * disk.used_bytes / disk.quota_bytes)), ' ', h('a', { href: '#/money' }, t('Voir mon espace'))) : null,
-      ...(n => n.length ? [h('section', { class: 'card hm-news', 'aria-label': t('Pour vous') }, h('ul', {}, n.map(x => h('li', {}, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, x.icon), h('span', {}, t(...x.text)), h('a', { class: 'ck-btn', href: x.href }, t(x.label))))))] : [])(news({ faces, shares, backup, fp })),
+      ...(n => n.length ? [h('section', { class: 'card hm-news', 'aria-label': t('Pour vous') }, h('ul', {}, n.map(x => h('li', {}, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, x.icon), h('span', {}, t(...x.text)), h('a', { class: 'ck-btn', href: x.href }, t(x.label))))))] : [])(news({ faces, shares, backup, fp, agents })),
       memCard,
       me.captain ? h('a', { class: 'card hm-cap', href: '#/cockpit' }, h('span', { class: 'hm-ico', 'aria-hidden': 'true' }, '⚓'), h('div', {}, h('strong', {}, t('Votre station')), h('p', { class: 'muted' }, health?.status === 'ok' ? t('✅ Tout fonctionne. Ouvrir le cockpit.') : health ? t('🟠 Quelque chose demande votre attention : ouvrir le cockpit.') : t('État inconnu : ouvrir le cockpit.')))) : null,
       h('div', { class: 'grid hm-tiles' },
@@ -77,4 +82,6 @@ export default async function home(root, K) {
   const link = h('link', { rel: 'stylesheet', href: '/ui/m-home.css' }); document.head.append(link); K.cleanup(() => link.remove());
   await draw();
   K.every(60000, () => draw().catch(() => {}));
+  // Une demande d'agent arrive ou se termine : « Pour vous » le montre tout de suite.
+  K.listen(ev => { if (ev.kind === 'agent') draw().catch(() => {}); });
 }

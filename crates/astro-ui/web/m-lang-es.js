@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire es, phrases communes. Les écrans de `parts` ont aussi m-lang-es-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'account agents beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles services replication devices backup card';
+export const parts = 'about account agents beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles services replication devices backup card';
 export default {
 "{0} message(s) non lu(s)": "{0} mensaje(s) sin leer",
 "trouvée par ce qu’elle montre": "encontrada por lo que muestra",
@@ -638,4 +638,7 @@ export default {
 "Tout désélectionner": "Deseleccionar todo",
 "Terminer la sélection": "Terminar la selección",
 "Joindre": "Contactar",
+"À propos": "Acerca de",
+"{0} voudrait agir sur {1} pour vous": "{0} quiere actuar en {1} por usted",
+"{0} demande l'accès à {1}": "{0} pide acceso a {1}",
 };

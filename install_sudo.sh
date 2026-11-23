@@ -267,16 +267,24 @@ else
   run loginctl enable-linger "$TARGET" && say "  ✔ réglé : le service d'astroportd démarrera avec la machine"
 fi
 
-# --- 4. Plafond du journal systemd (sinon jusqu'à 10 % du disque ; « astroportd doctor » le vérifie) --------------
+# --- 4. Journal systemd : gardé sur disque (pour comprendre après coup ce qui s'est passé), et plafonné (sinon jusqu'à
+# 10 % du disque ; « astroportd doctor » le vérifie). Sans « Storage=persistent », un système sans /var/log/journal perd
+# tout le journal du service à chaque redémarrage, et « journalctl --user -u astroportd » ne trouve rien.
 JOURNAL_CONF=/etc/systemd/journald.conf.d/astroportd.conf
-if [ -d /etc/systemd ] && ! grep -rqs '^[[:space:]]*SystemMaxUse=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/; then
-  say ""
-  say "▶ Journal systemd"
-  if [ "$DRY" = 1 ]; then say "  \$ printf '[Journal]\\nSystemMaxUse=500M\\n' > ${JOURNAL_CONF} && systemctl restart systemd-journald"
-  elif mkdir -p "${JOURNAL_CONF%/*}" && printf '[Journal]\nSystemMaxUse=500M\n' > "$JOURNAL_CONF" && systemctl restart systemd-journald; then
-    say "  ✔ plafonné à 500 Mo (${JOURNAL_CONF})"
-  else
-    warn "plafond du journal non posé : ${JOURNAL_CONF}"
+if [ -d /etc/systemd ]; then
+  JLINES=""
+  grep -rqs '^[[:space:]]*Storage=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/ || JLINES="${JLINES}Storage=persistent\n"
+  grep -rqs '^[[:space:]]*SystemMaxUse=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/ || JLINES="${JLINES}SystemMaxUse=500M\n"
+  if [ -n "$JLINES" ]; then
+    say ""
+    say "▶ Journal systemd"
+    if [ "$DRY" = 1 ]; then say "  \$ printf '[Journal]\\n${JLINES}' >> ${JOURNAL_CONF} && systemctl restart systemd-journald"
+    elif mkdir -p "${JOURNAL_CONF%/*}" && { [ -s "$JOURNAL_CONF" ] || printf '[Journal]\n' > "$JOURNAL_CONF"; } \
+         && printf '%b' "$JLINES" >> "$JOURNAL_CONF" && systemctl restart systemd-journald; then
+      say "  ✔ réglé : $(printf '%b' "$JLINES" | tr '\n' ' ')(${JOURNAL_CONF})"
+    else
+      warn "réglage du journal non posé : ${JOURNAL_CONF}"
+    fi
   fi
 fi
 

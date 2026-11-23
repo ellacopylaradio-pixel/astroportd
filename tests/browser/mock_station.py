@@ -1,7 +1,7 @@
 """Station simulée pour les essais navigateur : API factice, fichiers statiques RÉELS de la coque (`crates/astro-ui/web/`).
 
 Utilisée par `smoke_ui.py` (test de fumée) et `docs/roman/roman_photo.py` (captures des romans-photos)."""
-import base64, io, json, math, random, sys, threading
+import base64, io, json, math, random, sys, threading, time
 from urllib.parse import unquote as _uq
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -87,8 +87,11 @@ ADMIN['index'] = dict(enabled=True, default=True, engine=[], lend=None, members=
 
 # Agents (m-agents.js) : un agent déclaré, une demande en mode navigateur ; l'écran prêté est une page de connexion dessinée.
 AGENTS = dict(agents=[dict(id='a1b2c3d4', name='OpenClaw', group='Agents', max_secs=3600, totp=False, created_at=1790000000)],
-              requests=[dict(id='r1', agent='OpenClaw', site='linkedin.com', reason='publier le résumé de la semaine', mode='navigateur', state='pending', asked_at=1790000000, until=None),
-                        dict(id='r2', agent='OpenClaw', site='impots.gouv.fr', reason='relever ma facture', mode='accord', state='pending', asked_at=1790000000, until=None)])
+              requests=[dict(id='r1', agent='OpenClaw', client='Claude Code 2.1.3', remote=False, site='linkedin.com', reason='publier le résumé de la semaine', mode='navigateur', state='pending', asked_at=1790000000, until=None),
+                        dict(id='r2', agent='OpenClaw', site='impots.gouv.fr', reason='relever ma facture', mode='accord', state='pending', asked_at=1790000000, until=None)],
+              # Récemment : une demande rendue par l'agent aussitôt (cas réel d'OpenClaw qui « essaie » le flux), une restée sans réponse.
+              recent=[dict(id='r3', agent='BORIS', site='example.org', reason='', mode='accord', state='returned', asked_at=int(time.time()) - 300, until=None),
+                      dict(id='r4', agent='BORIS', site='framagit.org', reason='', mode='accord', state='expired', asked_at=int(time.time()) - 2400, until=None)])
 # Naviguer ensemble : c1 tenue ici par Alice ; c2 tenue par la station d'un ami (Alice y est invitée).
 COSURF = {'c1': dict(id='c1', owner='aa' * 32, owner_label='alice', mine=True, level=None, url='https://impots.gouv.fr/', until=4102444800, station='12D3KooWIci', guests=[dict(hex='ab' * 32, label='Léa Martin', level='drive')]),
           'c2': dict(id='c2', owner='cd' * 32, owner_label='Marc', mine=False, level='point', url='https://www.ameli.fr/', until=4102444800, station='12D3KooWAmi', guests=[dict(hex='aa' * 32, label='alice', level='point')])}
@@ -222,7 +225,7 @@ class H(BaseHTTPRequestHandler):
                     self.wfile.flush(); time.sleep(0.4)
             except (BrokenPipeError, ConnectionResetError): pass
             return
-        if p == '/api/v1/agents/requests': return self.send(200, dict(requests=AGENTS['requests']))
+        if p == '/api/v1/agents/requests': return self.send(200, dict(requests=AGENTS['requests'], recent=AGENTS['recent']))
         if p == '/api/v1/agents/screen':
             self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
             import time

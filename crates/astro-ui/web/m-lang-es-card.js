@@ -49,7 +49,6 @@ export default {
 "Emails": "Correos",
 "nom@exemple.org": "nombre@ejemplo.org",
 "Profil public (Nostr)": "Perfil público (Nostr)",
-"À propos": "Acerca de",
 "nom@domaine.org": "nombre@dominio.org",
 "Adresse Lightning": "Dirección Lightning",
 "Classement et notes privées": "Grupos y notas privadas",

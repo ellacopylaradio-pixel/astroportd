@@ -44,6 +44,13 @@ assert.deepEqual(news({ faces: { suggestions: [], unknown: 4 } })[0].text, ['{0}
 // Un ami en secours passe avant tout le reste.
 n = news({ faces: { suggestions: [{}], unknown: 0 }, shares: { pending: [] }, backup: { hosting: [{ label: 'Léa', rescue: { station: 'x' } }, { label: 'Max' }] } });
 assert.deepEqual(n.map(x => x.icon), ['🆘', '🫂']); assert.equal(n[0].href, '#/backup'); assert.deepEqual(n[0].text[1], 'Léa');
+// Un agent attend une réponse : juste après l'ami en secours, avant le reste ; une demande déjà tranchée ne compte pas.
+n = news({ faces: { suggestions: [{}] }, backup: { hosting: [{ label: 'Léa', rescue: { station: 'x' } }] }, agents: { requests: [{ state: 'granted', agent: 'X', site: 'a.org' }, { state: 'pending', mode: 'accord', agent: 'BORIS', site: 'framagit.org' }] } });
+assert.deepEqual(n.map(x => x.icon), ['🆘', '🤖', '🫂']); assert.deepEqual(n[1].text, ['{0} demande l\'accès à {1}', 'BORIS', 'framagit.org']); assert.equal(n[1].href, '#/agents');
+assert.deepEqual(news({ agents: { requests: [{ state: 'granted', agent: 'X', site: 'a.org' }] } }), []);
+// L'appelant est nommé : le nom donné à l'agent, et le programme qui parle s'il dit autre chose.
+assert.equal(news({ agents: { requests: [{ state: 'pending', agent: 'BORIS', client: 'Claude Code 2.1.3', site: 'a.org' }] } })[0].text[1], 'BORIS (Claude Code 2.1.3)');
+assert.equal(news({ agents: { requests: [{ state: 'pending', agent: 'OpenClaw', client: 'openclaw 0.9', site: 'a.org' }] } })[0].text[1], 'OpenClaw');
 // Vigie de Public : un fichier qui en dit trop passe avant les photos et les visages ; rien à signaler = rien d'affiché.
 // Une photo HEIC non servie n'en dit pas trop (les autres photos partent nettoyées) : elle n'alarme pas l'accueil.
 n = news({ faces: { suggestions: [{}] }, shares: { pending: [{ count: 1, name: 'Fred' }] }, fp: { privacy: { unserved: 2, sensitive: 3 } } });

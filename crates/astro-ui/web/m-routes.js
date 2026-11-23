@@ -13,6 +13,8 @@ export const TABS = {
 const R = [
   ['/', 'm-home.js', 'me', 'home', null, null, 'Accueil'],
   ['/bro', 'm-bro.js', 'me', 'home', null, '/', 'Assistant'],
+  // Ce qu'est Astroport, ses crédits et comment contribuer : ouvert par le titre de l'en-tête.
+  ['/about', 'm-about.js', 'me', 'home', null, '/', 'À propos'],
   ['/cloud', null, 'me', 'files', 'Dossiers', null, 'Fichiers'],
   ['/library', 'm-library.js', 'me', 'files', 'Photos', null, 'Photos'],
   ['/media', 'm-media.js', 'me', 'files', 'Médiathèque', null, 'Médiathèque'],

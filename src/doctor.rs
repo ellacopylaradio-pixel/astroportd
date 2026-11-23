@@ -238,9 +238,24 @@ pub fn sshd_password_auth(config: &str) -> Option<bool> {
     None
 }
 
+/// Dernière valeur non vide de `key` dans un texte de configuration de journald (commentaires ignorés).
+fn journald_value(config: &str, key: &str) -> Option<String> {
+    config.lines().map(|l| l.split('#').next().unwrap_or("").trim()).filter_map(|l| l.strip_prefix(key)).filter_map(|r| r.trim_start().strip_prefix('=')).map(|v| v.trim().to_owned()).rfind(|v| !v.is_empty())
+}
+
 /// Plafond du journal systemd (`SystemMaxUse`) : sans lui, le journal peut occuper jusqu'à 10 % du disque.
 pub fn journald_cap(config: &str) -> Option<String> {
-    config.lines().map(|l| l.split('#').next().unwrap_or("").trim()).filter_map(|l| l.strip_prefix("SystemMaxUse")).filter_map(|r| r.trim_start().strip_prefix('=')).map(|v| v.trim().to_owned()).rfind(|v| !v.is_empty())
+    journald_value(config, "SystemMaxUse")
+}
+
+/// Le journal est-il gardé sur disque ? `Storage=persistent`, ou `auto` (le défaut) avec `/var/log/journal` présent.
+/// Sinon il vit en mémoire : un redémarrage efface tout ce que la station a dit, et un incident ne s'explique plus après coup.
+pub fn journald_persistent(config: &str, var_log_journal: bool) -> bool {
+    match journald_value(config, "Storage").as_deref() {
+        Some("persistent") => true,
+        None | Some("auto") => var_log_journal,
+        Some(_) => false,
+    }
 }
 
 /// Texte de `fichier` et, avant lui, des `*.conf` de `fichier.d/` (l'ordre d'application d'OpenSSH et de systemd).
@@ -304,6 +319,11 @@ fn system_checks(out: &mut Vec<Check>) {
         match journald_cap(&cfg) {
             Some(v) => out.push(check("système/journal", Level::Ok, format!("SystemMaxUse={v}"))),
             None => out.push(check("système/journal", Level::Warn, "journal systemd sans plafond : `SystemMaxUse=500M` dans /etc/systemd/journald.conf.d/ (il peut sinon prendre 10 % du disque)")),
+        }
+        if journald_persistent(&cfg, Path::new("/var/log/journal").is_dir()) {
+            out.push(check("système/journal", Level::Ok, "gardé sur disque"));
+        } else {
+            out.push(check("système/journal", Level::Warn, "journal en mémoire seulement : un redémarrage efface ce que la station a dit ; `Storage=persistent` dans /etc/systemd/journald.conf.d/ (install_sudo.sh le pose)"));
         }
     }
 }
@@ -517,5 +537,9 @@ mod tests {
         // journald : la dernière valeur non vide gagne.
         assert_eq!(journald_cap("[Journal]\n#SystemMaxUse=\nSystemMaxUse=200M\nSystemMaxUse=500M # plafond\n").as_deref(), Some("500M"));
         assert_eq!(journald_cap("[Journal]\n#SystemMaxUse=\nSystemKeepFree=2G\n"), None);
+        assert!(journald_persistent("[Journal]\nStorage=persistent\n", false));
+        assert!(journald_persistent("[Journal]\n#Storage=volatile\n", true), "auto par défaut, dossier présent");
+        assert!(!journald_persistent("[Journal]\n#Storage=auto\n", false), "auto sans /var/log/journal : en mémoire");
+        assert!(!journald_persistent("[Journal]\nStorage=volatile\n", true));
     }
 }

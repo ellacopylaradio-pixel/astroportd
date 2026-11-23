@@ -1104,6 +1104,8 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
             None => Arc::new(base),
         }
     };
+    // Échéances des demandes (sans réponse, accord échu) : inscrites au journal d'audit et dites au membre.
+    background.push(tokio::spawn(agents.clone().run_lapses(Duration::from_secs(60), stop_watch.clone())));
     // Naviguer ensemble : un membre se fait aider par un ami sur un site (même navigateur jetable que les agents).
     let cosurf = {
         let data = a.db.parent().map_or_else(|| PathBuf::from("."), PathBuf::from);

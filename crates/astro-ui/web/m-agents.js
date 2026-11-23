@@ -9,7 +9,7 @@ export default async function agents(root, K) {
   const durOf = s => (DUR.find(d => d[0] >= s) || DUR[DUR.length - 1])[1];
   const post = (url, body) => K.api(url, { method: 'POST', body });
   const left = until => Math.max(0, Math.ceil((until * 1000 - Date.now()) / 60000));
-  const reqs = h('div', { class: 'ag-reqs' }), list = h('ul', { class: 'ag-list' }), fresh = h('div', { class: 'ag-token', hidden: true });
+  const reqs = h('div', { class: 'ag-reqs' }), past = h('div', { class: 'ag-past' }), list = h('ul', { class: 'ag-list' }), fresh = h('div', { class: 'ag-token', hidden: true });
   const viewers = new Map(), watching = new Set();
   let load = async () => {};
   const act = async (btn, run, ok) => {
@@ -26,6 +26,10 @@ export default async function agents(root, K) {
   K.cleanup(() => viewers.forEach(v => v.stop()));
 
   // ── Les demandes en cours ──
+  // Qui appelle : le nom que le membre a donné à l'agent (c'est son jeton), le programme tel qu'il se présente (il le dit
+  // lui-même, rien ne le prouve), et s'il passe par une autre station de la constellation.
+  const who = r => h('p', { class: 'muted ag-who' }, r.client ? t('Programme : {0} (c\'est lui qui le dit)', r.client) : t('Le programme ne s\'est pas présenté'),
+    r.remote ? ' · ' + t('passe par une autre station de votre constellation') : '');
   const card = r => {
     const browse = r.mode === 'navigateur', stop = (label, ok) => { const b = h('button', { type: 'button', class: 'ghost' }, label); b.onclick = () => act(b, () => post('/api/v1/agents/stop', { id: r.id }), ok); return b; };
     const why = r.reason ? h('p', { class: 'muted' }, '« ', r.reason, ' »') : null;
@@ -38,7 +42,7 @@ export default async function agents(root, K) {
       yes.onclick = () => act(yes, () => post('/api/v1/agents/decide', { id: r.id, approve: true, secs: +sel.value, hosts: more.value.split(/[\s,]+/).filter(Boolean) }), browse ? null : t('Accord donné'));
       const no = h('button', { type: 'button', class: 'ghost' }, t('Refuser'));
       no.onclick = () => act(no, () => post('/api/v1/agents/decide', { id: r.id, approve: false }), t('Demande refusée'));
-      return h('li', { class: 'ag-req' }, h('strong', {}, browse ? t('{0} voudrait agir sur {1} pour vous', r.agent, r.site) : t('{0} demande l\'accès à {1}', r.agent, r.site)), why, linked,
+      return h('li', { class: 'ag-req' }, h('strong', {}, browse ? t('{0} voudrait agir sur {1} pour vous', r.agent, r.site) : t('{0} demande l\'accès à {1}', r.agent, r.site)), who(r), why, linked,
         h('div', { class: 'ag-row' }, h('label', {}, t('Lui laisser'), ' ', sel), yes, no));
     }
     if (r.state === 'login') {
@@ -50,13 +54,24 @@ export default async function agents(root, K) {
     }
     const see = watching.has(r.id), eyeBtn = h('button', { type: 'button', class: 'ghost', onclick: () => { if (see) watching.delete(r.id); else watching.add(r.id); load(); } }, see ? t('Ne plus regarder') : t('Regarder'));
     return h('li', { class: 'ag-req ag-live' }, h('strong', {}, browse ? t('{0} agit sur {1} pour vous', r.agent, r.site) : t('{0} a accès à {1}', r.agent, r.site)), ' ',
-      h('span', { class: 'pill' }, t('reste {0} min', left(r.until))), why,
+      h('span', { class: 'pill' }, t('reste {0} min', left(r.until))), who(r), why,
       browse && see ? viewer(r.id) : null,
       h('div', { class: 'ag-row' }, browse ? eyeBtn : null, stop(browse ? t('Reprendre la main') : t('Retirer l\'accès'), t('Vous avez repris la main'))));
   };
   const showReqs = all => {
     for (const [id, v] of viewers) if (!all.some(r => r.id === id && (r.state === 'login' || (r.state === 'granted' && watching.has(id))))) { v.stop(); viewers.delete(id); }
     reqs.replaceChildren(all.length ? h('ul', { class: 'ag-list' }, all.map(card)) : h('p', { class: 'muted' }, t('Aucune demande en cours.')));
+  };
+
+  // ── Récemment : les demandes terminées dans l'heure, pour qu'aucune ne passe sans trace (même rendue au bout de 8 s) ──
+  const ago = at => { const m = Math.max(0, Math.round((Date.now() / 1000 - at) / 60)); return m < 1 ? t('à l\'instant') : t('il y a {0} min', m); };
+  const ending = r => ({ returned: t('rendue par l\'agent'), revoked: t('reprise par vous'), denied: t('refusée'), ended: t('navigateur fermé'),
+    expired: r.until ? t('temps écoulé') : t('expirée sans réponse') })[r.state] || r.state;
+  const showPast = all => {
+    past.hidden = !all.length;
+    past.replaceChildren(h('h3', {}, t('Récemment')), h('ul', { class: 'ag-list' }, all.map(r => h('li', { class: 'ag-req ag-done' },
+      h('strong', {}, r.agent), r.client ? h('small', {}, ' (' + r.client + ')') : '', ' · ', r.site, r.mode === 'navigateur' ? ' 🌐' : '', ' ',
+      h('span', { class: 'pill' }, ending(r)), ' ', h('small', { class: 'muted' }, ago(r.asked_at))))));
   };
 
   // ── Les agents déclarés ──
@@ -89,14 +104,14 @@ export default async function agents(root, K) {
 
   load = async () => {
     const [r, a] = await Promise.all([K.api('/api/v1/agents/requests'), K.api('/api/v1/agents')]);
-    showReqs(r.requests); showAgents(a.agents);
+    showReqs(r.requests); showPast(r.recent || []); showAgents(a.agents);
     // Agent sur une autre station : il parle à SA station, qui relaie vers celle-ci par le maillage.
     if (a.here) { remoteHow.hidden = false; remoteHow.replaceChildren(t('Agent sur une autre station : il s\'adresse à elle, avec cette adresse :'), ' ', code(`https://<${t('sa station')}>/mcp?station=${a.here}`)); }
   };
   K.listen(ev => { if (ev.kind === 'agent') load().catch(() => {}); });
   const tick = setInterval(() => load().catch(() => {}), 30000); K.cleanup(() => clearInterval(tick));
   root.replaceChildren(
-    h('section', { class: 'card wide' }, h('h2', {}, '🤖 ', t('Demandes en cours')), reqs),
+    h('section', { class: 'card wide' }, h('h2', {}, '🤖 ', t('Demandes en cours')), reqs, past),
     h('section', { class: 'card wide' }, h('h2', {}, t('Mes agents')),
       h('p', { class: 'muted' }, t('Un agent est un assistant (une IA, un robot) qui peut demander à agir pour vous. Il ne reçoit jamais votre mot de passe : vous décidez à chaque fois.')),
       list, form, fresh, howto));

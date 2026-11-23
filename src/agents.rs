@@ -50,10 +50,12 @@ const PREFIX: &str = "ag1_";
 const MAX_AGENTS: usize = 8;
 /// Demandes en attente au plus par membre (au-delà : refus, pour ne pas inonder le titulaire).
 const MAX_PENDING: usize = 5;
+/// Demandes terminées (dans l'heure) montrées au membre sous « Récemment ».
+const RECENT_SHOWN: usize = 10;
 /// Demandes par agent et par heure.
 const ASKS_PER_HOUR: usize = 20;
-/// Une demande non traitée expire au bout de 5 minutes.
-const REQUEST_TTL_SECS: u64 = 300;
+/// Une demande non traitée expire au bout de 30 minutes : le membre n'est pas toujours devant son écran (5 minutes avant 1.11).
+const REQUEST_TTL_SECS: u64 = 1800;
 /// Durée maximale d'un accord, quoi que dise le registre.
 pub const MAX_GRANT_SECS: u64 = 3600;
 /// Temps laissé au membre pour se connecter dans le navigateur jetable.
@@ -186,6 +188,10 @@ struct Request {
     extra_hosts: Vec<String>,
     /// Station de l'agent quand elle n'est pas celle-ci : le navigateur lui est ouvert par le maillage.
     station: Option<String>,
+    /// L'échéance (demande sans réponse, accord échu) est déjà inscrite au journal et dite au membre.
+    lapsed: bool,
+    /// Programme qui a fait la demande, tel qu'il s'est présenté (vide : il ne l'a pas dit).
+    client: String,
 }
 
 impl Request {
@@ -205,8 +211,22 @@ impl Request {
 
     fn view(&self, id: &str, at: u64) -> Value {
         let until = matches!(self.state, State::Granted | State::Login).then_some(self.until);
-        json!({ "id": id, "agent": self.agent_name, "site": self.site, "hosts": self.extra_hosts, "reason": self.reason, "mode": self.mode.as_str(), "state": self.label(at), "asked_at": self.created, "until": until })
+        json!({ "id": id, "agent": self.agent_name, "client": (!self.client.is_empty()).then_some(&self.client), "remote": self.station.is_some(), "site": self.site, "hosts": self.extra_hosts, "reason": self.reason, "mode": self.mode.as_str(), "state": self.label(at), "asked_at": self.created, "until": until })
     }
+}
+
+/// Nom et version du programme d'après `clientInfo` (MCP `initialize`) : texte sans caractère de contrôle, 60 au plus.
+fn client_label(params: &Value) -> Option<String> {
+    let info = params.get("clientInfo")?;
+    let name = info.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty())?;
+    let version = info.get("version").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+    let label = if version.is_empty() { name.to_owned() } else { format!("{name} {version}") };
+    Some(label.chars().filter(|c| !c.is_control()).take(60).collect())
+}
+
+/// Comment nommer l'appelant au membre : le nom qu'il a donné à l'agent, et le programme s'il dit autre chose.
+fn caller(agent: &str, client: &str) -> String {
+    if client.is_empty() || client.to_lowercase().starts_with(&agent.to_lowercase()) { agent.to_owned() } else { format!("{agent} ({client})") }
 }
 
 /// Ordres au superviseur d'une session de navigateur.
@@ -275,6 +295,9 @@ pub struct Agents {
     sessions: Sessions,
     browser: Option<BrowserCfg>,
     p2p: Option<(P2pHandle, Arc<Forwards>)>,
+    /// Programme qui parle avec le jeton de chaque agent (`<membre>:<agent>`), tel qu'il s'est présenté à `initialize`
+    /// (`clientInfo` du protocole MCP) : déclaré par le programme lui-même, montré au membre comme tel.
+    clients: Mutex<HashMap<String, String>>,
 }
 
 async fn audit_to(db: &Db, data: Value) {
@@ -285,7 +308,7 @@ impl Agents {
     /// Service de registre sur `db`, signant avec les clés de `keys` et publiant par `publish`.
     #[must_use]
     pub fn new(db: Arc<Db>, keys: Arc<dyn KeySource>, publish: PublishFn) -> Self {
-        Self { db, keys, publish, activity: None, requests: Arc::default(), asks: Mutex::new(HashMap::new()), sessions: Arc::default(), browser: None, p2p: None }
+        Self { db, keys, publish, activity: None, requests: Arc::default(), asks: Mutex::new(HashMap::new()), sessions: Arc::default(), browser: None, p2p: None, clients: Mutex::new(HashMap::new()) }
     }
 
     /// Dit les demandes sur le bus d'activité du titulaire.
@@ -466,6 +489,46 @@ impl Agents {
         });
     }
 
+    /// Demandes arrivées à échéance sans que rien ne le dise : une demande restée sans réponse, ou un accord (mode accord)
+    /// échu. Le mode navigateur a son superviseur, qui conclut lui-même. Chacune est inscrite au journal d'audit et dite au
+    /// membre une seule fois, pour que le journal raconte chaque demande jusqu'au bout.
+    pub async fn note_lapses(&self) -> usize {
+        let at = now();
+        let due: Vec<(String, String, String, String, bool)> = {
+            let mut map = locked(&self.requests);
+            map.iter_mut()
+                .filter(|(_, r)| !r.lapsed && r.label(at) == "expired" && (r.state == State::Pending || (r.state == State::Granted && r.mode == Mode::Accord)))
+                .map(|(id, r)| {
+                    r.lapsed = true;
+                    (id.clone(), r.owner.clone(), r.agent_name.clone(), r.site.clone(), r.state == State::Pending)
+                })
+                .collect()
+        };
+        for (id, owner, who, site, unanswered) in &due {
+            self.audit(json!({ "event": "expired", "hex": owner, "request": id, "site": site, "was": if *unanswered { "pending" } else { "granted" } })).await;
+            if let Some(bus) = &self.activity {
+                let what = if *unanswered { format!("La demande de {who} pour {site} a expiré sans réponse") } else { format!("Temps écoulé : {who} n'a plus accès à {site}") };
+                bus.publish_to(Audience::Owner(owner.clone()), "agent", "agents", what, Some(json!({ "request": id, "site": site, "agent": who })));
+            }
+        }
+        due.len()
+    }
+
+    /// Tâche de fond : relève les échéances toutes les `every`, jusqu'à l'arrêt de la station.
+    pub async fn run_lapses(self: Arc<Self>, every: std::time::Duration, mut stop: tokio::sync::watch::Receiver<bool>) {
+        loop {
+            self.note_lapses().await;
+            tokio::select! {
+                () = tokio::time::sleep(every) => {}
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     /// Un agent demande l'accès à `site` (`mode` : `accord` par défaut, ou `navigateur`). Rend l'identifiant de la demande ;
     /// le membre est prévenu.
     ///
@@ -491,6 +554,7 @@ impl Agents {
         let mut raw = [0u8; 8];
         getrandom::fill(&mut raw).map_err(|e| AgentError::Internal(format!("aléa du système indisponible : {e}")))?;
         let id = hex::encode(raw);
+        let client = locked(&self.clients).get(&format!("{owner}:{}", agent.id)).cloned().unwrap_or_default();
         {
             let mut map = self.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::sweep(&mut map, at);
@@ -498,12 +562,13 @@ impl Agents {
             if waiting >= MAX_PENDING {
                 return Err(AgentError::Limited("trop de demandes en attente : le membre doit d'abord répondre".into()));
             }
-            map.insert(id.clone(), Request { owner: owner.to_owned(), agent_id: agent.id.clone(), agent_name: agent.name.clone(), site: site.clone(), reason: reason.clone(), created: at, state: State::Pending, until: 0, mode, grant_secs: 0, extra_hosts: Vec::new(), station: agent.station.clone() });
+            map.insert(id.clone(), Request { owner: owner.to_owned(), agent_id: agent.id.clone(), agent_name: agent.name.clone(), site: site.clone(), reason: reason.clone(), created: at, state: State::Pending, until: 0, mode, grant_secs: 0, extra_hosts: Vec::new(), station: agent.station.clone(), lapsed: false, client: client.clone() });
         }
-        self.audit(json!({ "event": "ask", "hex": owner, "agent": agent.id, "site": site, "mode": mode.as_str(), "request": id })).await;
+        self.audit(json!({ "event": "ask", "hex": owner, "agent": agent.id, "client": client, "remote": agent.station, "site": site, "mode": mode.as_str(), "request": id })).await;
         if let Some(bus) = &self.activity {
-            let what = if mode == Mode::Navigateur { format!("{} voudrait agir sur {site} pour vous", agent.name) } else { format!("{} demande l'accès à {site}", agent.name) };
-            bus.publish_to(Audience::Owner(owner.to_owned()), "agent", "agents", what, Some(json!({ "request": id, "site": site, "agent": agent.name, "mode": mode.as_str() })));
+            let who = caller(&agent.name, &client);
+            let what = if mode == Mode::Navigateur { format!("{who} voudrait agir sur {site} pour vous") } else { format!("{who} demande l'accès à {site}") };
+            bus.publish_to(Audience::Owner(owner.to_owned()), "agent", "agents", what, Some(json!({ "request": id, "site": site, "agent": agent.name, "client": client, "mode": mode.as_str() })));
         }
         Ok(json!({ "id": id, "state": "pending", "mode": mode.as_str(), "expires_in": REQUEST_TTL_SECS }))
     }
@@ -545,10 +610,11 @@ impl Agents {
     /// Termine une demande accordée ou en cours (`revoked` par le membre, `returned` par l'agent).
     async fn finish(&self, owner: &str, id: &str, agent_id: Option<&str>, reason: &'static str) -> Result<Value, AgentError> {
         let at = now();
-        {
+        let (who, site, was_pending) = {
             let mut map = locked(&self.requests);
             let r = map.get_mut(id).filter(|r| r.owner == owner && agent_id.is_none_or(|a| r.agent_id == a)).ok_or(AgentError::NotFound)?;
-            match r.label(at) {
+            let label = r.label(at);
+            match label {
                 "pending" if agent_id.is_none() => r.state = State::Denied,
                 "pending" => {
                     r.state = State::Closed(reason);
@@ -563,9 +629,16 @@ impl Agents {
                 }
                 _ => return Err(AgentError::Invalid("rien à arrêter : cette demande n'est plus en cours".into())),
             }
-        }
+            (r.agent_name.clone(), r.site.clone(), label == "pending")
+        };
         if !self.stop_session(id, reason).await {
             self.audit(json!({ "event": reason, "hex": owner, "request": id })).await;
+            // Sans navigateur, aucun superviseur ne prévient le membre : une demande retirée ou un accord rendu par l'agent
+            // se dit ici, sinon une demande de quelques secondes passerait sans laisser de trace à l'écran.
+            if let (Some(bus), Some(_)) = (&self.activity, agent_id) {
+                let what = if was_pending { format!("{who} a retiré sa demande d'accès à {site}") } else { format!("{who} a rendu l'accès à {site}") };
+                bus.publish_to(Audience::Owner(owner.to_owned()), "agent", "agents", what, Some(json!({ "request": id, "site": site, "agent": who })));
+            }
         }
         let map = locked(&self.requests);
         Ok(map.get(id).map_or_else(|| json!({ "id": id, "state": reason }), |r| r.view(id, now())))
@@ -683,15 +756,27 @@ impl Agents {
         Ok(())
     }
 
-    /// Demandes en cours du membre (en attente ou accordées), pour son écran.
+    /// Demandes en cours du membre (en attente ou accordées), et `recent` : celles terminées dans l'heure (refusées, expirées,
+    /// rendues ou reprises), les plus récentes d'abord, pour qu'aucune demande ne passe sans laisser de trace à son écran.
     #[must_use]
     pub fn requests(&self, owner: &str) -> Value {
         let at = now();
         let mut map = self.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::sweep(&mut map, at);
-        let mut rows: Vec<(u64, Value)> = map.iter().filter(|(_, r)| r.owner == owner && r.label(at) != "expired" && !matches!(r.state, State::Closed(_))).map(|(id, r)| (r.created, r.view(id, at))).collect();
-        rows.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
-        json!({ "requests": rows.into_iter().map(|(_, v)| v).collect::<Vec<_>>() })
+        let mut live: Vec<(u64, Value)> = Vec::new();
+        let mut done: Vec<(u64, Value)> = Vec::new();
+        for (id, r) in map.iter().filter(|(_, r)| r.owner == owner) {
+            if matches!(r.label(at), "pending" | "login" | "granted") {
+                live.push((r.created, r.view(id, at)));
+            } else {
+                done.push((r.created, r.view(id, at)));
+            }
+        }
+        live.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        done.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        done.truncate(RECENT_SHOWN);
+        let rows = |v: Vec<(u64, Value)>| v.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
+        json!({ "requests": rows(live), "recent": rows(done) })
     }
 
     /// Le membre accorde (`secs`, borné par l'agent et par [`MAX_GRANT_SECS`]) ou refuse. En mode navigateur, accorder
@@ -821,8 +906,13 @@ impl Agents {
         let reply = |result: Value| id.clone().map(|id| json!({ "jsonrpc": "2.0", "id": id, "result": result }));
         let fail = |code: i64, message: &str| id.clone().map(|id| json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }));
         Ok(match method {
-            "initialize" => reply(json!({ "protocolVersion": SESSION_TOOLS, "capabilities": { "tools": {} }, "serverInfo": { "name": "astroportd", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Ce serveur ne remet jamais de mot de passe. demander_acces prévient le membre, qui accorde ou refuse ; interrogez ensuite statut_acces. En mode navigateur, attendez l'état granted puis connectez-vous à browser_ws_endpoint (CDP) ; appelez rendre_acces quand vous avez fini." })),
+            "initialize" => {
+                if let Some(c) = body.get("params").and_then(client_label) {
+                    locked(&self.clients).insert(format!("{owner}:{}", agent.id), c);
+                }
+                reply(json!({ "protocolVersion": SESSION_TOOLS, "capabilities": { "tools": {} }, "serverInfo": { "name": "astroportd", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": "Ce serveur ne remet jamais de mot de passe. demander_acces prévient le membre, qui accorde ou refuse ; interrogez ensuite statut_acces. En mode navigateur, attendez l'état granted puis connectez-vous à browser_ws_endpoint (CDP) ; appelez rendre_acces quand vous avez fini." }))
+            }
             "ping" => reply(json!({})),
             "tools/list" => reply(json!({ "tools": Self::tools() })),
             "tools/call" => {
@@ -1165,7 +1255,7 @@ mod tests {
         let owner = hex_of(&ALICE);
         let token = token_of(&agents.enroll(&owner, "Claude Code", "Agents", 120, false).await.unwrap());
 
-        let init = call(&agents, &token, "initialize", json!({})).await;
+        let init = call(&agents, &token, "initialize", json!({ "clientInfo": { "name": "OpenClaw\u{7}", "version": "0.9.1" } })).await;
         assert_eq!(init["result"]["serverInfo"]["name"], "astroportd");
         let tools = call(&agents, &token, "tools/list", json!({})).await;
         let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -1177,8 +1267,10 @@ mod tests {
         let id = serde_json::from_str::<Value>(asked["result"]["content"][0]["text"].as_str().unwrap()).unwrap()["id"].as_str().unwrap().to_owned();
         let mine = agents.requests(&owner);
         assert_eq!((mine["requests"][0]["site"].as_str(), mine["requests"][0]["state"].as_str()), (Some("example.org"), Some("pending")));
+        // L'appelant est nommé : le programme tel qu'il s'est présenté à initialize (caractères de contrôle retirés).
+        assert_eq!((mine["requests"][0]["client"].as_str(), mine["requests"][0]["remote"].as_bool()), (Some("OpenClaw 0.9.1"), Some(false)));
         let seen: Vec<_> = bus.recent(10).iter().filter(|a| a.kind == "agent").cloned().collect();
-        assert!(seen.len() == 1 && seen[0].message.contains("Claude Code") && seen[0].message.contains("example.org"), "{seen:?}");
+        assert!(seen.len() == 1 && seen[0].message.contains("Claude Code (OpenClaw 0.9.1) demande l'accès à example.org"), "{seen:?}");
 
         let status = |t: String| {
             let (agents, id) = (&agents, id.clone());
@@ -1198,6 +1290,58 @@ mod tests {
         // Trace d'audit : qui a demandé quoi, jamais de secret.
         let audit: Vec<String> = db.readers().read(|c| Ok(c.prepare("SELECT data FROM journal WHERE stream = 'audit.agent' ORDER BY id")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)).await.unwrap();
         assert!(audit.iter().any(|d| d.contains("\"ask\"") && d.contains("example.org")) && audit.iter().any(|d| d.contains("\"grant\"")), "{audit:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Un agent qui demande puis rend aussitôt (cas réel : OpenClaw « essaie » le flux) : le membre en garde la trace.
+    #[tokio::test]
+    async fn a_request_withdrawn_at_once_still_shows_to_the_member() {
+        let (dir, _, agents, _) = rig("withdrawn").await;
+        let bus = ActivityBus::new();
+        let agents = agents.with_activity(bus.clone());
+        let owner = hex_of(&ALICE);
+        let token = token_of(&agents.enroll(&owner, "BORIS", "Agents", 600, false).await.unwrap());
+        let asked = call(&agents, &token, "tools/call", json!({ "name": "demander_acces", "arguments": { "site": "example.org" } })).await;
+        let id = serde_json::from_str::<Value>(asked["result"]["content"][0]["text"].as_str().unwrap()).unwrap()["id"].as_str().unwrap().to_owned();
+        let back = call(&agents, &token, "tools/call", json!({ "name": "rendre_acces", "arguments": { "id": id } })).await;
+        assert_eq!(back["result"]["isError"], false, "{back}");
+
+        let mine = agents.requests(&owner);
+        assert!(mine["requests"].as_array().unwrap().is_empty(), "plus en cours : {mine}");
+        assert_eq!((mine["recent"][0]["site"].as_str(), mine["recent"][0]["state"].as_str(), mine["recent"][0]["agent"].as_str()), (Some("example.org"), Some("returned"), Some("BORIS")), "{mine}");
+        let said: Vec<String> = bus.recent(10).iter().filter(|a| a.kind == "agent").map(|a| a.message.clone()).collect();
+        assert!(said.iter().any(|m| m.contains("BORIS a retiré sa demande d'accès à example.org")), "{said:?}");
+
+        // Une demande refusée n'est plus « en cours » : elle passe dans les récentes.
+        let asked = call(&agents, &token, "tools/call", json!({ "name": "demander_acces", "arguments": { "site": "example.com" } })).await;
+        let id = serde_json::from_str::<Value>(asked["result"]["content"][0]["text"].as_str().unwrap()).unwrap()["id"].as_str().unwrap().to_owned();
+        agents.decide(&owner, &id, false, None).await.unwrap();
+        let mine = agents.requests(&owner);
+        // (Même seconde que la précédente : l'ordre entre elles n'est pas fixé, on la cherche par son site.)
+        let denied = mine["recent"].as_array().unwrap().iter().find(|r| r["site"] == "example.com").map(|r| r["state"].clone());
+        assert!(mine["requests"].as_array().unwrap().is_empty() && denied == Some(json!("denied")), "{mine}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Une demande restée sans réponse : à l'échéance, le journal et le membre le savent, une seule fois.
+    #[tokio::test]
+    async fn an_unanswered_request_lapses_into_the_journal_once() {
+        let (dir, db, agents, _) = rig("lapse").await;
+        let bus = ActivityBus::new();
+        let agents = agents.with_activity(bus.clone());
+        let owner = hex_of(&ALICE);
+        let token = token_of(&agents.enroll(&owner, "BORIS", "Agents", 600, false).await.unwrap());
+        let asked = call(&agents, &token, "tools/call", json!({ "name": "demander_acces", "arguments": { "site": "framagit.org" } })).await;
+        let id = serde_json::from_str::<Value>(asked["result"]["content"][0]["text"].as_str().unwrap()).unwrap()["id"].as_str().unwrap().to_owned();
+        assert_eq!(agents.note_lapses().await, 0, "pas encore échue");
+        locked(&agents.requests).get_mut(&id).unwrap().created -= REQUEST_TTL_SECS + 1;
+        assert_eq!(agents.note_lapses().await, 1);
+        assert_eq!(agents.note_lapses().await, 0, "une seule fois");
+        assert_eq!(agents.requests(&owner)["recent"][0]["state"], "expired");
+        let audit: Vec<String> = db.readers().read(|c| Ok(c.prepare("SELECT data FROM journal WHERE stream = 'audit.agent' ORDER BY id")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)).await.unwrap();
+        assert!(audit.iter().any(|d| d.contains("\"expired\"") && d.contains(&id) && d.contains("\"pending\"")), "{audit:?}");
+        let said: Vec<String> = bus.recent(10).iter().filter(|a| a.kind == "agent").map(|a| a.message.clone()).collect();
+        assert!(said.iter().any(|m| m.contains("La demande de BORIS pour framagit.org a expiré sans réponse")), "{said:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
