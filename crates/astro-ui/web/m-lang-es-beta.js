@@ -5,7 +5,6 @@ export default {
 "Votre idée, en quelques mots": "Su idea, en pocas palabras",
 "Ce que vous faisiez, ce que vous attendiez, ce qui s’est passé.": "Lo que hacía, lo que esperaba, lo que pasó.",
 "À quoi cela servirait, pour qui, comment vous l’imaginez.": "Para qué serviría, para quién, cómo lo imagina.",
-"Envoyer": "Enviar",
 "Description": "Descripción",
 "Signaler un souci": "Informar de un problema",
 "Proposer une idée": "Proponer una idea",
@@ -17,4 +16,5 @@ export default {
 "Astroport est en bêta": "Astroport está en beta",
 "Il s’améliore chaque semaine, avec ceux qui l’utilisent. Un souci, une idée ? Chacun peut participer à rendre Astroport meilleur.": "Mejora cada semana, con quienes lo usan. ¿Un problema, una idea? Todos pueden ayudar a mejorar Astroport.",
 "Le code est libre (AGPL)": "El código es libre (AGPL)",
+"Envoyer": "Enviar",
 };

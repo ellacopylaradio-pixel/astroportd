@@ -5,7 +5,6 @@ export default {
 "Votre idée, en quelques mots": "Your idea, in a few words",
 "Ce que vous faisiez, ce que vous attendiez, ce qui s’est passé.": "What you were doing, what you expected, what happened.",
 "À quoi cela servirait, pour qui, comment vous l’imaginez.": "What it would be for, for whom, how you picture it.",
-"Envoyer": "Send",
 "Description": "Description",
 "Signaler un souci": "Report a problem",
 "Proposer une idée": "Suggest an idea",
@@ -17,4 +16,5 @@ export default {
 "Astroport est en bêta": "Astroport is in beta",
 "Il s’améliore chaque semaine, avec ceux qui l’utilisent. Un souci, une idée ? Chacun peut participer à rendre Astroport meilleur.": "It gets better every week, with the people who use it. A problem, an idea? Everyone can help make Astroport better.",
 "Le code est libre (AGPL)": "The code is free (AGPL)",
+"Envoyer": "Send",
 };

@@ -424,6 +424,12 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/planes': return self.send(200, dict(name=body['name'], http='127.0.0.1:8092', p2p='/ip4/0.0.0.0/tcp/4102', swarm_key_path='/x/zen2/swarm.key', created_key='/key/swarm/psk/1.0.0/\\n/base16/\\n' + 'ab' * 32))
         if p == '/api/v1/me/ai':
             STATE['ai'] = bool(body.get('ollama_url') or body.get('provider')); return self.send(200, dict(ollama_url=body.get('ollama_url'), provider=body.get('provider'), has_key=False, model=None, declared=STATE['ai']))
+        if p == '/api/v1/bro/say':
+            # Photos : réponse locale qui a lu les données ; « facture » sans IA locale : refus, accord demandé ; accord : cloud.
+            if 'photo' in body['text'].lower(): return self.send(200, dict(reply='J’ai trouvé 3 photos de Léa à Toulouse, en juillet 2025.', where='ucloud', via='Ollama de cette station', source='station', model='llama3.2:3b', private=True, tools=['chercher'], tools_offered=True, tokens=280))
+            if body.get('allow_cloud'): return self.send(200, dict(reply='Votre facture d’octobre : 74,20 € d’électricité, à payer avant le 15.', where='cloud', via='MixRoute', source='station', model='deepseek-v4-flash', private=True, tools=['chercher'], tools_offered=True, tokens=900))
+            if body.get('private'): return self.send(200, dict(refused='private', cloud='MixRoute', reply='Cette conversation contient vos données privées, et votre station n’a pas d’IA qui tourne chez vous : je ne les envoie pas sur Internet sans votre accord.'))
+            return self.send(200, dict(reply='Bonjour ! Je suis BRO.', where='cloud', via='MixRoute', source='station', model='deepseek-v4-flash', private=False, tools=[], tools_offered=False, tokens=40))
         if p == '/api/v1/me/ai/test': return self.send(200, AI_VIEW['tests'].get(body['family'], {}))
         if p == '/api/v1/station/ai':
             if 'member' in body: STATION_AI['members'][body['member']['hex']] = body['member']['rights']

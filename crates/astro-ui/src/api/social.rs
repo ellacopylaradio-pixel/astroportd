@@ -71,6 +71,11 @@ pub trait SocialApi: Auth {
     }
     /// Dialogue avec BRO.
     fn bro_say(&self, who: &Principal, text: String) -> impl Future<Output = Result<Value, ApiError>> + Send;
+    /// Dialogue avec BRO, avec l'historique de la conversation, son drapeau « privée » et l'accord du membre pour le cloud.
+    /// Par défaut : [`SocialApi::bro_say`] sur le seul texte.
+    fn bro_ask(&self, who: &Principal, ask: BroAsk) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        self.bro_say(who, ask.text)
+    }
     /// Agents déclarés par le membre (sans jeton ni empreinte).
     fn agents_list(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
@@ -668,6 +673,31 @@ async fn set_ai_params<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p
 #[derive(Deserialize)]
 struct SayBody {
     text: String,
+    #[serde(default)]
+    history: Vec<HistoryItem>,
+    #[serde(default)]
+    private: bool,
+    #[serde(default)]
+    allow_cloud: bool,
+}
+
+#[derive(Deserialize)]
+struct HistoryItem {
+    role: String,
+    content: String,
+}
+
+/// Une question à BRO, avec sa conversation.
+#[derive(Debug, Clone, Default)]
+pub struct BroAsk {
+    /// Le message.
+    pub text: String,
+    /// Messages précédents `(rôle, texte)`.
+    pub history: Vec<(String, String)>,
+    /// La conversation a déjà transporté une donnée privée.
+    pub private: bool,
+    /// Accord du membre, pour cette fois, d'envoyer une conversation privée au cloud.
+    pub allow_cloud: bool,
 }
 
 async fn agents_list<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
@@ -876,7 +906,8 @@ async fn bro_say<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Aut
     if text.is_empty() || text.chars().count() > 2000 {
         return reply(Err(ApiError::bad_request("message de 1 à 2000 caractères attendu")));
     }
-    reply(st.backend.bro_say(&p, text).await)
+    let history = body.history.into_iter().rev().take(20).rev().map(|h| (h.role, h.content.chars().take(6000).collect())).collect();
+    reply(st.backend.bro_ask(&p, BroAsk { text, history, private: body.private, allow_cloud: body.allow_cloud }).await)
 }
 
 async fn contacts<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {

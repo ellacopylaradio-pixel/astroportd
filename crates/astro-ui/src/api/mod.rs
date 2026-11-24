@@ -394,7 +394,7 @@ pub struct UiState<B> {
 pub use ucloud::{MediaWork, UcloudApi};
 pub use faces::FacesApi;
 pub use coop::CoopApi;
-pub use social::{MeetOp, SocialApi};
+pub use social::{BroAsk, MeetOp, SocialApi};
 pub use account::AccountApi;
 pub use onboarding::OnboardApi;
 pub use station::StationApi;

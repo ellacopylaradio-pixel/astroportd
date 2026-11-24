@@ -28,6 +28,44 @@ pub struct SocialBackend<B: BlobStore> {
     pub(super) invites: Option<Arc<crate::invites::Invites<B>>>,
 }
 
+/// Outils de BRO pour un membre, en lecture seule : la recherche de sa bibliothèque (mots, personnes, villes, dates) et son solde.
+struct BroTools {
+    services: Arc<StationServices>,
+    hex: String,
+}
+
+impl crate::bro_chat::Tools for BroTools {
+    async fn run(&self, name: &str, args: &Value) -> Result<Value, String> {
+        match name {
+            "chercher" => {
+                let q: String = args.get("requete").and_then(Value::as_str).unwrap_or_default().chars().take(200).collect();
+                if q.trim().is_empty() {
+                    return Err("requête vide".into());
+                }
+                let owner = self.hex.clone();
+                let found = self
+                    .services
+                    .db
+                    .readers()
+                    .read(move |c| {
+                        let s = crate::library::Search { q: Some(q), person: None, from: None, to: None, bbox: None, kind: None, after: None, limit: 8, seen: Vec::new(), near: Vec::new() };
+                        Ok(crate::library::search(c, &owner, &s)?)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let pick = |v: &Value| json!({ "chemin": v["path"], "date": v["taken_at"].as_i64().or(v["mtime"].as_i64()).and_then(|t| u64::try_from(t).ok()).map(astro_core::week::date_string), "extrait": v["excerpt"] });
+                let best = found["best"].as_array().filter(|b| !b.is_empty()).or(found["items"].as_array()).cloned().unwrap_or_default();
+                Ok(json!({ "trouvés": best.iter().take(8).map(pick).collect::<Vec<_>>(), "compris": found["understood"] }))
+            }
+            "solde" => {
+                let b = self.services.balance_of(&self.hex).await?;
+                Ok(json!({ "zen": format!("{}.{:02}", b.zen_cents / 100, b.zen_cents % 100) }))
+            }
+            _ => Err("outil inconnu".into()),
+        }
+    }
+}
+
 /// « Se rencontrer » : une demande reçue reste montrée 30 minutes (le temps d'une rencontre), 10 au plus.
 const MEET_WINDOW_SECS: i64 = 1800;
 /// Personnes rendues au plus par une recherche dans la constellation.
@@ -495,6 +533,17 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
     }
     async fn contacts_link(&self, who: &Principal, path: String, target: Option<String>) -> Result<Value, ApiError> {
         self.contacts_service()?.link(&who.hex, &path, target.as_deref()).await.map_err(link_error)
+    }
+    /// BRO discute : une commande `#…` comme avant ; sinon, si une IA est attribuée au membre, sa réponse (routage hybride,
+    /// quota, outils en lecture seule : `crate::bro_chat`) ; sinon la console de mémoire.
+    async fn bro_ask(&self, who: &Principal, ask: astro_ui::api::BroAsk) -> Result<Value, ApiError> {
+        let Some(ai) = self.ai.as_ref().filter(|_| bus::parse(&ask.text).is_none()) else { return self.bro_say(who, ask.text).await };
+        if !ai.available(&who.hex, who.captain).await {
+            return self.bro_say(who, ask.text).await;
+        }
+        let tools = BroTools { services: self.services.clone(), hex: who.hex.clone() };
+        let q = crate::bro_chat::Ask { text: ask.text, history: ask.history, private: ask.private, allow_cloud: ask.allow_cloud };
+        crate::bro_chat::ask(ai, ai.rights().map(Arc::as_ref), ai.limiter(), &who.hex, who.captain, q, &tools).await.map_err(ai_error)
     }
     /// Console de BRO : `#commande` exécute la commande (comme par message privé) ; un autre texte est noté dans le
     /// journal (emplacement 15) après avoir cherché les souvenirs proches. Pas de génération de réponse par un LLM.

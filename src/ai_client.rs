@@ -245,6 +245,61 @@ impl Endpoint {
         Ok(Reply { text, tokens_in: n("/usage/prompt_tokens"), tokens_out: n("/usage/completion_tokens") })
     }
 
+    /// Un tour de conversation avec des outils (`tools`, au format OpenAI) : le texte rendu, ou les outils que le modèle veut
+    /// appeler (`id`, nom, arguments JSON).
+    ///
+    /// # Errors
+    /// Fournisseur injoignable, modèle inconnu ou qui ne sait pas appeler d'outils (le demandeur réessaie alors sans).
+    pub async fn turn(&self, model: &str, messages: &[Value], tools: &[Value], max_tokens: u32) -> Result<Turn, AiClientError> {
+        let mut body = json!({ "model": model, "messages": messages, "max_tokens": max_tokens, "stream": false });
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools.to_vec());
+        }
+        let v = self.post("/chat/completions", &body).await?;
+        let msg = v.pointer("/choices/0/message").ok_or_else(|| AiClientError::Provider("le modèle n'a rien répondu".into()))?;
+        let calls = msg
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|c| {
+                        let name = c.pointer("/function/name")?.as_str()?.to_owned();
+                        let args = c.pointer("/function/arguments").and_then(Value::as_str).and_then(|a| serde_json::from_str(a).ok()).unwrap_or(Value::Null);
+                        Some(ToolCall { id: c.get("id").and_then(Value::as_str).unwrap_or("appel").to_owned(), name, args })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let text = msg.get("content").and_then(Value::as_str).map(str::to_owned).filter(|t| !t.trim().is_empty());
+        if text.is_none() && calls.is_empty() {
+            return Err(AiClientError::Provider("le modèle n'a rien répondu".into()));
+        }
+        let n = |p: &str| v.pointer(p).and_then(Value::as_u64).unwrap_or(0);
+        Ok(Turn { text, calls, tokens_in: n("/usage/prompt_tokens"), tokens_out: n("/usage/completion_tokens") })
+    }
+
+    /// Le modèle à employer : `wanted` s'il est donné, sinon celui que l'on choisirait au test ([`default_model`], le modèle
+    /// gratuit du fournisseur quand la liste manque).
+    ///
+    /// # Errors
+    /// Aucun modèle connu.
+    pub async fn pick_model(&self, wanted: Option<&str>) -> Result<String, AiClientError> {
+        if let Some(m) = wanted {
+            return Ok(m.to_owned());
+        }
+        match self.models().await {
+            Ok(list) => default_model(&self.provider, &list),
+            Err(_) => preset_default(&self.provider).map(str::to_owned),
+        }
+        .ok_or_else(|| AiClientError::Provider("aucun modèle disponible : choisissez-en un".into()))
+    }
+
+    /// Fournisseur (`openrouter`…, `local` pour l'uCloud).
+    #[must_use]
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
     /// `model` rend-il des vecteurs (`/embeddings`) ?
     pub async fn embeds(&self, model: &str) -> bool {
         self.post("/embeddings", &json!({ "model": model, "input": "essai" })).await.is_ok_and(|v| v.pointer("/data/0/embedding").and_then(Value::as_array).is_some_and(|e| !e.is_empty()))
@@ -331,6 +386,30 @@ fn is_embedding(id: &str) -> bool {
     let id = id.to_lowercase();
     let name = id.rsplit('/').next().unwrap_or(&id);
     id.contains("embed") || ["bge-", "e5-", "multilingual-e5", "gte-", "minilm", "all-minilm", "snowflake-arctic-embed", "mxbai-embed"].iter().any(|p| name.starts_with(p))
+}
+
+/// Un appel d'outil demandé par le modèle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    /// Identifiant à rappeler dans la réponse de l'outil.
+    pub id: String,
+    /// Nom de l'outil.
+    pub name: String,
+    /// Arguments (JSON).
+    pub args: Value,
+}
+
+/// Un tour de conversation : texte, ou appels d'outils.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Turn {
+    /// Texte rendu (absent quand le modèle appelle des outils).
+    pub text: Option<String>,
+    /// Outils à appeler.
+    pub calls: Vec<ToolCall>,
+    /// Jetons envoyés.
+    pub tokens_in: u64,
+    /// Jetons reçus.
+    pub tokens_out: u64,
 }
 
 /// Réponse d'un modèle.

@@ -819,6 +819,17 @@ CREATE TABLE IF NOT EXISTS kv (
   PRIMARY KEY (scope, key)
 ) STRICT, WITHOUT ROWID;
 
+-- Consommation de l'IA par membre et par semaine ISO (état LOCAL, `src/ai_rights.rs`) : sert le quota que le Capitaine fixe
+-- (jetons par semaine) et l'affichage au membre. Jetons tels que le fournisseur les annonce (0 s'il ne le dit pas).
+CREATE TABLE IF NOT EXISTS ai_usage (
+  owner_hex  TEXT NOT NULL,
+  week       TEXT NOT NULL,
+  requests   INTEGER NOT NULL DEFAULT 0,
+  tokens_in  INTEGER NOT NULL DEFAULT 0,
+  tokens_out INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (owner_hex, week)
+) STRICT, WITHOUT ROWID;
+
 -- Journal des changements du carnet d'adresses (`/Contacts/*.vcf`) et de l'agenda (`/Calendrier/*.ics`) (état LOCAL) : sert le rapport
 -- `sync-collection` (RFC 6578) de CardDAV et de CalDAV ; chaque collection filtre le journal par son dossier.
 -- Alimenté par des triggers sur `ucloud_entries`, donc quel que soit le chemin d'écriture (WebDAV, restauration, déplacement).

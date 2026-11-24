@@ -21,7 +21,7 @@ use astro_nostr_proto::{UnsignedEvent, kind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::ai_client::{self, Endpoint, PRESETS};
+use crate::ai_client::{self, Endpoint, Family, PRESETS};
 use crate::ai_rights::{AiRights, Mode, Rights, RightsError};
 use crate::forwards::Forwards;
 use crate::register::PublishFn;
@@ -117,6 +117,20 @@ fn rights_error(e: RightsError) -> AiError {
     }
 }
 
+/// Une IA joignable par BRO pour un membre.
+pub struct Route {
+    /// Cloud ou uCloud.
+    pub family: Family,
+    /// `station` (prêtée par le Capitaine) ou `own` (la sienne).
+    pub source: &'static str,
+    /// Nom montré (« MixRoute », « Ollama de cette station »…), jamais une clé ni une adresse.
+    pub label: String,
+    /// Point d'accès.
+    pub endpoint: Endpoint,
+    /// Modèle choisi (sinon celui du fournisseur).
+    pub model: Option<String>,
+}
+
 /// Service des paramètres IA.
 pub struct MemberAi {
     db: Arc<Db>,
@@ -128,13 +142,15 @@ pub struct MemberAi {
     forwards: Option<Arc<Forwards>>,
     /// Droits décidés par le Capitaine (partage de son IA, droits par membre).
     rights: Option<Arc<AiRights>>,
+    /// Débit vers les fournisseurs (une clé partagée a un plafond par minute).
+    limiter: crate::bro_chat::Limiter,
 }
 
 impl MemberAi {
     /// Service signant avec les clés de `keys` et publiant par `publish`.
     #[must_use]
     pub fn new(db: Arc<Db>, keys: Arc<dyn KeySource>, publish: PublishFn) -> Self {
-        Self { db, keys, publish, station_ollama: None, forwards: None, rights: None }
+        Self { db, keys, publish, station_ollama: None, forwards: None, rights: None, limiter: crate::bro_chat::Limiter::default() }
     }
 
     /// Offres uCloud de la station : son Ollama (`--ollama`) et les accès locaux ouverts vers les services d'IA des amis.
@@ -143,6 +159,18 @@ impl MemberAi {
         self.station_ollama = station_ollama.and_then(|u| ai_client::loopback_url(&u).ok());
         self.forwards = forwards;
         self
+    }
+
+    /// Droits d'IA (quota, consommation), s'il y en a.
+    #[must_use]
+    pub fn rights(&self) -> Option<&Arc<AiRights>> {
+        self.rights.as_ref()
+    }
+
+    /// Limiteur de débit vers les fournisseurs.
+    #[must_use]
+    pub fn limiter(&self) -> &crate::bro_chat::Limiter {
+        &self.limiter
     }
 
     /// Droits d'IA décidés par le Capitaine.
@@ -214,6 +242,44 @@ impl MemberAi {
         let cloud = p.provider.is_some() && p.api_key.is_some();
         let label = p.provider.as_deref().and_then(|id| PRESETS.iter().find(|x| x.0 == id)).map(|x| x.1);
         json!({ "family": if cloud { "cloud" } else { "ucloud" }, "provider": if cloud { label } else { None }, "model": p.model })
+    }
+
+    fn route_of(&self, p: &AiParams, family: Family, source: &'static str) -> Option<Route> {
+        let fam = if family == Family::Cloud { "cloud" } else { "ucloud" };
+        let endpoint = Self::endpoint_of(p, Some(fam)).ok()?;
+        let label = match family {
+            Family::Cloud => p.provider.as_deref().and_then(|id| PRESETS.iter().find(|x| x.0 == id)).map_or("?", |x| x.1).to_owned(),
+            Family::UCloud => {
+                let want = p.ollama_url.as_deref().and_then(ai_client::host_port);
+                self.offers().iter().find(|o| o["url"].as_str().and_then(ai_client::host_port) == want).and_then(|o| o["label"].as_str()).unwrap_or(if source == "station" { "IA de votre station" } else { "Service local" }).to_owned()
+            }
+        };
+        Some(Route { family, source, label, endpoint, model: p.model.clone() })
+    }
+
+    /// Les IA que BRO peut employer pour `owner`, selon ses droits : l'IA prêtée par le Capitaine, et la sienne s'il y a droit
+    /// (en boucle locale, seulement une offre de la station, sauf pour le Capitaine).
+    ///
+    /// # Errors
+    /// Base ou clé indisponibles.
+    pub async fn routes(&self, owner: &str, captain: bool) -> Result<Vec<Route>, AiError> {
+        let mode = if captain { Mode::Own } else { self.rights_of(owner).await?.0.mode };
+        let mut out = Vec::new();
+        if mode == Mode::Off {
+            return Ok(out);
+        }
+        if let Some((_, p)) = self.shared().await.filter(|(cap, _)| cap != owner) {
+            let family = if p.provider.is_some() && p.api_key.is_some() { Family::Cloud } else { Family::UCloud };
+            out.extend(self.route_of(&p, family, "station"));
+        }
+        if mode == Mode::Own {
+            let p = self.get(owner).await?;
+            if p.ollama_url.as_deref().is_some_and(|u| captain || self.offered(u)) {
+                out.extend(self.route_of(&p, Family::UCloud, "own"));
+            }
+            out.extend(self.route_of(&p, Family::Cloud, "own"));
+        }
+        Ok(out)
     }
 
     /// BRO est-il ouvert à `owner` ? Le Capitaine : s'il a déclaré une IA. Un membre : selon ses droits, l'IA partagée ou la

@@ -242,6 +242,38 @@ impl AiRights {
         self.put_kv(&format!("referral:{provider}"), url).await
     }
 
+    /// Jetons consommés par `hex` pendant la semaine ISO `week` (`2026-W48`) : `(requêtes, jetons envoyés + reçus)`.
+    ///
+    /// # Errors
+    /// Base indisponible.
+    pub async fn used(&self, hex: &str, week: &str) -> Result<(u64, u64), RightsError> {
+        let (h, w) = (hex.to_owned(), week.to_owned());
+        let row: Option<(i64, i64)> = self
+            .db
+            .readers()
+            .read(move |c| Ok(rusqlite::OptionalExtension::optional(c.query_row("SELECT requests, tokens_in + tokens_out FROM ai_usage WHERE owner_hex = ?1 AND week = ?2", rusqlite::params![h, w], |r| Ok((r.get(0)?, r.get(1)?))))?))
+            .await
+            .map_err(|e| RightsError::Internal(e.to_string()))?;
+        Ok(row.map_or((0, 0), |(r, t)| (u64::try_from(r).unwrap_or(0), u64::try_from(t).unwrap_or(0))))
+    }
+
+    /// Ajoute une requête et ses jetons à la semaine `week` de `hex`.
+    ///
+    /// # Errors
+    /// Base indisponible.
+    pub async fn record(&self, hex: &str, week: &str, tokens_in: u64, tokens_out: u64) -> Result<(), RightsError> {
+        let n = |x: u64| i64::try_from(x).unwrap_or(i64::MAX);
+        self.db
+            .writer()
+            .execute(
+                "INSERT INTO ai_usage(owner_hex, week, requests, tokens_in, tokens_out) VALUES (?1, ?2, 1, ?3, ?4) ON CONFLICT(owner_hex, week) DO UPDATE SET requests = requests + 1, tokens_in = tokens_in + excluded.tokens_in, tokens_out = tokens_out + excluded.tokens_out",
+                vec![hex.to_owned().into(), week.to_owned().into(), n(tokens_in).into(), n(tokens_out).into()],
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| RightsError::Internal(e.to_string()))
+    }
+
     /// Réglages de chaque membre qui en a de propres : `hex → droits`.
     ///
     /// # Errors
