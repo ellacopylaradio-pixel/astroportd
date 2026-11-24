@@ -103,7 +103,7 @@ Capitaine en cloud compte comme du cloud : ses messages partent chez le fourniss
 
 ## Lots
 
-*Faits : 1 (`e765be1`), 2 (`8a58aa5`) et 3 (sans la réponse en flux). Débit : 50 requêtes par minute chez MixRoute pour une clé partagée.*
+*Faits : 1 (`e765be1`), 2 (`8a58aa5`), 3 (`61ea03f`, puis réponse en flux) et 4 (`61049cb`). Débit : 50 requêtes par minute chez MixRoute pour une clé partagée.*
 
 1. **Moteur et test** : client au format OpenAI (cloud par `fetch.rs`, uCloud en boucle locale seulement), préréglages,
    `Tester` et capacités sur la carte du membre, choix du modèle dans la liste ; tests hostiles (adresse privée, port local

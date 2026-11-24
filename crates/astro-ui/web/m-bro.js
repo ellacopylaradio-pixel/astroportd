@@ -1,9 +1,5 @@
 'use strict';
-// BRO : la conversation avec l'IA attribuée au membre (docs/design/IA.md, lot 3) et, repliée, l'activité de la station.
-// Chaque réponse dit où elle a été calculée (🏠 chez vous, 🌐 sur Internet), avec quel modèle, et si elle a lu vos données
-// (🔒 : la conversation reste alors sur votre station). Une conversation privée ne part sur Internet qu'avec votre accord,
-// donné pour une fois. `#commande` (#solde, #aide…) passe toujours par la console de la station. Chaque message se copie, se
-// partage (menu du téléphone, sinon copie) ou se supprime : supprimé, il sort aussi de ce que BRO relit de la conversation.
+// BRO : conversation en flux avec l'IA du membre (docs/design/IA.md) ; activité de la station repliée.
 export default async function bro(root, K) {
   const { h, t, api, feed, listeners } = K;
   const css = h('link', { rel: 'stylesheet', href: '/ui/m-bro.css' }); document.head.append(css); K.cleanup(() => css.remove());
@@ -17,7 +13,7 @@ export default async function bro(root, K) {
   const where = r => r.where ? h('small', { class: 'muted bro-where' },
     r.where === 'cloud' ? '🌐 ' : '🏠 ', r.via || '', r.model ? ' · ' + r.model : '', r.tools?.length ? ' · ' + t('a cherché dans vos données') : '',
     r.where === 'cloud' && !r.tools_offered ? ' · ' + t('sans accès à vos fichiers') : '') : '';
-  // Actions d'un message : copier, partager, supprimer (icônes nommées pour les lecteurs d'écran, 48 px au pouce).
+  // Copier, partager, supprimer (supprimé : BRO ne le relit plus).
   const act = (icon, label, run) => h('button', { type: 'button', class: 'ghost', title: label, 'aria-label': label, onclick: run }, icon);
   const copy = text => navigator.clipboard?.writeText(text).then(() => K.toast(t('Message copié'), 1), e => K.toast(e.message));
   const acts = (li, text, id) => h('div', { class: 'bro-acts' },
@@ -32,14 +28,47 @@ export default async function bro(root, K) {
     return id;
   };
 
+  const stream = async (body, on) => {
+    const r = await K.req('/api/v1/bro/stream', { method: 'POST', body });
+    if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.statusText); }
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await rd.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        const data = block.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('');
+        if (data) { try { on(JSON.parse(data)); } catch { /* ping, ou ligne illisible : ignorée */ } }
+      }
+    }
+  };
+
+  let busy = false;
   const send = async (text, allowCloud, mine) => {
+    busy = true; go.disabled = true;
+    try { await answer(text, allowCloud, mine); } finally { busy = false; go.disabled = false; }
+  };
+  const answer = async (text, allowCloud, mine) => {
     const history = turns.filter(x => x.id !== mine).slice(-20).map(({ role, content }) => ({ role, content }));
-    const pending = h('li', { class: 'bro-bro bro-wait' }, h('p', { class: 'muted' }, t('BRO réfléchit…')));
-    thread.append(pending); scroll();
-    let r;
-    try { r = await api('/api/v1/bro/say', { method: 'POST', body: { text, history, private: priv, allow_cloud: !!allowCloud } }); }
-    catch (e) { pending.remove(); return bubble('err', e.message); }
-    pending.remove();
+    const p = h('p', { class: 'muted' }, t('BRO réfléchit…')), meta = h('small', { class: 'muted bro-where' });
+    const live = h('li', { class: 'bro-bro bro-wait' }, p, meta);
+    thread.append(live); scroll();
+    let shown = '', r = null;
+    try {
+      await stream({ text, history, private: priv, allow_cloud: !!allowCloud }, ev => {
+        if (ev.type === 'route') meta.replaceChildren(ev.where === 'cloud' ? '🌐 ' : '🏠 ', ev.via || '', ev.model ? ' · ' + ev.model : '');
+        else if (ev.type === 'turn') { shown = ''; p.textContent = t('BRO réfléchit…'); p.className = 'muted'; }
+        else if (ev.type === 'tool') { p.textContent = t('BRO cherche dans vos données…'); p.className = 'muted'; }
+        else if (ev.type === 'delta') { shown += ev.text; p.textContent = shown; p.className = ''; scroll(); }
+        else if (ev.type === 'done') r = ev;
+        else if (ev.type === 'error') throw new Error(ev.error);
+      });
+    } catch (e) { live.remove(); return bubble('err', e.message); }
+    live.remove();
+    if (!r) return bubble('err', t('La réponse a été interrompue.'));
     if (r.refused === 'private' && r.cloud) {
       // Données privées, pas d'IA chez soi : on demande l'accord, pour cette fois seulement.
       const ok = h('button', { type: 'button' }, t('Envoyer à {0} pour cette fois', r.cloud));
@@ -52,10 +81,12 @@ export default async function bro(root, K) {
   };
 
   const input = h('textarea', { rows: 2, placeholder: t('Écrire à BRO… (#solde, #aide pour les commandes)'), 'aria-label': t('Message pour BRO'), maxLength: 2000 });
-  const form = h('form', { class: 'bro-say' }, input, h('button', {}, t('Poser la question')));
+  // Une question à la fois : la suivante attend la fin de la réponse (elle doit entrer dans ce que BRO relit).
+  const go = h('button', {}, t('Poser la question'));
+  const form = h('form', { class: 'bro-say' }, input, go);
   form.onsubmit = ev => {
     ev.preventDefault();
-    const text = input.value.trim(); if (!text) return;
+    const text = input.value.trim(); if (!text || busy) return;
     input.value = ''; send(text, false, bubble('me', text, '', 'user'));
   };
   input.onkeydown = ev => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); } };

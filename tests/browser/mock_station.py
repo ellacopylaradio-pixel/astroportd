@@ -188,6 +188,12 @@ def circles():  # Mes cercles (m-circles.js) : ceux que je suis, du plus proche 
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+    def bro_answer(self, body):
+        # Photos : réponse locale qui a lu les données ; « facture » sans IA locale : refus, accord demandé ; accord : cloud.
+        if 'photo' in body['text'].lower(): return dict(reply='J’ai trouvé 3 photos de Léa à Toulouse, en juillet 2025.', where='ucloud', via='Ollama de cette station', source='station', model='llama3.2:3b', private=True, tools=['chercher'], tools_offered=True, tokens=280)
+        if body.get('allow_cloud'): return dict(reply='Votre facture d’octobre : 74,20 € d’électricité, à payer avant le 15.', where='cloud', via='MixRoute', source='station', model='deepseek-v4-flash', private=True, tools=['chercher'], tools_offered=True, tokens=900)
+        if body.get('private'): return dict(refused='private', cloud='MixRoute', reply='Cette conversation contient vos données privées, et votre station n’a pas d’IA qui tourne chez vous : je ne les envoie pas sur Internet sans votre accord.')
+        return dict(reply='Bonjour ! Je suis BRO.', where='cloud', via='MixRoute', source='station', model='deepseek-v4-flash', private=False, tools=[], tools_offered=False, tokens=40)
     def send(self, code, body, ctype='application/json'):
         if not isinstance(body, bytes): body = json.dumps(body).encode()
         self.send_response(code); self.send_header('Content-Type', ctype); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -424,12 +430,17 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/planes': return self.send(200, dict(name=body['name'], http='127.0.0.1:8092', p2p='/ip4/0.0.0.0/tcp/4102', swarm_key_path='/x/zen2/swarm.key', created_key='/key/swarm/psk/1.0.0/\\n/base16/\\n' + 'ab' * 32))
         if p == '/api/v1/me/ai':
             STATE['ai'] = bool(body.get('ollama_url') or body.get('provider')); return self.send(200, dict(ollama_url=body.get('ollama_url'), provider=body.get('provider'), has_key=False, model=None, declared=STATE['ai']))
-        if p == '/api/v1/bro/say':
-            # Photos : réponse locale qui a lu les données ; « facture » sans IA locale : refus, accord demandé ; accord : cloud.
-            if 'photo' in body['text'].lower(): return self.send(200, dict(reply='J’ai trouvé 3 photos de Léa à Toulouse, en juillet 2025.', where='ucloud', via='Ollama de cette station', source='station', model='llama3.2:3b', private=True, tools=['chercher'], tools_offered=True, tokens=280))
-            if body.get('allow_cloud'): return self.send(200, dict(reply='Votre facture d’octobre : 74,20 € d’électricité, à payer avant le 15.', where='cloud', via='MixRoute', source='station', model='deepseek-v4-flash', private=True, tools=['chercher'], tools_offered=True, tokens=900))
-            if body.get('private'): return self.send(200, dict(refused='private', cloud='MixRoute', reply='Cette conversation contient vos données privées, et votre station n’a pas d’IA qui tourne chez vous : je ne les envoie pas sur Internet sans votre accord.'))
-            return self.send(200, dict(reply='Bonjour ! Je suis BRO.', where='cloud', via='MixRoute', source='station', model='deepseek-v4-flash', private=False, tools=[], tools_offered=False, tokens=40))
+        if p == '/api/v1/bro/stream':
+            # Même scénario que /bro/say, en flux : la route, puis la réponse par morceaux (80 ms), puis « done ».
+            done = self.bro_answer(body)
+            self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+            ev = lambda d: (self.wfile.write(f'data: {json.dumps(d)}\n\n'.encode()), self.wfile.flush())
+            if done.get('where'):
+                ev(dict(type='route', via=done['via'], where=done['where'], model=done['model'])); ev(dict(type='turn'))
+                if done.get('tools'): ev(dict(type='tool', name='chercher')); __import__('time').sleep(.2); ev(dict(type='turn'))
+                for w in done['reply'].split(' '): ev(dict(type='delta', text=w + ' ')); __import__('time').sleep(.08)
+            ev(dict(done, type='done')); return
+        if p == '/api/v1/bro/say': return self.send(200, self.bro_answer(body))
         if p == '/api/v1/me/ai/test': return self.send(200, AI_VIEW['tests'].get(body['family'], {}))
         if p == '/api/v1/station/ai':
             if 'member' in body: STATION_AI['members'][body['member']['hex']] = body['member']['rights']

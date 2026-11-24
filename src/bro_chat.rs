@@ -13,7 +13,6 @@ use std::sync::Mutex;
 use serde_json::{Value, json};
 
 use crate::ai_client::Family;
-use crate::ai_rights::AiRights;
 use crate::member_ai::{AiError, MemberAi, Route};
 
 /// Tours de conversation au plus pour une question (appels d'outils compris).
@@ -24,8 +23,8 @@ const MAX_TOOL_CHARS: usize = 4000;
 const HEAVY_CHARS: usize = 12_000;
 /// Messages d'historique gardés.
 const MAX_HISTORY: usize = 20;
-/// Jetons de réponse au plus.
-const MAX_TOKENS: u32 = 1200;
+/// Jetons de réponse au plus (un modèle qui « réfléchit » en dépense une partie avant de répondre).
+const MAX_TOKENS: u32 = 2000;
 /// Requêtes par minute d'un membre sur l'IA prêtée par le Capitaine (part équitable d'une clé partagée).
 const MEMBER_PER_MINUTE: usize = 12;
 
@@ -60,6 +59,10 @@ pub struct Ask {
     /// Le membre accepte, pour cette fois, qu'une conversation privée parte vers une IA cloud.
     pub allow_cloud: bool,
 }
+
+/// Où envoyer la réponse au fil de l'eau : `{ type: "turn" }` au début de chaque tour (le texte d'avant est remplacé),
+/// `{ type: "delta", text }`, `{ type: "tool", name }`. `None` : réponse d'un bloc.
+pub type Sink<'a> = Option<&'a (dyn Fn(Value) + Send + Sync)>;
 
 /// Fenêtres glissantes d'une minute (`clé → instants des requêtes`).
 #[derive(Default)]
@@ -105,7 +108,8 @@ fn order(routes: Vec<Route>, private: bool, allow_cloud: bool, heavy: bool) -> V
 ///
 /// # Errors
 /// Base ou clés indisponibles.
-pub async fn ask<T: Tools>(ai: &MemberAi, rights: Option<&AiRights>, limiter: &Limiter, owner: &str, captain: bool, q: Ask, tools: &T) -> Result<Value, AiError> {
+pub async fn ask<T: Tools>(ai: &MemberAi, owner: &str, captain: bool, q: Ask, tools: &T, sink: Sink<'_>) -> Result<Value, AiError> {
+    let (rights, limiter) = (ai.rights().map(std::sync::Arc::as_ref), ai.limiter());
     let text: String = q.text.chars().filter(|c| !c.is_control() || *c == '\n').take(8000).collect();
     let history: Vec<(String, String)> = q.history.into_iter().filter(|(r, _)| r == "user" || r == "assistant").rev().take(MAX_HISTORY).collect::<Vec<_>>().into_iter().rev().map(|(r, c)| (r, c.chars().take(6000).collect())).collect();
     let size = text.len() + history.iter().map(|(_, c)| c.len()).sum::<usize>();
@@ -160,7 +164,10 @@ pub async fn ask<T: Tools>(ai: &MemberAi, rights: Option<&AiRights>, limiter: &L
         let mut messages = vec![json!({ "role": "system", "content": SYSTEM })];
         messages.extend(history.iter().map(|(r, c)| json!({ "role": r, "content": c })));
         messages.push(json!({ "role": "user", "content": text }));
-        match converse(&route, &model, messages, offer_tools, tools).await {
+        if let Some(out) = sink {
+            out(json!({ "type": "route", "via": route.label, "where": if route.family == Family::Cloud { "cloud" } else { "ucloud" }, "model": model }));
+        }
+        match converse(&route, &model, messages, offer_tools, tools, sink).await {
             Ok(done) => {
                 if let Some(r) = rights.filter(|_| counted) {
                     let _ = r.record(owner, &week, done.tokens_in, done.tokens_out).await;
@@ -187,14 +194,22 @@ struct Done {
 
 /// La conversation avec une IA : jusqu'à [`MAX_ROUNDS`] tours, les outils demandés exécutés entre deux. Un modèle qui refuse
 /// les outils est réessayé sans.
-async fn converse<T: Tools>(route: &Route, model: &str, mut messages: Vec<Value>, offer_tools: bool, tools: &T) -> Result<Done, String> {
+async fn converse<T: Tools>(route: &Route, model: &str, mut messages: Vec<Value>, offer_tools: bool, tools: &T, sink: Sink<'_>) -> Result<Done, String> {
     let specs = if offer_tools { tool_specs() } else { Vec::new() };
     let mut done = Done { text: String::new(), private: false, used: Vec::new(), tokens_in: 0, tokens_out: 0 };
     let mut with_tools = !specs.is_empty();
     for round in 0..MAX_ROUNDS {
         let last = round + 1 == MAX_ROUNDS;
         let offered: &[Value] = if with_tools && !last { &specs } else { &[] };
-        let turn = match route.endpoint.turn(model, &messages, offered, MAX_TOKENS).await {
+        let asked = match sink {
+            Some(out) => {
+                out(json!({ "type": "turn" }));
+                let piece = |p: &str| out(json!({ "type": "delta", "text": p }));
+                route.endpoint.turn_stream(model, &messages, offered, MAX_TOKENS, &piece).await
+            }
+            None => route.endpoint.turn(model, &messages, offered, MAX_TOKENS).await,
+        };
+        let turn = match asked {
             Ok(t) => t,
             Err(_) if !offered.is_empty() && round == 0 => {
                 with_tools = false;
@@ -211,6 +226,9 @@ async fn converse<T: Tools>(route: &Route, model: &str, mut messages: Vec<Value>
         let calls: Vec<Value> = turn.calls.iter().map(|c| json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.args.to_string() } })).collect();
         messages.push(json!({ "role": "assistant", "content": turn.text, "tool_calls": calls }));
         for c in turn.calls.iter().take(3) {
+            if let Some(out) = sink {
+                out(json!({ "type": "tool", "name": c.name }));
+            }
             let out = match tools.run(&c.name, &c.args).await {
                 Ok(v) => v.to_string(),
                 Err(e) => json!({ "erreur": e }).to_string(),
@@ -235,6 +253,7 @@ mod tests {
     use astro_nostr_proto::pubkey_of;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    use crate::ai_rights::AiRights;
     use crate::register::PublishFn;
 
     struct Fake;
@@ -288,14 +307,13 @@ mod tests {
         let publish: PublishFn = Arc::new(|_| Box::pin(async { Ok(()) }));
         let ai = MemberAi::new(db, Arc::new(StaticKeySource::new().with(ME)), publish).with_offers(Some(url.clone()), None).with_rights(rights.clone());
         let me = pubkey_of(&ME).unwrap();
-        let limiter = Limiter::default();
         // Droit « station » par défaut et rien de prêté : aucune IA.
-        let none = ask(&ai, Some(&rights), &limiter, &me, false, Ask { text: "Bonjour".into(), ..Ask::default() }, &Fake).await.unwrap();
+        let none = ask(&ai, &me, false, Ask { text: "Bonjour".into(), ..Ask::default() }, &Fake, None).await.unwrap();
         assert_eq!(none["refused"], "none");
         // Sa propre IA, l'Ollama de la station, avec un quota de 300 jetons.
         rights.set_member(&me, Some(&json!({ "mode": "own", "quota_tokens_week": 300 }))).await.unwrap();
         ai.set(&me, &json!({ "ollama_url": url })).await.unwrap();
-        let r = ask(&ai, Some(&rights), &limiter, &me, false, Ask { text: "Retrouve les photos de Léa à Toulouse".into(), ..Ask::default() }, &Fake).await.unwrap();
+        let r = ask(&ai, &me, false, Ask { text: "Retrouve les photos de Léa à Toulouse".into(), ..Ask::default() }, &Fake, None).await.unwrap();
         assert_eq!((r["where"].as_str(), r["via"].as_str(), r["private"].as_bool(), r["tools"][0].as_str()), (Some("ucloud"), Some("Ollama de cette station"), Some(true), Some("chercher")), "{r}");
         assert!(r["reply"].as_str().unwrap().contains("Toulouse"));
         assert_eq!(r["tokens"], 280);
@@ -303,8 +321,8 @@ mod tests {
         assert!(reqs.contains("\"tools\"") && reqs.contains("lea.jpg"), "l'outil est offert, et son résultat renvoyé au modèle local");
         assert_eq!(rights.used(&me, &astro_core::week::iso_week(now())).await.unwrap(), (1, 280));
         // 280 < 300 : encore une ; ensuite le quota est atteint.
-        ask(&ai, Some(&rights), &limiter, &me, false, Ask { text: "Et à Paris ?".into(), ..Ask::default() }, &Fake).await.unwrap();
-        let stop = ask(&ai, Some(&rights), &limiter, &me, false, Ask { text: "Encore ?".into(), ..Ask::default() }, &Fake).await.unwrap();
+        ask(&ai, &me, false, Ask { text: "Et à Paris ?".into(), ..Ask::default() }, &Fake, None).await.unwrap();
+        let stop = ask(&ai, &me, false, Ask { text: "Encore ?".into(), ..Ask::default() }, &Fake, None).await.unwrap();
         assert!(stop["reply"].as_str().unwrap().contains("quota de la semaine atteint"), "{stop}");
         let _ = std::fs::remove_dir_all(dir);
     }

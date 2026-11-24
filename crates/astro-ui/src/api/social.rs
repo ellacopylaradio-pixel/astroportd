@@ -76,6 +76,17 @@ pub trait SocialApi: Auth {
     fn bro_ask(&self, who: &Principal, ask: BroAsk) -> impl Future<Output = Result<Value, ApiError>> + Send {
         self.bro_say(who, ask.text)
     }
+    /// BRO en flux : événements JSON `{ type: "route" | "turn" | "delta" | "tool", … }`, puis `{ type: "done", … }` avec la
+    /// réponse complète (ou `{ type: "error", error }`). Par défaut : [`SocialApi::bro_ask`] d'un bloc.
+    fn bro_stream(&self, who: &Principal, ask: BroAsk) -> impl Future<Output = Result<tokio::sync::mpsc::UnboundedReceiver<Value>, ApiError>> + Send {
+        async move {
+            let mut done = self.bro_ask(who, ask).await?;
+            done["type"] = Value::from("done");
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let _ = tx.send(done);
+            Ok(rx)
+        }
+    }
     /// Agents déclarés par le membre (sans jeton ni empreinte).
     fn agents_list(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("agents non disponibles sur cette station")) }
@@ -212,6 +223,7 @@ pub(super) fn routes<B: SocialApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/me/meet/code", get(meet_code::<B>))
         .route("/api/v1/me/meet/{hex}", get(meet_get::<B>).post(meet_follow::<B>))
         .route("/api/v1/bro/say", post(bro_say::<B>))
+        .route("/api/v1/bro/stream", post(bro_stream::<B>))
         .route("/api/v1/agents", get(agents_list::<B>).post(agents_enroll::<B>))
         .route("/api/v1/agents/revoke", post(agents_revoke::<B>))
         .route("/api/v1/agents/requests", get(agents_requests::<B>))
@@ -901,13 +913,36 @@ async fn mcp<B: SocialApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap
     }
 }
 
-async fn bro_say<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<SayBody>) -> Response {
-    let text = body.text.trim().to_owned();
-    if text.is_empty() || text.chars().count() > 2000 {
-        return reply(Err(ApiError::bad_request("message de 1 à 2000 caractères attendu")));
+impl SayBody {
+    fn ask(self) -> Result<BroAsk, ApiError> {
+        let text = self.text.trim().to_owned();
+        if text.is_empty() || text.chars().count() > 2000 {
+            return Err(ApiError::bad_request("message de 1 à 2000 caractères attendu"));
+        }
+        let history = self.history.into_iter().rev().take(20).rev().map(|h| (h.role, h.content.chars().take(6000).collect())).collect();
+        Ok(BroAsk { text, history, private: self.private, allow_cloud: self.allow_cloud })
     }
-    let history = body.history.into_iter().rev().take(20).rev().map(|h| (h.role, h.content.chars().take(6000).collect())).collect();
-    reply(st.backend.bro_ask(&p, BroAsk { text, history, private: body.private, allow_cloud: body.allow_cloud }).await)
+}
+
+async fn bro_say<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<SayBody>) -> Response {
+    match body.ask() {
+        Ok(ask) => reply(st.backend.bro_ask(&p, ask).await),
+        Err(e) => reply(Err(e)),
+    }
+}
+
+/// La réponse de BRO au fil de l'eau (SSE) : un événement par morceau, `done` à la fin.
+async fn bro_stream<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<SayBody>) -> Response {
+    let ask = match body.ask() {
+        Ok(a) => a,
+        Err(e) => return reply(Err(e)),
+    };
+    let rx = match st.backend.bro_stream(&p, ask).await {
+        Ok(rx) => rx,
+        Err(e) => return reply(Err(e)),
+    };
+    let events = stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|v| (Ok::<_, Infallible>(Event::default().data(v.to_string())), rx)) });
+    private(Sse::new(events).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")).into_response())
 }
 
 async fn contacts<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {

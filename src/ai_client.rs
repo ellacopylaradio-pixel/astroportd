@@ -11,8 +11,9 @@
 
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use serde_json::{Value, json};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
 use crate::fetch::{self, FetchError, FetchLimits};
 
@@ -276,6 +277,70 @@ impl Endpoint {
         }
         let n = |p: &str| v.pointer(p).and_then(Value::as_u64).unwrap_or(0);
         Ok(Turn { text, calls, tokens_in: n("/usage/prompt_tokens"), tokens_out: n("/usage/completion_tokens") })
+    }
+
+    /// Comme [`Endpoint::turn`], **en flux** : chaque morceau de texte est remis à `on_text` dès son arrivée ; les appels
+    /// d'outils et les jetons sont rassemblés à la fin. Le flux entier est borné en taille ([`MAX_BODY`]) et en durée (3 min).
+    ///
+    /// # Errors
+    /// Comme [`Endpoint::turn`] ; flux interrompu ou trop long.
+    pub async fn turn_stream(&self, model: &str, messages: &[Value], tools: &[Value], max_tokens: u32, on_text: &(dyn Fn(&str) + Send + Sync)) -> Result<Turn, AiClientError> {
+        let mut body = json!({ "model": model, "messages": messages, "max_tokens": max_tokens, "stream": true, "stream_options": { "include_usage": true } });
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools.to_vec());
+        }
+        let mut headers = self.headers();
+        headers.push(("content-type", "application/json".to_owned()));
+        let read = async {
+            let got = fetch::request("POST", &format!("{}/chat/completions", self.base), &headers, Some(Bytes::from(body.to_string())), &self.limits()).await.map_err(|e| self.explain(&e))?;
+            let mut lines = tokio::io::BufReader::new(got.body).lines();
+            let mut text = String::new();
+            // Appels d'outils reçus par morceaux : (id, nom, arguments en texte), par index.
+            let mut calls: Vec<(String, String, String)> = Vec::new();
+            let (mut tin, mut tout) = (0, 0);
+            while let Some(line) = lines.next_line().await.map_err(|e| self.explain(&FetchError::Connect(e.to_string())))? {
+                let Some(data) = line.strip_prefix("data:").map(str::trim) else { continue };
+                if data == "[DONE]" {
+                    break;
+                }
+                let Ok(v) = serde_json::from_str::<Value>(data) else { continue };
+                if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
+                    tin = u.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(tin);
+                    tout = u.get("completion_tokens").and_then(Value::as_u64).unwrap_or(tout);
+                }
+                let Some(delta) = v.pointer("/choices/0/delta") else { continue };
+                if let Some(piece) = delta.get("content").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+                    text.push_str(piece);
+                    on_text(piece);
+                }
+                for c in delta.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
+                    let i = c.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).unwrap_or(0).min(15);
+                    if calls.len() <= i {
+                        calls.resize(i + 1, (String::new(), String::new(), String::new()));
+                    }
+                    let slot = &mut calls[i];
+                    if let Some(id) = c.get("id").and_then(Value::as_str) {
+                        slot.0 = id.to_owned();
+                    }
+                    if let Some(n) = c.pointer("/function/name").and_then(Value::as_str) {
+                        slot.1.push_str(n);
+                    }
+                    if let Some(a) = c.pointer("/function/arguments").and_then(Value::as_str) {
+                        slot.2.push_str(a);
+                    }
+                }
+            }
+            let calls: Vec<ToolCall> = calls
+                .into_iter()
+                .filter(|c| !c.1.is_empty())
+                .map(|(id, name, args)| ToolCall { id: if id.is_empty() { "appel".into() } else { id }, name, args: serde_json::from_str(&args).unwrap_or(Value::Null) })
+                .collect();
+            if text.trim().is_empty() && calls.is_empty() {
+                return Err(AiClientError::Provider("le modèle n'a rien répondu".into()));
+            }
+            Ok(Turn { text: Some(text).filter(|t| !t.trim().is_empty()), calls, tokens_in: tin, tokens_out: tout })
+        };
+        tokio::time::timeout(Duration::from_secs(180), read).await.map_err(|_| AiClientError::Provider("réponse trop longue : interrompue".into()))?
     }
 
     /// Le modèle à employer : `wanted` s'il est donné, sinon celui que l'on choisirait au test ([`default_model`], le modèle
@@ -578,6 +643,49 @@ mod tests {
         // Un modèle choisi qui n'existe pas : le défaut est essayé à la place.
         assert_eq!(ep.probe(Some("n-existe/pas")).await["model"], "openrouter/auto");
         assert_eq!(ep.probe(Some("mistralai/mistral-small")).await["caps"]["tools"], false);
+    }
+
+    /// Essai réel contre MixRoute (jamais en CI) : `MIXROUTE_KEY_FILE=<fichier contenant la clé> cargo test -p astroportd --lib
+    /// ai_client::tests::mixroute_for_real -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "réseau et clé réelle"]
+    async fn mixroute_for_real() {
+        let key = std::fs::read_to_string(std::env::var("MIXROUTE_KEY_FILE").unwrap()).unwrap();
+        let ep = Endpoint::cloud("mixroute", key.trim()).unwrap();
+        let p = ep.probe(None).await;
+        println!("test : ok={} modèle={} délai={} ms modèles={}", p["ok"], p["model"], p["latency_ms"], p["models_total"]);
+        assert_eq!(p["ok"], true, "{p}");
+        let got = std::sync::Mutex::new(String::new());
+        let t = ep.turn_stream("deepseek-v4-flash", &[json!({ "role": "user", "content": "Compte de un à cinq, en lettres, en français." })], &[], 400, &|x: &str| got.lock().unwrap().push_str(x)).await.unwrap();
+        println!("flux : {:?} ({} + {} jetons)", got.lock().unwrap(), t.tokens_in, t.tokens_out);
+        assert!(t.text.unwrap().to_lowercase().contains("cinq"));
+        let tool = json!({ "type": "function", "function": { "name": "solde", "description": "Solde du membre en Ẑen.", "parameters": { "type": "object", "properties": {} } } });
+        let t = ep.turn("deepseek-v4-flash", &[json!({ "role": "user", "content": "Quel est mon solde ?" })], std::slice::from_ref(&tool), 300).await.unwrap();
+        println!("outil : {:?}", t.calls.iter().map(|c| &c.name).collect::<Vec<_>>());
+        assert_eq!(t.calls.first().map(|c| c.name.as_str()), Some("solde"));
+        let t = ep.turn_stream("deepseek-v4-flash", &[json!({ "role": "user", "content": "Quel est mon solde ?" })], &[tool], 300, &|_: &str| {}).await.unwrap();
+        println!("outil en flux : {:?}", t.calls.iter().map(|c| &c.name).collect::<Vec<_>>());
+        assert_eq!(t.calls.first().map(|c| c.name.as_str()), Some("solde"));
+    }
+
+    /// Le flux (format OpenAI, tel que MixRoute l'envoie) : texte remis morceau par morceau, appel d'outil reconstitué, jetons
+    /// de la fin ; la réflexion du modèle (`reasoning_content`) n'est pas montrée.
+    #[tokio::test]
+    async fn a_streamed_turn_gives_text_piece_by_piece_and_rebuilds_tool_calls() {
+        let chunk = |d: Value| format!("data: {}\n\n", json!({ "choices": [{ "delta": d, "index": 0 }] }));
+        let text = [chunk(json!({ "role": "assistant" })), chunk(json!({ "reasoning_content": "Je réfléchis" })), chunk(json!({ "content": "Un, " })), chunk(json!({ "content": "deux." })),
+            format!("data: {}\n\n", json!({ "choices": [], "usage": { "prompt_tokens": 20, "completion_tokens": 5 } })), "data: [DONE]\n\n".to_owned()].concat();
+        let (url, seen) = mock(vec![("/chat/completions", 200, text)]).await;
+        let ep = Endpoint::local(&url).unwrap();
+        let got = std::sync::Mutex::new(Vec::new());
+        let t = ep.turn_stream("m", &[json!({ "role": "user", "content": "Compte" })], &[], 50, &|p: &str| got.lock().unwrap().push(p.to_owned())).await.unwrap();
+        assert_eq!((t.text.as_deref(), t.tokens_in, t.tokens_out), (Some("Un, deux."), 20, 5));
+        assert_eq!(*got.lock().unwrap(), ["Un, ", "deux."], "la réflexion n'est pas remise");
+        assert!(seen.lock().unwrap()[0].contains("\"stream\":true"));
+        let calls = [chunk(json!({ "content": "", "tool_calls": [{ "index": 0, "id": "c1", "function": { "name": "sol", "arguments": "" } }] })), chunk(json!({ "tool_calls": [{ "index": 0, "function": { "name": "de", "arguments": "{\"x\":" } }] })), chunk(json!({ "tool_calls": [{ "index": 0, "function": { "arguments": "1}" } }] })), "data: [DONE]\n\n".to_owned()].concat();
+        let (url, _) = mock(vec![("/chat/completions", 200, calls)]).await;
+        let t = Endpoint::local(&url).unwrap().turn_stream("m", &[], &[json!({})], 50, &|_: &str| {}).await.unwrap();
+        assert_eq!((t.calls.len(), t.calls[0].name.as_str(), t.calls[0].id.as_str(), &t.calls[0].args), (1, "solde", "c1", &json!({ "x": 1 })));
     }
 
     /// Un fournisseur qui ne donne pas sa liste (MixRoute ne la documente pas) : le modèle gratuit est essayé quand même.

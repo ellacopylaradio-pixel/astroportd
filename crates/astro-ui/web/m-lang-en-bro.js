@@ -18,4 +18,6 @@ export default {
 "Copier ce message": "Copy this message",
 "Partager ce message": "Share this message",
 "Supprimer ce message": "Delete this message",
+"BRO cherche dans vos données…": "BRO is searching your data…",
+"La réponse a été interrompue.": "The answer was interrupted.",
 };

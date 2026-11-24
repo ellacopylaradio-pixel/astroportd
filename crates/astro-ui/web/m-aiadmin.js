@@ -1,7 +1,5 @@
 'use strict';
-// Station › Membres : l'IA des membres (docs/design/IA.md). Le Capitaine prête son IA (déclarée dans sa carte Moi › Appareils,
-// clé jamais montrée), règle pour tous puis membre par membre ce qu'ils peuvent utiliser, combien (jetons par semaine) et pour
-// combien (ẑ par semaine), et donne les liens de parrainage de la coopérative chez les fournisseurs.
+// Station › Membres : IA des membres (docs/design/IA.md) : prêt, droits, quota, prix, parrainage.
 const MODES = [['off', 'Aucune IA'], ['station', 'L\'IA de la station'], ['own', 'La station, et la leur']];
 const API = '/api/v1/station/ai';
 

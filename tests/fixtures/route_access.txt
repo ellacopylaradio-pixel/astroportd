@@ -145,6 +145,7 @@ POST /api/v1/book/merge-exact anon=401 member=200
 POST /api/v1/book/photo anon=401 member=422
 POST /api/v1/book/take anon=401 member=422
 POST /api/v1/bro/say anon=401 member=422
+POST /api/v1/bro/stream anon=401 member=422
 POST /api/v1/call/signal anon=401 member=400
 POST /api/v1/chat/clear anon=401 member=422
 POST /api/v1/chat/delete anon=401 member=422

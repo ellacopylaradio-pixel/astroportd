@@ -1,9 +1,5 @@
 'use strict';
-// Moi › Appareils, carte « Intelligence artificielle » (docs/design/IA.md). D'abord l'IA que la station prête (décidée par le
-// Capitaine, écran Membres) ; puis, si le Capitaine le permet, la sienne, de deux familles dites comme telles :
-// - sur votre station (uCloud) : un service d'IA que la station propose (son Ollama, celui d'un ami par tunnel) ; tout reste ici ;
-// - par Internet (cloud) : un fournisseur et sa clé ; les messages sortent de la constellation.
-// « Tester » mesure ce que l'IA sait faire ; la carte en déduit ce que l'IA permet. La clé n'est jamais réaffichée.
+// Moi › Appareils, carte IA (docs/design/IA.md) : l'IA prêtée par la station, puis la sienne si le Capitaine le permet.
 const CAPS = [['chat', 'Discuter'], ['tools', 'Agir (outils)'], ['vision', 'Voir les images'], ['embeddings', 'Mémoire'], ['images', 'Créer des images']];
 // Fonction → capacité qu'elle demande.
 const USES = [['Discuter avec BRO', 'chat'], ['Résumer un document, une conversation', 'chat'], ['Traduire un message', 'chat'], ['BRO agit pour vous (fichiers, agenda, proches)', 'tools'], ['Décrire une photo, lire un document difficile', 'vision'], ['Créer une image', 'images']];
@@ -44,7 +40,6 @@ export default async function aiCard(card, K) {
     (p.providers || []).map(x => h('option', { value: x.id, selected: p.provider === x.id }, x.label)));
   const rpm = h('input', { id: 'ai-rpm', inputmode: 'numeric', value: p.rpm || '', placeholder: String(p.default_rpm || 50), 'aria-label': t('Requêtes par minute') });
   const key = h('input', { id: 'ai-key', type: 'password', placeholder: p.has_key ? t('Clé enregistrée : laisser vide pour la garder') : t('Clé d\'API'), autocomplete: 'off', 'aria-label': t('Clé d\'API'), maxlength: 256 });
-  // Lien de parrainage de la coopérative chez ce fournisseur : proposé à qui n'a pas de compte, et dit comme tel.
   const refer = h('p', { class: 'muted' });
   const showRefer = () => {
     const url = (p.referrals || {})[prov.value], name = prov.selectedOptions[0]?.textContent;

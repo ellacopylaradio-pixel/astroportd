@@ -543,7 +543,37 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
         }
         let tools = BroTools { services: self.services.clone(), hex: who.hex.clone() };
         let q = crate::bro_chat::Ask { text: ask.text, history: ask.history, private: ask.private, allow_cloud: ask.allow_cloud };
-        crate::bro_chat::ask(ai, ai.rights().map(Arc::as_ref), ai.limiter(), &who.hex, who.captain, q, &tools).await.map_err(ai_error)
+        crate::bro_chat::ask(ai, &who.hex, who.captain, q, &tools, None).await.map_err(ai_error)
+    }
+    /// BRO en flux : la même réponse que [`Self::bro_ask`], envoyée au fil de l'eau par une tâche (les morceaux, puis `done`).
+    async fn bro_stream(&self, who: &Principal, ask: astro_ui::api::BroAsk) -> Result<tokio::sync::mpsc::UnboundedReceiver<Value>, ApiError> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ai = match self.ai.clone() {
+            Some(ai) if bus::parse(&ask.text).is_none() && ai.available(&who.hex, who.captain).await => ai,
+            _ => {
+                let mut done = self.bro_ask(who, ask).await?;
+                done["type"] = Value::from("done");
+                let _ = tx.send(done);
+                return Ok(rx);
+            }
+        };
+        let (hex, captain, services) = (who.hex.clone(), who.captain, self.services.clone());
+        tokio::spawn(async move {
+            let tools = BroTools { services, hex: hex.clone() };
+            let q = crate::bro_chat::Ask { text: ask.text, history: ask.history, private: ask.private, allow_cloud: ask.allow_cloud };
+            let sink = |v: Value| {
+                let _ = tx.send(v);
+            };
+            let end = match crate::bro_chat::ask(&ai, &hex, captain, q, &tools, Some(&sink)).await {
+                Ok(mut v) => {
+                    v["type"] = Value::from("done");
+                    v
+                }
+                Err(e) => json!({ "type": "error", "error": match e { crate::member_ai::AiError::Invalid(m) => m, crate::member_ai::AiError::Internal(_) => "BRO est indisponible : voir les journaux de la station".to_owned() } }),
+            };
+            let _ = tx.send(end);
+        });
+        Ok(rx)
     }
     /// Console de BRO : `#commande` exécute la commande (comme par message privé) ; un autre texte est noté dans le
     /// journal (emplacement 15) après avoir cherché les souvenirs proches. Pas de génération de réponse par un LLM.
