@@ -1124,7 +1124,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     // que l'arrêt attend), elle s'arrête avec le processus.
     drop(agents.serve_remote());
     // IA des membres : offres uCloud = l'Ollama de la station et les accès locaux ouverts vers le modèle d'un ami.
-    let member_ai = Arc::new(astroportd::member_ai::MemberAi::new(db.clone(), agent_keys2, publish_fn(&event_publisher)).with_offers(a.ollama.clone(), Some(forwards.clone())));
+    let member_ai = Arc::new(astroportd::member_ai::MemberAi::new(db.clone(), agent_keys2, publish_fn(&event_publisher)).with_offers(a.ollama.clone(), Some(forwards.clone())).with_rights(Arc::new(astroportd::ai_rights::AiRights::new(db.clone()))));
     let assist_admin = admin::assist_admin(&assist);
     // Maillage (stations, bootstrap gardé) et Capitaines (suivre, services des amis, accès à chaud) pour l'écran du Capitaine.
     let mut mesh = astroportd::mesh_admin::Mesh::new(db.clone(), p2p_handle.clone(), a.p2p_bootstrap.clone(), station_planes(&a.db).0, activity.clone())

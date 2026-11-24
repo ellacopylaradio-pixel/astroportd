@@ -17,12 +17,23 @@ use tokio::io::AsyncReadExt;
 use crate::fetch::{self, FetchError, FetchLimits};
 
 /// Fournisseurs cloud connus : `(identifiant, nom montré, adresse de base de l'API au format OpenAI)`.
-pub const PRESETS: [(&str, &str, &str); 4] = [
+pub const PRESETS: [(&str, &str, &str); 5] = [
     ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
+    ("mixroute", "MixRoute", "https://api.mixroute.ai/v1"),
     ("mistral", "Mistral", "https://api.mistral.ai/v1"),
     ("gemini", "Gemini", "https://generativelanguage.googleapis.com/v1beta/openai"),
     ("anthropic", "Anthropic", "https://api.anthropic.com/v1"),
 ];
+
+/// Modèle essayé par défaut chez un fournisseur, quand le membre n'en a pas choisi : un modèle **gratuit** quand il en propose
+/// (MixRoute en ouvre une quinzaine avant toute recharge), pour qu'un premier test ne coûte rien.
+fn preset_default(provider: &str) -> Option<&'static str> {
+    match provider {
+        "mixroute" => Some("deepseek-v4-flash"),
+        "openrouter" => Some("openrouter/auto"),
+        _ => None,
+    }
+}
 
 /// Taille maximale d'une réponse (la liste d'OpenRouter dépasse 1 Mo).
 const MAX_BODY: u64 = 8 << 20;
@@ -254,9 +265,16 @@ impl Endpoint {
     pub async fn probe(&self, model: Option<&str>) -> Value {
         let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let head = json!({ "family": self.family.as_str(), "provider": self.provider, "at": at });
-        let models = match self.models().await {
-            Ok(m) => m,
-            Err(e) => return merge(head, json!({ "ok": false, "error": e.to_string(), "caps": Caps::default().view() })),
+        // Sans liste de modèles (tous ne l'offrent pas), un modèle donné par le membre suffit pour essayer une réponse.
+        let model = model.or_else(|| preset_default(&self.provider));
+        let models = match (self.models().await, model) {
+            (Ok(m), _) => m,
+            (Err(_), Some(m)) => vec![ModelInfo { id: m.to_owned(), context: None, vision: None, tools: None, image_out: None, price_in: None, price_out: None }],
+            (Err(e), None) => {
+                let e = e.to_string();
+                let hint = if e.contains("ne connaît pas") { format!("{e} ; si ce fournisseur ne donne pas sa liste, indiquez le modèle") } else { e };
+                return merge(head, json!({ "ok": false, "error": hint, "caps": Caps::default().view() }));
+            }
         };
         let chosen = model.filter(|m| models.iter().any(|x| x.id == *m)).map(str::to_owned).or_else(|| default_model(&self.provider, &models));
         let mut caps = Caps::default();
@@ -299,10 +317,11 @@ fn merge(mut a: Value, b: Value) -> Value {
     a
 }
 
-/// Modèle essayé quand le membre n'en a pas choisi : le routeur d'OpenRouter, sinon le premier qui sait discuter.
+/// Modèle essayé quand le membre n'en a pas choisi : celui du fournisseur ([`preset_default`]) s'il est dans la liste, sinon
+/// le premier qui sait discuter.
 fn default_model(provider: &str, models: &[ModelInfo]) -> Option<String> {
-    if provider == "openrouter" && models.iter().any(|m| m.id == "openrouter/auto") {
-        return Some("openrouter/auto".into());
+    if let Some(d) = preset_default(provider).filter(|d| models.iter().any(|m| m.id == *d)) {
+        return Some(d.to_owned());
     }
     models.iter().find(|m| !is_embedding(&m.id) && m.image_out != Some(true)).or_else(|| models.first()).map(|m| m.id.clone())
 }
@@ -479,6 +498,23 @@ mod tests {
         // Un modèle choisi qui n'existe pas : le défaut est essayé à la place.
         assert_eq!(ep.probe(Some("n-existe/pas")).await["model"], "openrouter/auto");
         assert_eq!(ep.probe(Some("mistralai/mistral-small")).await["caps"]["tools"], false);
+    }
+
+    /// Un fournisseur qui ne donne pas sa liste (MixRoute ne la documente pas) : le modèle gratuit est essayé quand même.
+    #[tokio::test]
+    async fn without_a_model_list_the_free_model_of_the_provider_is_tried() {
+        let chat = json!({ "choices": [{ "message": { "content": "OK" } }], "usage": { "prompt_tokens": 9, "completion_tokens": 1 } });
+        let (url, seen) = mock(vec![("/models", 404, "{}".into()), ("/chat/completions", 200, chat.to_string())]).await;
+        let mut ep = Endpoint::new(Family::Cloud, "mixroute", format!("{url}/v1"), Some("sk-mr-1234567890".into()));
+        ep.test_local_cloud = true;
+        let p = ep.probe(None).await;
+        assert_eq!((p["ok"].as_bool(), p["model"].as_str()), (Some(true), Some("deepseek-v4-flash")), "{p}");
+        assert!(seen.lock().unwrap().iter().any(|r| r.contains("\"model\":\"deepseek-v4-flash\"")));
+        // Sans modèle par défaut connu (Mistral) ni liste : on demande au membre d'en indiquer un.
+        let (url, _) = mock(vec![("/models", 404, "{}".into())]).await;
+        let mut ep = Endpoint::new(Family::Cloud, "mistral", format!("{url}/v1"), Some("k".repeat(12)));
+        ep.test_local_cloud = true;
+        assert!(ep.probe(None).await["error"].as_str().unwrap().contains("indiquez le modèle"));
     }
 
     #[tokio::test]

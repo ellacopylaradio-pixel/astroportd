@@ -1,0 +1,6 @@
+/* IA des membres (m-aiadmin.js, écran Membres) : réglages par défaut en deux colonnes, limites repliées dans la cellule. */
+.aa-form { display: grid; grid-template-columns: minmax(12rem, 22rem) minmax(8rem, 14rem); gap: .5rem 1rem; align-items: center; }
+@media (max-width: 40rem) { .aa-form { grid-template-columns: 1fr; } }
+.aa-lim summary { cursor: pointer; list-style: none; }
+.aa-lim[open] { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+.aa-lim input { width: 6rem; }

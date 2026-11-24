@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire en, phrases communes. Les écrans de `parts` ont aussi m-lang-en-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'about account agents ai beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles services replication devices backup card';
+export const parts = 'about account agents ai aiadmin beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles services replication devices backup card';
 export default {
 "{0} message(s) non lu(s)": "{0} unread message(s)",
 "trouvée par ce qu’elle montre": "found by what it shows",
@@ -643,4 +643,5 @@ export default {
 "Ollama de cette station": "This station's Ollama",
 "Ollama d'une station amie": "A friend station's Ollama",
 "vLLM d'une station amie": "A friend station's vLLM",
+"IA": "AI",
 };

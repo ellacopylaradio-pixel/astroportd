@@ -13,6 +13,7 @@ pub mod address_book;
 pub mod agent_browser;
 pub mod agents;
 pub mod ai_client;
+pub mod ai_rights;
 pub mod assist;
 pub mod chat;
 pub mod link_preview;

@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::ai_client::{self, Endpoint, PRESETS};
+use crate::ai_rights::{AiRights, Mode, Rights, RightsError};
 use crate::forwards::Forwards;
 use crate::register::PublishFn;
 
@@ -109,6 +110,13 @@ fn valid_model(raw: &str) -> Result<String, AiError> {
     Ok(m.to_owned())
 }
 
+fn rights_error(e: RightsError) -> AiError {
+    match e {
+        RightsError::Invalid(m) => AiError::Invalid(m),
+        RightsError::Internal(m) => AiError::Internal(m),
+    }
+}
+
 /// Service des paramètres IA.
 pub struct MemberAi {
     db: Arc<Db>,
@@ -118,13 +126,15 @@ pub struct MemberAi {
     station_ollama: Option<String>,
     /// Accès locaux ouverts vers les services des amis.
     forwards: Option<Arc<Forwards>>,
+    /// Droits décidés par le Capitaine (partage de son IA, droits par membre).
+    rights: Option<Arc<AiRights>>,
 }
 
 impl MemberAi {
     /// Service signant avec les clés de `keys` et publiant par `publish`.
     #[must_use]
     pub fn new(db: Arc<Db>, keys: Arc<dyn KeySource>, publish: PublishFn) -> Self {
-        Self { db, keys, publish, station_ollama: None, forwards: None }
+        Self { db, keys, publish, station_ollama: None, forwards: None, rights: None }
     }
 
     /// Offres uCloud de la station : son Ollama (`--ollama`) et les accès locaux ouverts vers les services d'IA des amis.
@@ -132,6 +142,13 @@ impl MemberAi {
     pub fn with_offers(mut self, station_ollama: Option<String>, forwards: Option<Arc<Forwards>>) -> Self {
         self.station_ollama = station_ollama.and_then(|u| ai_client::loopback_url(&u).ok());
         self.forwards = forwards;
+        self
+    }
+
+    /// Droits d'IA décidés par le Capitaine.
+    #[must_use]
+    pub fn with_rights(mut self, rights: Arc<AiRights>) -> Self {
+        self.rights = Some(rights);
         self
     }
 
@@ -162,59 +179,125 @@ impl MemberAi {
         want.is_some() && self.offers().iter().any(|o| o["url"].as_str().and_then(ai_client::host_port) == want)
     }
 
-    /// Vue de la carte du membre : ses paramètres (sans la clé), les offres uCloud et le dernier test de chacune de ses IA.
+    /// Droits de `owner` (sans service de droits : tout permis, comme avant le partage par le Capitaine).
+    async fn rights_of(&self, owner: &str) -> Result<(Rights, bool), AiError> {
+        match &self.rights {
+            Some(r) => r.of(owner).await.map_err(rights_error),
+            None => Ok((Rights { mode: Mode::Own, ..Rights::default() }, false)),
+        }
+    }
+
+    /// L'IA que le Capitaine partage : `(son compte, ses paramètres)`, s'il partage une IA déclarée.
+    async fn shared(&self) -> Option<(String, AiParams)> {
+        let cap = self.rights.as_ref()?.shared_by().await.ok().flatten()?;
+        let p = self.get(&cap).await.ok().filter(AiParams::declared)?;
+        Some((cap, p))
+    }
+
+    /// Point d'accès d'une IA déclarée : sa clé cloud d'abord, sinon son adresse locale.
+    fn endpoint_of(p: &AiParams, family: Option<&str>) -> Result<Endpoint, AiError> {
+        let invalid = |e: ai_client::AiClientError| AiError::Invalid(e.to_string());
+        let cloud = || match (p.provider.as_deref(), p.api_key.as_deref()) {
+            (Some(provider), Some(key)) => Some(Endpoint::cloud(provider, key).map_err(invalid)),
+            _ => None,
+        };
+        let local = || p.ollama_url.as_deref().map(|u| Endpoint::local(u).map_err(invalid));
+        match family {
+            Some("cloud") => cloud().unwrap_or_else(|| Err(AiError::Invalid("choisissez un fournisseur et donnez sa clé d'API".into()))),
+            Some("ucloud") => local().unwrap_or_else(|| Err(AiError::Invalid("choisissez un service de la station".into()))),
+            _ => cloud().or_else(local).unwrap_or_else(|| Err(AiError::Invalid("aucune IA déclarée".into()))),
+        }
+    }
+
+    /// Ce que l'IA partagée montre à un membre : famille, fournisseur et modèle, **jamais** la clé ni l'adresse.
+    fn shared_view(p: &AiParams) -> Value {
+        let cloud = p.provider.is_some() && p.api_key.is_some();
+        let label = p.provider.as_deref().and_then(|id| PRESETS.iter().find(|x| x.0 == id)).map(|x| x.1);
+        json!({ "family": if cloud { "cloud" } else { "ucloud" }, "provider": if cloud { label } else { None }, "model": p.model })
+    }
+
+    /// BRO est-il ouvert à `owner` ? Le Capitaine : s'il a déclaré une IA. Un membre : selon ses droits, l'IA partagée ou la
+    /// sienne. Une lecture impossible compte comme « non » (BRO reste masqué, rien ne casse).
+    pub async fn available(&self, owner: &str, captain: bool) -> bool {
+        let own = self.get(owner).await.is_ok_and(|p| p.declared());
+        if captain {
+            return own;
+        }
+        match self.rights_of(owner).await.map(|r| r.0.mode) {
+            Ok(Mode::Own) => own || self.shared().await.is_some(),
+            Ok(Mode::Station) => self.shared().await.is_some(),
+            _ => false,
+        }
+    }
+
+    async fn tests_of(&self, owner: &str) -> Result<serde_json::Map<String, Value>, AiError> {
+        let o = owner.to_owned();
+        let rows: Vec<(String, String)> = self
+            .db
+            .readers()
+            .read(move |c| Ok(c.prepare("SELECT key, value FROM kv WHERE scope = ?1 AND key IN (?2, ?3, ?4)")?.query_map(rusqlite::params![KV_TESTS, format!("{o}:cloud"), format!("{o}:ucloud"), format!("{o}:station")], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?))
+            .await
+            .map_err(|e| AiError::Internal(e.to_string()))?;
+        Ok(rows.into_iter().filter_map(|(k, raw)| Some((k.rsplit_once(':')?.1.to_owned(), serde_json::from_str::<Value>(&raw).ok()?))).collect())
+    }
+
+    /// Vue de la carte du membre : ses paramètres (sans la clé), ses droits, l'IA que la station lui prête, les offres uCloud,
+    /// les fournisseurs et leurs liens de parrainage, et le dernier test de chacune de ses IA.
     ///
     /// # Errors
     /// Base ou clé indisponibles.
-    pub async fn view_for(&self, owner: &str) -> Result<Value, AiError> {
+    pub async fn view_for(&self, owner: &str, captain: bool) -> Result<Value, AiError> {
         let mut v = self.get(owner).await?.view();
-        let o = owner.to_owned();
-        let tests: Vec<(String, String)> = self
-            .db
-            .readers()
-            .read(move |c| Ok(c.prepare("SELECT key, value FROM kv WHERE scope = ?1 AND key IN (?2, ?3)")?.query_map(rusqlite::params![KV_TESTS, format!("{o}:cloud"), format!("{o}:ucloud")], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?))
-            .await
-            .map_err(|e| AiError::Internal(e.to_string()))?;
-        let mut t = serde_json::Map::new();
-        for (k, raw) in tests {
-            if let (Some((_, fam)), Ok(val)) = (k.rsplit_once(':'), serde_json::from_str::<Value>(&raw)) {
-                t.insert(fam.to_owned(), val);
-            }
-        }
+        let (rights, set) = self.rights_of(owner).await?;
+        let shared = self.shared().await;
+        let referrals = match &self.rights {
+            Some(r) => r.referrals().await.map_err(rights_error)?,
+            None => serde_json::Map::new(),
+        };
         if let Some(obj) = v.as_object_mut() {
+            obj.insert("captain".into(), Value::Bool(captain));
+            obj.insert("rights".into(), json!({ "mode": rights.mode, "quota_tokens_week": rights.quota_tokens_week, "price_zen_week": rights.price_zen_week, "own": set }));
+            obj.insert("can_own".into(), Value::Bool(captain || rights.mode == Mode::Own));
+            let lent = shared.as_ref().filter(|(cap, _)| cap != owner && (captain || rights.mode != Mode::Off));
+            obj.insert("station".into(), lent.map_or(Value::Null, |(_, p)| Self::shared_view(p)));
             obj.insert("offers".into(), Value::Array(self.offers()));
-            obj.insert("tests".into(), Value::Object(t));
+            obj.insert("tests".into(), Value::Object(self.tests_of(owner).await?));
             obj.insert("providers".into(), PRESETS.iter().map(|p| json!({ "id": p.0, "label": p.1 })).collect());
+            obj.insert("referrals".into(), Value::Object(referrals));
         }
         Ok(v)
     }
 
-    /// Teste l'IA `family` (`cloud` : fournisseur et clé ; `ucloud` : adresse locale) du membre et garde le résultat.
-    /// Un membre qui n'est pas Capitaine (`captain` faux) n'atteint en boucle locale que les offres de la station.
+    /// Teste une IA du membre et garde le résultat : `cloud` (sa clé), `ucloud` (son adresse locale) — avec le droit d'utiliser
+    /// la sienne —, ou `station` (l'IA que le Capitaine lui prête). En boucle locale, un membre qui n'est pas Capitaine
+    /// n'atteint que les offres de la station.
     ///
     /// # Errors
-    /// Rien de déclaré pour cette famille, adresse hors offres, base indisponible. Un fournisseur qui échoue n'est pas une
-    /// erreur : il est dit dans le résultat (`ok: false`).
+    /// Droit refusé, rien de déclaré pour cette famille, adresse hors offres, base indisponible. Un fournisseur qui échoue
+    /// n'est pas une erreur : il est dit dans le résultat (`ok: false`).
     pub async fn test(&self, owner: &str, captain: bool, family: &str) -> Result<Value, AiError> {
-        let p = self.get(owner).await?;
-        let invalid = |e: ai_client::AiClientError| AiError::Invalid(e.to_string());
-        let ep = match family {
-            "cloud" => {
-                let (Some(provider), Some(key)) = (p.provider.as_deref(), p.api_key.as_deref()) else {
-                    return Err(AiError::Invalid("choisissez un fournisseur et donnez sa clé d'API".into()));
-                };
-                Endpoint::cloud(provider, key).map_err(invalid)?
+        let mode = self.rights_of(owner).await?.0.mode;
+        let (ep, model) = match family {
+            "station" => {
+                if !captain && mode == Mode::Off {
+                    return Err(AiError::Invalid("votre Capitaine n'a pas ouvert l'IA à votre compte".into()));
+                }
+                let (_, p) = self.shared().await.ok_or_else(|| AiError::Invalid("la station ne prête pas d'IA pour l'instant".into()))?;
+                (Self::endpoint_of(&p, None)?, p.model)
             }
-            "ucloud" => {
-                let url = p.ollama_url.as_deref().ok_or_else(|| AiError::Invalid("choisissez un service de la station".into()))?;
-                if !captain && !self.offered(url) {
+            "cloud" | "ucloud" => {
+                if !captain && mode != Mode::Own {
+                    return Err(AiError::Invalid("votre Capitaine ne permet pas d'utiliser votre propre IA : demandez-le-lui".into()));
+                }
+                let p = self.get(owner).await?;
+                if family == "ucloud" && !captain && !p.ollama_url.as_deref().is_some_and(|u| self.offered(u)) {
                     return Err(AiError::Invalid("ce service n'est pas proposé par la station : choisissez-en un dans la liste".into()));
                 }
-                Endpoint::local(url).map_err(invalid)?
+                (Self::endpoint_of(&p, Some(family))?, p.model)
             }
-            _ => return Err(AiError::Invalid("famille : cloud ou ucloud".into())),
+            _ => return Err(AiError::Invalid("famille : station, cloud ou ucloud".into())),
         };
-        let result = ep.probe(p.model.as_deref()).await;
+        let result = ep.probe(model.as_deref()).await;
         self.db
             .writer()
             .execute(
@@ -224,6 +307,52 @@ impl MemberAi {
             .await
             .map_err(|e| AiError::Internal(e.to_string()))?;
         Ok(result)
+    }
+
+    /// Écran du Capitaine (*Membres*) : son IA (sans la clé), le partage, les droits par défaut et par membre, les liens de
+    /// parrainage.
+    ///
+    /// # Errors
+    /// Service des droits absent, base indisponible.
+    pub async fn station_view(&self, captain: &str) -> Result<Value, AiError> {
+        let r = self.rights.as_ref().ok_or_else(|| AiError::Internal("droits d'IA indisponibles".into()))?;
+        let mine = self.get(captain).await?;
+        let shared_by = r.shared_by().await.map_err(rights_error)?;
+        Ok(json!({
+            "mine": if mine.declared() { Self::shared_view(&mine) } else { Value::Null },
+            "test": self.tests_of(captain).await?.into_iter().find(|(k, _)| k != "station").map(|(_, v)| v),
+            "share": shared_by.as_deref() == Some(captain),
+            "shared_by_other": shared_by.as_deref().is_some_and(|c| c != captain),
+            "default": r.default_rights().await.map_err(rights_error)?.view(),
+            "members": r.members().await.map_err(rights_error)?,
+            "referrals": r.referrals().await.map_err(rights_error)?,
+            "providers": PRESETS.iter().map(|p| json!({ "id": p.0, "label": p.1 })).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// Réglage du Capitaine : `{ share: bool }`, `{ default: {…} }`, `{ member: { hex, rights: {…} | null } }` ou
+    /// `{ referral: { provider, url | null } }`. Rend la vue à jour.
+    ///
+    /// # Errors
+    /// Saisie invalide (partager sans IA déclarée…), base indisponible.
+    pub async fn set_station(&self, captain: &str, body: &Value) -> Result<Value, AiError> {
+        let r = self.rights.as_ref().ok_or_else(|| AiError::Internal("droits d'IA indisponibles".into()))?;
+        if let Some(on) = body.get("share").and_then(Value::as_bool) {
+            if on && !self.get(captain).await?.declared() {
+                return Err(AiError::Invalid("déclarez d'abord votre IA (Moi › Appareils) pour la partager".into()));
+            }
+            r.share(captain, on).await.map_err(rights_error)?;
+        } else if let Some(d) = body.get("default").filter(|d| d.is_object()) {
+            r.set_default(d).await.map_err(rights_error)?;
+        } else if let Some(m) = body.get("member") {
+            let hex = m.get("hex").and_then(Value::as_str).unwrap_or_default();
+            r.set_member(hex, m.get("rights").filter(|x| x.is_object())).await.map_err(rights_error)?;
+        } else if let Some(x) = body.get("referral") {
+            r.set_referral(x.get("provider").and_then(Value::as_str).unwrap_or_default(), x.get("url").and_then(Value::as_str)).await.map_err(rights_error)?;
+        } else {
+            return Err(AiError::Invalid("attendu : share, default, member ou referral".into()));
+        }
+        self.station_view(captain).await
     }
 
     async fn load_stamped(&self, owner: &str) -> Result<(AiParams, u64), AiError> {
@@ -388,6 +517,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Le Capitaine prête son IA ; un membre s'en sert selon ses droits, sans jamais voir la clé, et n'utilise la sienne qu'avec
+    /// le droit « own ».
+    #[tokio::test]
+    async fn the_captain_lends_his_ai_and_each_member_uses_it_by_right() {
+        const CAP: [u8; 32] = [0xC0; 32];
+        let dir = std::env::temp_dir().join(format!("astroportd-memberai-lend-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Arc::new(Db::open(&dir.join("u.db"), 2).unwrap());
+        let publish: PublishFn = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let rights = Arc::new(AiRights::new(db.clone()));
+        let ai = MemberAi::new(db, Arc::new(StaticKeySource::new().with(ALICE).with(CAP)), publish).with_rights(rights.clone());
+        let (me, cap) = (pubkey_of(&ALICE).unwrap(), pubkey_of(&CAP).unwrap());
+        assert!(!ai.available(&me, false).await, "rien de partagé : BRO masqué");
+        // Partager sans IA déclarée : refusé.
+        assert!(matches!(ai.set_station(&cap, &json!({ "share": true })).await, Err(AiError::Invalid(_))));
+        ai.set(&cap, &json!({ "provider": "mixroute", "api_key": "sk-mr-TRESSECRET", "model": "gpt-x" })).await.unwrap();
+        let v = ai.set_station(&cap, &json!({ "share": true })).await.unwrap();
+        assert_eq!((v["share"].as_bool(), v["mine"]["provider"].as_str()), (Some(true), Some("MixRoute")));
+        // Le membre (droits par défaut : l'IA de la station) la voit, sans clé ; sa propre IA lui est fermée.
+        assert!(ai.available(&me, false).await);
+        let mine = ai.view_for(&me, false).await.unwrap();
+        assert_eq!((mine["station"]["provider"].as_str(), mine["station"]["model"].as_str(), mine["can_own"].as_bool()), (Some("MixRoute"), Some("gpt-x"), Some(false)));
+        assert!(!mine.to_string().contains("TRESSECRET"));
+        ai.set(&me, &json!({ "provider": "openrouter", "api_key": "sk-or-1234567890" })).await.unwrap();
+        assert!(matches!(ai.test(&me, false, "cloud").await, Err(AiError::Invalid(m)) if m.contains("ne permet pas")));
+        // Le test de l'IA prêtée part bien vers le fournisseur du Capitaine (injoignable ici : c'est dit, sans la clé).
+        let t = ai.test(&me, false, "station").await.unwrap();
+        assert_eq!((t["provider"].as_str(), t["ok"].as_bool()), (Some("mixroute"), Some(false)));
+        assert!(!t.to_string().contains("TRESSECRET"));
+        // Droit « own » : sa propre clé s'ouvre. Droit « off » : plus rien, BRO masqué.
+        ai.set_station(&cap, &json!({ "member": { "hex": me, "rights": { "mode": "own" } } })).await.unwrap();
+        assert!(ai.view_for(&me, false).await.unwrap()["can_own"].as_bool().unwrap());
+        ai.set_station(&cap, &json!({ "member": { "hex": me, "rights": { "mode": "off" } } })).await.unwrap();
+        assert!(!ai.available(&me, false).await);
+        assert!(ai.view_for(&me, false).await.unwrap()["station"].is_null());
+        assert!(matches!(ai.test(&me, false, "station").await, Err(AiError::Invalid(_))));
+        // Le Capitaine cesse de partager : le membre revenu au défaut n'a plus d'IA.
+        ai.set_station(&cap, &json!({ "member": { "hex": me, "rights": null } })).await.unwrap();
+        ai.set_station(&cap, &json!({ "share": false })).await.unwrap();
+        assert!(!ai.available(&me, false).await);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn a_member_reaches_only_the_station_offers_and_a_test_is_kept_without_the_key() {
         let (ai, _, me, dir) = rig("offers").await;
@@ -407,7 +580,7 @@ mod tests {
         assert_eq!(ai.test(&me, false, "ucloud").await.unwrap()["family"], "ucloud");
         // OpenRouter est un fournisseur ; le test (injoignable ici) est gardé et relu, sans la clé.
         ai.set(&me, &json!({ "provider": "openrouter", "api_key": "sk-or-TRESSECRET" })).await.unwrap();
-        let view = ai.view_for(&me).await.unwrap();
+        let view = ai.view_for(&me, false).await.unwrap();
         assert_eq!((view["tests"]["ucloud"]["family"].as_str(), view["offers"].as_array().map(Vec::len), view["providers"][0]["id"].as_str()), (Some("ucloud"), Some(1), Some("openrouter")));
         assert!(!view.to_string().contains("TRESSECRET"));
         let _ = std::fs::remove_dir_all(dir);

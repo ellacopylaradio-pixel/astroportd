@@ -73,6 +73,7 @@ GET /api/v1/register anon=200 member=200
 GET /api/v1/replication anon=401 member=200
 GET /api/v1/station/accounts anon=401 member=403
 GET /api/v1/station/admin/{section} anon=401 member=403
+GET /api/v1/station/ai anon=401 member=403
 GET /api/v1/station/alerts anon=401 member=403
 GET /api/v1/station/constellation anon=401 member=403
 GET /api/v1/station/coop anon=401 member=403
@@ -214,6 +215,7 @@ POST /api/v1/station/accounts/{hex}/quota anon=401 member=403
 POST /api/v1/station/accounts/{hex}/token anon=401 member=403
 POST /api/v1/station/accounts/{hex}/unlock-pass anon=401 member=403
 POST /api/v1/station/admin/{section} anon=401 member=403
+POST /api/v1/station/ai anon=401 member=403
 POST /api/v1/station/alerts/clear anon=401 member=403
 POST /api/v1/station/alerts/{id}/delete anon=401 member=403
 POST /api/v1/station/alerts/{id}/done anon=401 member=403

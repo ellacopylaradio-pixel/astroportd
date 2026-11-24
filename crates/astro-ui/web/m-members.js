@@ -1,6 +1,7 @@
 'use strict';
 // Station › Membres : comptes hébergés (cycle de vie, disque, hébergement), jeton de secours, déverrouillage du PASS, éjection,
-// et lecture des documents (IA) : pour la station, par défaut, pour chaque MULTIPASS, et le prêt de la station aux Capitaines amis.
+// et lecture des documents (IA) : pour la station, par défaut, pour chaque MULTIPASS, et le prêt de la station aux Capitaines amis ;
+// l'IA des membres (m-aiadmin.js) : le prêt de l'IA du Capitaine, et les droits, quota et prix par membre.
 const LIFE = { active_rental: 'Locataire', cooperative_member: 'Coopérateur', grace_period: 'En grâce', suspended: 'Suspendu' };
 const FILTERS = [['all', 'Tous', () => true], ['ok', 'Actifs', a => !['grace_period', 'suspended'].includes(a.status)], ['grace_period', 'En grâce', a => a.status === 'grace_period'], ['suspended', 'Suspendus', a => a.status === 'suspended'], ['locked', 'PASS verrouillé', a => !!a.pass_locked_until]];
 const tone = s => (s === 'grace_period' ? 'degraded' : s === 'suspended' ? 'down' : s ? 'ok' : 'disabled');
@@ -10,6 +11,7 @@ export default async function members(root, K, q) {
   const { h, t, api, toast } = K;
   const price = z => (z > 0 ? `${z} ẑ / ${t('semaine')}` : t('gratuit'));
   let flt = FILTERS.some(f => f[0] === q?.get('f')) ? q.get('f') : 'all';
+  const AA = await K.mod('m-aiadmin.js'), aiDone = v => { data.ai = v; paint(); };
 
   const token = async a => {
     const dlg = document.getElementById('share'), box = document.getElementById('share-b');
@@ -83,8 +85,9 @@ export default async function members(root, K, q) {
       h('p', { class: 'muted' }, `${t('Formule par défaut')} : ${hd.default_quota_bytes == null ? t('celle de leur offre') : K.bytes(hd.default_quota_bytes)} · ${price(hd.default_weekly_zen)} `, h('button', { class: 'ghost', onclick: () => hosting(null, hd) }, t('Modifier'))),
       edit,
       indexCard(data.ix),
+      ...(data.ai ? [AA.card(K, data.ai, aiDone)] : []),
       h('p', { class: 'filters', role: 'group', 'aria-label': t('Filtrer') }, chips),
-      rows.length ? K.table(t('Comptes de la station'), [t('Compte'), t('État'), t('Disque'), t('Hébergement'), t('Fichiers'), ...(data.ix ? [t('Lecture')] : []), t('Actions')],
+      rows.length ? K.table(t('Comptes de la station'), [t('Compte'), t('État'), t('Disque'), t('Hébergement'), t('Fichiers'), ...(data.ix ? [t('Lecture')] : []), ...(data.ai ? [t('IA')] : []), t('Actions')],
         rows.map(a => [
           a.email || a.hex.slice(0, 12),
           [K.pill(tone(a.status)), ' ', t(LIFE[a.status] || a.status || 'inconnu'), a.grace_ends_at ? ` (${t('jusqu\'au')} ${day(a.grace_ends_at)})` : '', a.onboarding ? ` · ${a.onboarding.proved_at ? t('clés reçues') : t('jamais connecté')}${a.onboarding.primo === 'paid' ? ' · 1 Ğ1' : ''}` : ''],
@@ -92,14 +95,16 @@ export default async function members(root, K, q) {
           a.unlimited ? '—' : `${price(a.weekly_zen)}${a.billet_issuer ? ' 🎫' : ''}`,
           String(a.files),
           ...(data.ix ? [readCell(a)] : []),
+          ...(data.ai ? [AA.cell(K, data.ai, a, aiDone)] : []),
           h('span', { class: 'acts' }, actions(a)),
         ])) : h('p', { class: 'muted' }, t('Aucun compte.')));
   };
   const draw = async () => {
     // La lecture des documents est facultative : une station qui ne l'a pas garde son écran Membres tel quel.
-    const [ac, hd, ix] = await Promise.all([api('/api/v1/station/accounts'), api('/api/v1/station/hosting'), api(IX).catch(() => null)]);
-    data = { ac, hd, ix }; paint();
+    const [ac, hd, ix, ai] = await Promise.all([api('/api/v1/station/accounts'), api('/api/v1/station/hosting'), api(IX).catch(() => null), AA.load(K)]);
+    data = { ac, hd, ix, ai }; paint();
   };
   await draw();
-  K.every(30000, () => draw().catch(() => {}));
+  // Pas de rafraîchissement pendant une saisie : il effacerait ce qui est en cours d'écriture.
+  K.every(30000, () => (root.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) ? null : draw().catch(() => {})));
 }

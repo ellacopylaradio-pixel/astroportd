@@ -87,12 +87,18 @@ ADMIN['index'] = dict(enabled=True, default=True, engine=[], lend=None, members=
 
 # Agents (m-agents.js) : un agent déclaré, une demande en mode navigateur ; l'écran prêté est une page de connexion dessinée.
 # IA du membre (m-ai.js) : l'Ollama de la station testé, OpenRouter testé (clé refusée).
-AI_VIEW = dict(ollama_url='http://127.0.0.1:11434', provider='openrouter', has_key=True, model='llama3.2:3b',
+AI_VIEW = dict(ollama_url='http://127.0.0.1:11434', provider='openrouter', has_key=True, model='llama3.2:3b', captain=True, can_own=True,
+               rights=dict(mode='station', quota_tokens_week=200000, price_zen_week=2, own=False),
+               station=dict(family='cloud', provider='MixRoute', model='deepseek-v3'), referrals=dict(mixroute='https://console.mixroute.ai/register?aff=COOP'),
                offers=[dict(url='http://127.0.0.1:11434', service='ollama', label='Ollama de cette station', friend=False), dict(url='http://127.0.0.1:24017', service='vllm', label="vLLM d'une station amie", friend=True)],
-               providers=[dict(id='openrouter', label='OpenRouter'), dict(id='mistral', label='Mistral'), dict(id='gemini', label='Gemini'), dict(id='anthropic', label='Anthropic')],
+               providers=[dict(id='openrouter', label='OpenRouter'), dict(id='mixroute', label='MixRoute'), dict(id='mistral', label='Mistral'), dict(id='gemini', label='Gemini'), dict(id='anthropic', label='Anthropic')],
                tests=dict(ucloud=dict(family='ucloud', ok=True, model='llama3.2:3b', latency_ms=840, at=int(time.time()) - 120, models_total=2, caps=dict(chat=True, tools=None, vision=None, embeddings=True, images=None),
                                      models=[dict(id='llama3.2:3b', context=None, price_in=None, price_out=None), dict(id='bge-m3:latest')]),
                           cloud=dict(family='cloud', ok=False, error="clé d'API refusée : vérifiez-la, ou ses droits", at=int(time.time()) - 60, caps=dict(chat=None, tools=None, vision=None, embeddings=None, images=None))))
+# IA des membres, vue du Capitaine (m-aiadmin.js).
+STATION_AI = dict(mine=dict(family='cloud', provider='MixRoute', model='deepseek-v3'), test=dict(ok=True), share=True, shared_by_other=False,
+                  default=dict(mode='station', quota_tokens_week=200000, price_zen_week=2), members={}, referrals=dict(mixroute='https://console.mixroute.ai/register?aff=COOP'),
+                  providers=[dict(id='openrouter', label='OpenRouter'), dict(id='mixroute', label='MixRoute'), dict(id='mistral', label='Mistral'), dict(id='gemini', label='Gemini'), dict(id='anthropic', label='Anthropic')])
 AGENTS = dict(agents=[dict(id='a1b2c3d4', name='OpenClaw', group='Agents', max_secs=3600, totp=False, created_at=1790000000)],
               requests=[dict(id='r1', agent='OpenClaw', client='Claude Code 2.1.3', remote=False, site='linkedin.com', reason='publier le résumé de la semaine', mode='navigateur', state='pending', asked_at=1790000000, until=None),
                         dict(id='r2', agent='OpenClaw', site='impots.gouv.fr', reason='relever ma facture', mode='accord', state='pending', asked_at=1790000000, until=None)],
@@ -264,6 +270,7 @@ class H(BaseHTTPRequestHandler):
             url = f'http://127.0.0.1:{self.server.server_port}/#/payer?to={"aa" * 32}' + (f'&a={a}' if a else '')
             return self.send(200, dict(url=url, qr_svg=qr_svg(url), hex='aa' * 32, amount_zen=int(a) if a else None))
         if p == '/api/v1/me/ai': return self.send(200, dict(AI_VIEW, declared=STATE.get('ai', True)))
+        if p == '/api/v1/station/ai': return self.send(200, STATION_AI)
         if p == '/api/v1/station/coop': return self.send(200, COOP)
         if p == '/api/v1/account/site': return self.send(200, dict(name='alice', files=0, has_index=True, visits=0, host_url=None, path_url='/site/alice/'))
         if p == '/api/v1/presence': return self.send(200, dict(reachable=True, friends=[]))
@@ -417,7 +424,12 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/planes': return self.send(200, dict(name=body['name'], http='127.0.0.1:8092', p2p='/ip4/0.0.0.0/tcp/4102', swarm_key_path='/x/zen2/swarm.key', created_key='/key/swarm/psk/1.0.0/\\n/base16/\\n' + 'ab' * 32))
         if p == '/api/v1/me/ai':
             STATE['ai'] = bool(body.get('ollama_url') or body.get('provider')); return self.send(200, dict(ollama_url=body.get('ollama_url'), provider=body.get('provider'), has_key=False, model=None, declared=STATE['ai']))
-        if p == '/api/v1/me/ai/test': return self.send(200, AI_VIEW['tests'][body['family']])
+        if p == '/api/v1/me/ai/test': return self.send(200, AI_VIEW['tests'].get(body['family'], {}))
+        if p == '/api/v1/station/ai':
+            if 'member' in body: STATION_AI['members'][body['member']['hex']] = body['member']['rights']
+            if 'default' in body: STATION_AI['default'] = body['default']
+            if 'share' in body: STATION_AI['share'] = body['share']
+            return self.send(200, STATION_AI)
         if p == '/api/v1/book/delete-many': return self.send(200, dict(deleted=len(body['paths']), failed=[]))
         if p == '/api/v1/ucloud/rotate': return self.send(200, dict(rotated=len(body['paths']), failed=[]))
         if p == '/api/v1/ucloud/media/share':

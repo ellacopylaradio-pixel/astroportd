@@ -19,6 +19,14 @@ pub trait SocialApi: Auth {
     fn test_ai(&self, _who: &Principal, _family: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("paramètres IA non disponibles sur cette station")) }
     }
+    /// IA de la station (Capitaine) : son IA, le partage, les droits par défaut et par membre, les liens de parrainage.
+    fn station_ai(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("paramètres IA non disponibles sur cette station")) }
+    }
+    /// Réglage de l'IA de la station : `{ share }`, `{ default }`, `{ member: { hex, rights } }` ou `{ referral }`.
+    fn set_station_ai(&self, _who: &Principal, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("paramètres IA non disponibles sur cette station")) }
+    }
     /// « Lecture de vos documents » : vue, stations proposées, accord, arrêt.
     fn reading(&self, _who: &Principal, _op: ReadingOp) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("lecture des documents non disponible sur cette station")) }
@@ -156,6 +164,7 @@ pub(super) fn routes<B: SocialApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/activity", get(activity_stream::<B>))
         .route("/api/v1/me/ai", get(ai_params::<B>).post(set_ai_params::<B>))
         .route("/api/v1/me/ai/test", post(test_ai::<B>))
+        .route("/api/v1/station/ai", get(station_ai::<B>).post(set_station_ai::<B>))
         .route("/api/v1/me/reading", get(reading_view::<B>).post(reading_set::<B>))
         .route("/api/v1/me/reading/offers", get(reading_offers::<B>))
         .route("/api/v1/book", get(book_list::<B>))
@@ -630,12 +639,23 @@ async fn reading_set<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p):
     reply(st.backend.reading(&p, op).await)
 }
 
-/// `{ family: "cloud" | "ucloud" }`.
+/// `{ family: "station" | "cloud" | "ucloud" }`.
 async fn test_ai<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
     match b["family"].as_str() {
-        Some(f @ ("cloud" | "ucloud")) => reply(st.backend.test_ai(&p, f.to_owned()).await),
-        _ => reply(Err(ApiError::bad_request("attendu : { family: \"cloud\" | \"ucloud\" }"))),
+        Some(f @ ("station" | "cloud" | "ucloud")) => reply(st.backend.test_ai(&p, f.to_owned()).await),
+        _ => reply(Err(ApiError::bad_request("attendu : { family: \"station\" | \"cloud\" | \"ucloud\" }"))),
     }
+}
+
+async fn station_ai<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain) -> Response {
+    reply(st.backend.station_ai(&p).await)
+}
+
+async fn set_station_ai<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Captain(p): Captain, Json(b): Json<Value>) -> Response {
+    if !b.is_object() {
+        return reply(Err(ApiError::bad_request("objet JSON attendu")));
+    }
+    reply(st.backend.set_station_ai(&p, b).await)
 }
 
 async fn set_ai_params<B: SocialApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(patch): Json<Value>) -> Response {

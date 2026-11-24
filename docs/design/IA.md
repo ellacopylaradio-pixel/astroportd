@@ -78,17 +78,44 @@ Pour chaque membre, et une valeur par défaut pour tous :
 Stockage : `kv` `ai_rights/<hex>` et `ai_rights/default` (état local, comme `hosting_price`). Consommation : table `ai_usage`
 (état local : membre, semaine, requêtes, jetons envoyés et reçus, coût annoncé par le fournisseur).
 
+## Routage hybride : la confidentialité d'abord, la puissance ensuite
+
+Quand BRO discute, chaque demande est **classée par ce qu'elle transporte, pas par ce qu'un modèle en devine** :
+
+- **privée** dès qu'elle contient une donnée du membre : contenu ou texte lu du uCloud, messages (chat, Nostr chiffrés),
+  carnet, agenda, mémoire de BRO, visages, résultat d'un outil de lecture. Chaque outil marque son résultat ; une
+  conversation qui en a reçu un reste privée jusqu'à la fin ;
+- **ouverte** sinon (question générale, code, texte collé que le membre déclare publiable).
+
+Règle de bascule :
+
+| Demande | Où elle va |
+|---|---|
+| privée | uCloud seulement (Ollama de la station, d'un ami de la constellation, IA intégrée) |
+| privée, sans uCloud disponible | refus expliqué, ou accord explicite du membre pour cette fois (« envoyer à MixRoute ? ») |
+| ouverte, simple | uCloud s'il répond, sinon cloud |
+| ouverte, lourde (résumé long, code, contexte au-delà de celui du modèle local) | cloud |
+| image | ComfyUI (uCloud) d'abord, puis un modèle cloud qui crée des images |
+
+Le membre peut durcir la règle (« jamais de cloud ») ; le Capitaine ne peut pas l'assouplir pour lui. L'IA prêtée par le
+Capitaine en cloud compte comme du cloud : ses messages partent chez le fournisseur du Capitaine. Chaque réponse dit où elle a
+été calculée (🏠 / 🌐).
+
 ## Lots
+
+*Faits : 1 (1.11, `e765be1`) et 2.*
 
 1. **Moteur et test** : client au format OpenAI (cloud par `fetch.rs`, uCloud en boucle locale seulement), préréglages,
    `Tester` et capacités sur la carte du membre, choix du modèle dans la liste ; tests hostiles (adresse privée, port local
    hors offres, réponse géante, délai).
 2. **Partage et droits** : « partager mon IA avec mes membres » (Capitaine), droits `off/station/own` dans *Membres*,
    résolution « quelle IA pour ce membre ».
-3. **BRO parle** : discussion par l'IA résolue (puis en flux), décompte dans `ai_usage`, quota.
+3. **BRO parle** : discussion par l'IA résolue (puis en flux), **routage hybride** ci-dessus, décompte dans `ai_usage`, quota.
 4. **Ẑen par semaine** : prix IA prélevé avec l'hébergement et compté dans la clôture.
 5. **uCloud de la constellation et fonctions** : service `vllm` (tunnel DRAGON, `modules.list`), offres des amis proposées,
    outils de BRO, vision, images (ComfyUI).
+6. **IA intégrée (ONNX)** : un petit modèle de discussion installable avec les modules (`astroportd models add`), exposé en
+   boucle locale au format OpenAI : une offre uCloud de plus (voir plus bas).
 
 ## Un modèle de discussion local, sans Ollama (ONNX)
 

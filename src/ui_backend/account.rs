@@ -532,7 +532,8 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
     }
     async fn ai_declared(&self, who: &Principal) -> bool {
         match &self.ai {
-            Some(ai) => ai.declared(&who.hex).await,
+            // BRO s'ouvre selon les droits : l'IA que le Capitaine prête, ou la sienne s'il y a droit.
+            Some(ai) => ai.available(&who.hex, who.captain).await,
             None => false,
         }
     }

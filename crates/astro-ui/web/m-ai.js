@@ -1,5 +1,6 @@
 'use strict';
-// Moi › Appareils, carte « Intelligence artificielle » (docs/design/IA.md). Deux familles, dites comme telles :
+// Moi › Appareils, carte « Intelligence artificielle » (docs/design/IA.md). D'abord l'IA que la station prête (décidée par le
+// Capitaine, écran Membres) ; puis, si le Capitaine le permet, la sienne, de deux familles dites comme telles :
 // - sur votre station (uCloud) : un service d'IA que la station propose (son Ollama, celui d'un ami par tunnel) ; tout reste ici ;
 // - par Internet (cloud) : un fournisseur et sa clé ; les messages sortent de la constellation.
 // « Tester » mesure ce que l'IA sait faire ; la carte en déduit ce que l'IA permet. La clé n'est jamais réaffichée.
@@ -10,10 +11,20 @@ const USES = [['Discuter avec BRO', 'chat'], ['Résumer un document, une convers
 export default async function aiCard(card, K) {
   const { h, t, head } = K;
   card.append(head(t('Intelligence artificielle'), t('Donnez une IA à BRO : celle de votre station, ou un fournisseur sur Internet. Une clé est chiffrée pour vous seul et n\'est jamais réaffichée.')));
-  const [p, me] = await Promise.all([K.api('/api/v1/me/ai'), K.api('/api/v1/me').catch(() => ({}))]);
-  const tests = p.tests || {};
+  const p = await K.api('/api/v1/me/ai'), me = { captain: p.captain };
+  const tests = p.tests || {}, R = p.rights || {};
   const body = h('div');
   card.append(body);
+  if (!p.captain && R.mode === 'off') return void body.append(h('p', { class: 'muted' }, t('Votre Capitaine n\'a pas ouvert l\'IA à votre compte.')));
+
+  // ── L'IA que la station prête : ce qu'elle est (jamais sa clé), ses limites, son test ──
+  const lim = [R.quota_tokens_week ? t('jusqu\'à {0} jetons par semaine', R.quota_tokens_week.toLocaleString()) : null, R.price_zen_week ? t('{0} ẑ par semaine', R.price_zen_week) : null].filter(Boolean).join(' · ');
+  const st = p.station;
+  const lent = st ? h('fieldset', { class: 'ai-fam' }, h('legend', {}, '🛰️ ', t('Prêtée par votre station')),
+    h('p', {}, st.family === 'cloud' ? t('Par Internet, chez {0}', st.provider || '?') : t('Sur votre station : tout reste chez vous.'), st.model ? ' · ' + st.model : ''),
+    st.family === 'cloud' ? h('p', { class: 'muted' }, t('Vos messages sortent de la constellation, vers ce fournisseur.')) : '',
+    lim && !p.captain ? h('p', { class: 'muted' }, lim) : '', result('station'), h('p', {}, testBtn('station')))
+    : p.captain ? '' : h('p', { class: 'muted' }, t('La station ne prête pas d\'IA pour l\'instant.'));
 
   // ── Sur votre station : une offre de la station (le Capitaine peut aussi donner une autre adresse locale) ──
   const offers = p.offers || [];
@@ -32,9 +43,16 @@ export default async function aiCard(card, K) {
   const prov = h('select', { id: 'ai-prov', 'aria-label': t('Fournisseur') }, h('option', { value: '' }, t('Aucun')),
     (p.providers || []).map(x => h('option', { value: x.id, selected: p.provider === x.id }, x.label)));
   const key = h('input', { id: 'ai-key', type: 'password', placeholder: p.has_key ? t('Clé enregistrée : laisser vide pour la garder') : t('Clé d\'API'), autocomplete: 'off', 'aria-label': t('Clé d\'API'), maxlength: 256 });
+  // Lien de parrainage de la coopérative chez ce fournisseur : proposé à qui n'a pas de compte, et dit comme tel.
+  const refer = h('p', { class: 'muted' });
+  const showRefer = () => {
+    const url = (p.referrals || {})[prov.value], name = prov.selectedOptions[0]?.textContent;
+    refer.replaceChildren(...(url ? [t('Pas encore de compte ?'), ' ', h('a', { href: url, target: '_blank', rel: 'noopener' }, t('S\'inscrire chez {0}', name)), ' — ', t('lien de parrainage de votre coopérative : le fournisseur lui verse une commission sur votre usage.')] : []));
+  };
+  prov.addEventListener('change', showRefer); showRefer();
   const cloud = h('fieldset', { class: 'ai-fam' }, h('legend', {}, '🌐 ', t('Par Internet')), h('p', { class: 'muted' }, t('Vos messages sortent de la constellation, vers ce fournisseur.')),
-    h('label', { for: 'ai-prov' }, t('Fournisseur')), prov, h('label', { for: 'ai-key' }, t('Clé d\'API')), key,
-    h('p', { class: 'muted' }, t('OpenRouter donne accès à des centaines de modèles avec une seule clé.')), result('cloud'));
+    h('label', { for: 'ai-prov' }, t('Fournisseur')), prov, refer, h('label', { for: 'ai-key' }, t('Clé d\'API')), key,
+    h('p', { class: 'muted' }, t('OpenRouter et MixRoute donnent accès à des centaines de modèles avec une seule clé ; MixRoute ouvre des modèles gratuits pour commencer.')), result('cloud'));
 
   // ── Modèle : choisi dans la liste du dernier test (on peut encore le taper) ──
   const all = [...(tests.ucloud?.models || []), ...(tests.cloud?.models || [])];
@@ -55,17 +73,19 @@ export default async function aiCard(card, K) {
   };
   const run = async (btn, fam) => {
     btn.disabled = true; btn.textContent = t('Test en cours…');
-    try { await save(); await K.api('/api/v1/me/ai/test', { method: 'POST', body: { family: fam } }); }
+    try { if (fam !== 'station') await save(); await K.api('/api/v1/me/ai/test', { method: 'POST', body: { family: fam } }); }
     catch (e) { K.toast(e.message); }
     K.mod('m-ai.js').then(m => { card.replaceChildren(); m.default(card, K); });
   };
-  const testBtn = fam => h('button', { type: 'button', class: 'ghost', onclick: ev => run(ev.target, fam) }, t('Tester'));
+  function testBtn(fam) { return h('button', { type: 'button', class: 'ghost', onclick: ev => run(ev.target, fam) }, t('Tester')); }
   local.append(offers.length || me.captain ? h('p', {}, testBtn('ucloud')) : '');
   cloud.append(h('p', {}, testBtn('cloud')));
 
-  body.append(p.declared ? h('p', {}, h('span', { class: 'pill ok' }, t('Branché')), ' ', h('a', { href: '#/bro' }, t('Parler à BRO') + ' →')) : '',
-    local, cloud, h('label', { for: 'ai-model' }, t('Modèle')), model, list, price,
-    h('p', {}, h('button', { type: 'button', onclick: async ev => { ev.target.disabled = true; try { await save(); K.toast(t('Paramètres IA enregistrés'), 1); location.reload(); } catch (e) { K.toast(e.message); ev.target.disabled = false; } } }, t('Enregistrer')),
+  const mine = p.can_own ? [h('h3', {}, t('Votre propre IA')), local, cloud, h('label', { for: 'ai-model' }, t('Modèle')), model, list, price]
+    : [h('p', { class: 'muted' }, t('Utiliser votre propre clé ou un autre service : à demander à votre Capitaine.'))];
+  body.append(p.declared || st ? h('p', {}, h('span', { class: 'pill ok' }, t('Branché')), ' ', h('a', { href: '#/bro' }, t('Parler à BRO') + ' →')) : '',
+    lent, ...mine,
+    !p.can_own ? '' : h('p', {}, h('button', { type: 'button', onclick: async ev => { ev.target.disabled = true; try { await save(); K.toast(t('Paramètres IA enregistrés'), 1); location.reload(); } catch (e) { K.toast(e.message); ev.target.disabled = false; } } }, t('Enregistrer')),
       p.has_key ? [' ', K.sure(t('Retirer la clé'), async () => { try { await K.api('/api/v1/me/ai', { method: 'POST', body: { api_key: null } }); location.reload(); } catch (e) { K.toast(e.message); } }, t('Retirer la clé d\'API enregistrée ?'))] : ''),
     uses());
 
@@ -81,8 +101,9 @@ export default async function aiCard(card, K) {
   }
   // Ce que l'IA permet : une fonction est ouverte si une des deux familles a la capacité.
   function uses() {
-    const has = k => ['ucloud', 'cloud'].some(f => tests[f]?.ok && tests[f].caps?.[k] === true);
-    return h('details', { class: 'fold', open: !!(tests.ucloud || tests.cloud) }, h('summary', {}, t('Ce que votre IA permet')),
+    // Seules comptent les IA dont il peut se servir : la sienne seulement s'il y a droit.
+    const has = k => (p.can_own ? ['station', 'ucloud', 'cloud'] : ['station']).some(f => tests[f]?.ok && tests[f].caps?.[k] === true);
+    return h('details', { class: 'fold', open: !!(tests.station || tests.ucloud || tests.cloud) }, h('summary', {}, t('Ce que votre IA permet')),
       h('ul', { class: 'ai-caps' }, USES.map(([l, k]) => h('li', { class: 'ai-' + (has(k) ? 'yes' : 'no') }, has(k) ? '✅ ' : '➖ ', t(l)))),
       h('p', { class: 'muted' }, t('Sans IA, votre station fait déjà : recherche dans vos photos, lecture du texte des images, visages, recherche par le sens.')));
   }
