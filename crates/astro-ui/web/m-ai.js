@@ -42,6 +42,7 @@ export default async function aiCard(card, K) {
   // ── Par Internet : un fournisseur et sa clé ──
   const prov = h('select', { id: 'ai-prov', 'aria-label': t('Fournisseur') }, h('option', { value: '' }, t('Aucun')),
     (p.providers || []).map(x => h('option', { value: x.id, selected: p.provider === x.id }, x.label)));
+  const rpm = h('input', { id: 'ai-rpm', inputmode: 'numeric', value: p.rpm || '', placeholder: String(p.default_rpm || 50), 'aria-label': t('Requêtes par minute') });
   const key = h('input', { id: 'ai-key', type: 'password', placeholder: p.has_key ? t('Clé enregistrée : laisser vide pour la garder') : t('Clé d\'API'), autocomplete: 'off', 'aria-label': t('Clé d\'API'), maxlength: 256 });
   // Lien de parrainage de la coopérative chez ce fournisseur : proposé à qui n'a pas de compte, et dit comme tel.
   const refer = h('p', { class: 'muted' });
@@ -52,6 +53,7 @@ export default async function aiCard(card, K) {
   prov.addEventListener('change', showRefer); showRefer();
   const cloud = h('fieldset', { class: 'ai-fam' }, h('legend', {}, '🌐 ', t('Par Internet')), h('p', { class: 'muted' }, t('Vos messages sortent de la constellation, vers ce fournisseur.')),
     h('label', { for: 'ai-prov' }, t('Fournisseur')), prov, refer, h('label', { for: 'ai-key' }, t('Clé d\'API')), key,
+    h('label', { for: 'ai-rpm' }, t('Requêtes par minute que permet votre compte (vide : {0})', p.default_rpm || 50)), rpm,
     h('p', { class: 'muted' }, t('OpenRouter et MixRoute donnent accès à des centaines de modèles avec une seule clé ; MixRoute ouvre des modèles gratuits pour commencer.')), result('cloud'));
 
   // ── Modèle : choisi dans la liste du dernier test (on peut encore le taper) ──
@@ -69,7 +71,9 @@ export default async function aiCard(card, K) {
 
   const save = async () => {
     const url = pick.value === '*' ? other.value.trim() : pick.value;
-    await K.api('/api/v1/me/ai', { method: 'POST', body: { ollama_url: url || null, provider: prov.value || null, model: model.value.trim() || null, ...(key.value && { api_key: key.value }) } });
+    const n = rpm.value.trim() === '' ? null : Number(rpm.value);
+    if (n !== null && !(Number.isInteger(n) && n >= 1 && n <= 10000)) throw new Error(t('Requêtes par minute : un entier de 1 à 10 000'));
+    await K.api('/api/v1/me/ai', { method: 'POST', body: { ollama_url: url || null, provider: prov.value || null, model: model.value.trim() || null, rpm: n, ...(key.value && { api_key: key.value }) } });
   };
   const run = async (btn, fam) => {
     btn.disabled = true; btn.textContent = t('Test en cours…');

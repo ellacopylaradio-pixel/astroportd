@@ -114,6 +114,22 @@ fn valid_referral(provider: &str, raw: &str) -> Result<String, String> {
     Ok(raw.to_owned())
 }
 
+/// Prix de l'IA (ẑ par semaine) de `hex` et date (secondes) de son réglage : ses droits propres, sinon ceux par défaut ;
+/// 0 si l'IA lui est fermée. Lu par le prélèvement hebdomadaire (`crate::hosting_fee`), qui l'ajoute à l'hébergement : il entre
+/// ainsi dans les loyers (`rents`) et la clôture 3×1/3.
+///
+/// # Errors
+/// Base illisible.
+pub fn weekly_price(c: &rusqlite::Connection, hex: &str) -> rusqlite::Result<(u64, u64)> {
+    use rusqlite::OptionalExtension;
+    let get = |k: &str| c.query_row("SELECT value, updated_at FROM kv WHERE scope = ?1 AND key = ?2", rusqlite::params![KV_SCOPE, k], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).optional();
+    let row = match get(hex)? {
+        Some(v) => Some(v),
+        None => get("default")?,
+    };
+    Ok(row.and_then(|(v, at)| serde_json::from_str::<Rights>(&v).ok().map(|r| (r, at))).map_or((0, 0), |(r, at)| (if r.mode == Mode::Off { 0 } else { r.price_zen_week.min(MAX_WEEKLY_ZEN) }, u64::try_from(at).unwrap_or(0))))
+}
+
 /// Échec d'une opération sur les droits.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RightsError {

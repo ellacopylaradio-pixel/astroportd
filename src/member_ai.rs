@@ -30,6 +30,11 @@ use crate::register::PublishFn;
 pub const D_TAG: &str = "ai";
 /// Portée `kv` du cache rejouable.
 pub const KV_SCOPE: &str = "member_ai";
+/// Requêtes par minute permises par défaut à une clé cloud (palier courant d'un compte MixRoute) ; réglable par clé.
+pub const DEFAULT_RPM: u32 = 50;
+/// Requêtes par minute vers un service uCloud (aucun plafond de fournisseur : seulement une borne de bon sens).
+pub const UCLOUD_RPM: u32 = 600;
+
 /// Portée `kv` du dernier test de chaque IA d'un membre (`<hex>:cloud`, `<hex>:ucloud`) : état local, sans secret.
 pub const KV_TESTS: &str = "member_ai_test";
 /// Services d'un ami dont l'accès local est une offre de modèle de langage (identifiant d'accès `cap:<PeerID>/<service>`).
@@ -63,6 +68,9 @@ pub struct AiParams {
     /// Modèle préféré.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Requêtes par minute que permet le compte de cette clé chez le fournisseur (défaut [`DEFAULT_RPM`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<u32>,
 }
 
 impl AiParams {
@@ -73,7 +81,7 @@ impl AiParams {
 
     /// Vue pour l'interface : tout sauf la clé.
     pub fn view(&self) -> Value {
-        json!({ "ollama_url": self.ollama_url, "provider": self.provider, "has_key": self.api_key.is_some(), "model": self.model, "declared": self.declared() })
+        json!({ "ollama_url": self.ollama_url, "provider": self.provider, "has_key": self.api_key.is_some(), "model": self.model, "rpm": self.rpm, "default_rpm": DEFAULT_RPM, "declared": self.declared() })
     }
 }
 
@@ -129,6 +137,8 @@ pub struct Route {
     pub endpoint: Endpoint,
     /// Modèle choisi (sinon celui du fournisseur).
     pub model: Option<String>,
+    /// Requêtes par minute permises à cette clé.
+    pub rpm: u32,
 }
 
 /// Service des paramètres IA.
@@ -241,7 +251,7 @@ impl MemberAi {
     fn shared_view(p: &AiParams) -> Value {
         let cloud = p.provider.is_some() && p.api_key.is_some();
         let label = p.provider.as_deref().and_then(|id| PRESETS.iter().find(|x| x.0 == id)).map(|x| x.1);
-        json!({ "family": if cloud { "cloud" } else { "ucloud" }, "provider": if cloud { label } else { None }, "model": p.model })
+        json!({ "family": if cloud { "cloud" } else { "ucloud" }, "provider": if cloud { label } else { None }, "model": p.model, "rpm": if cloud { p.rpm.unwrap_or(DEFAULT_RPM) } else { UCLOUD_RPM } })
     }
 
     fn route_of(&self, p: &AiParams, family: Family, source: &'static str) -> Option<Route> {
@@ -254,7 +264,11 @@ impl MemberAi {
                 self.offers().iter().find(|o| o["url"].as_str().and_then(ai_client::host_port) == want).and_then(|o| o["label"].as_str()).unwrap_or(if source == "station" { "IA de votre station" } else { "Service local" }).to_owned()
             }
         };
-        Some(Route { family, source, label, endpoint, model: p.model.clone() })
+        let rpm = match family {
+            Family::Cloud => p.rpm.unwrap_or(DEFAULT_RPM),
+            Family::UCloud => UCLOUD_RPM,
+        };
+        Some(Route { family, source, label, endpoint, model: p.model.clone(), rpm })
     }
 
     /// Les IA que BRO peut employer pour `owner`, selon ses droits : l'IA prêtée par le Capitaine, et la sienne s'il y a droit
@@ -472,6 +486,12 @@ impl MemberAi {
         }
         if let Some(v) = field("model") {
             p.model = v.map(|m| valid_model(&m)).transpose()?;
+        }
+        if let Some(v) = patch.get("rpm") {
+            p.rpm = match v {
+                Value::Null => None,
+                n => Some(n.as_u64().and_then(|n| u32::try_from(n).ok()).filter(|n| (1..=10_000).contains(n)).ok_or_else(|| AiError::Invalid("requêtes par minute : un entier de 1 à 10 000".into()))?),
+            };
         }
         if p.provider.is_none() {
             if matches!(field("api_key"), Some(Some(_))) {

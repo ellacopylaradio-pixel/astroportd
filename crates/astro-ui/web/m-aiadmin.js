@@ -20,7 +20,7 @@ export function card(K, v, done) {
     try { done(await K.api(API, { method: 'POST', body })); K.toast(t('Réglage enregistré'), 1); } catch (e) { K.toast(e.message); if (el) el.disabled = false; }
   };
   const mine = v.mine
-    ? h('p', {}, t('Votre IA : {0}', v.mine.family === 'cloud' ? t('par Internet, chez {0}', v.mine.provider || '?') : t('sur votre station')), v.mine.model ? ' · ' + v.mine.model : '', ' ',
+    ? h('p', {}, t('Votre IA : {0}', v.mine.family === 'cloud' ? t('par Internet, chez {0}', v.mine.provider || '?') : t('sur votre station')), v.mine.model ? ' · ' + v.mine.model : '', v.mine.family === 'cloud' ? ' · ' + t('{0} requêtes/min', v.mine.rpm) : '', ' ',
       v.test ? (v.test.ok ? h('span', { class: 'pill ok' }, t('testée')) : h('span', { class: 'pill degraded' }, t('ne répond pas'))) : '', ' ', h('a', { href: '#/devices?card=ai' }, t('Changer')))
     : h('p', {}, t('Vous n\'avez pas encore d\'IA.'), ' ', h('a', { href: '#/devices?card=ai' }, t('La déclarer') + ' →'));
   const share = h('input', { type: 'checkbox', role: 'switch', id: 'aa-share', checked: v.share, disabled: !v.mine });
@@ -49,7 +49,7 @@ export function card(K, v, done) {
       h('label', { for: 'aa-quota' }, t('Milliers de jetons par semaine (vide : sans limite)')), quota,
       h('label', { for: 'aa-price' }, t('Prix de l\'IA, en ẑ par semaine (0 : comprise)')), price),
     h('p', {}, save),
-    h('p', { class: 'muted' }, t('Le prix sera prélevé chaque semaine avec l\'hébergement (prochaine version) ; le quota s\'appliquera dès que BRO discutera.')),
+    h('p', { class: 'muted' }, t('Le prix est prélevé chaque semaine sur le MULTIPASS avec l\'hébergement (locataires) et entre dans l\'économie de la coopérative (3×1/3). Le quota compte les jetons de l\'IA de la station.')),
     h('details', { class: 'fold' }, h('summary', {}, t('Liens de parrainage de la coopérative')),
       h('p', { class: 'muted' }, t('Proposés aux membres qui n\'ont pas de compte chez ce fournisseur, et présentés comme un parrainage de la coopérative. Vide : le lien de la coopérative (MixRoute). Pour mettre le vôtre, copiez-le depuis la console du fournisseur (MixRoute : votre lien d\'invitation).')), refs));
 }

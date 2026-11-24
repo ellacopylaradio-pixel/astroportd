@@ -337,7 +337,8 @@ impl Endpoint {
         let mut latency = None;
         if let Some(m) = &chosen {
             let started = Instant::now();
-            match self.chat(m, &[json!({ "role": "user", "content": "Réponds seulement : OK" })], 8).await {
+            // 64 jetons : un modèle qui « réfléchit » avant de répondre (deepseek-v4…) les dépense en partie à réfléchir.
+            match self.chat(m, &[json!({ "role": "user", "content": "Réponds seulement : OK" })], 64).await {
                 Ok(_) => {
                     caps.chat = Some(true);
                     latency = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
@@ -573,7 +574,7 @@ mod tests {
         assert_eq!(p["credit"]["remaining"], 9.5);
         assert!(!p.to_string().contains("TRESSECRET"), "la clé n'est jamais dans le résultat");
         let reqs = seen.lock().unwrap().join("\n");
-        assert!(reqs.contains("authorization: Bearer sk-or-TRESSECRET") && reqs.contains("\"max_tokens\":8"), "{reqs}");
+        assert!(reqs.contains("authorization: Bearer sk-or-TRESSECRET") && reqs.contains("\"max_tokens\":64"), "{reqs}");
         // Un modèle choisi qui n'existe pas : le défaut est essayé à la place.
         assert_eq!(ep.probe(Some("n-existe/pas")).await["model"], "openrouter/auto");
         assert_eq!(ep.probe(Some("mistralai/mistral-small")).await["caps"]["tools"], false);

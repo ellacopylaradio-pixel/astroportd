@@ -57,4 +57,7 @@ export default {
 "jusqu'à {0} jetons par semaine": "hasta {0} tokens por semana",
 "lien de parrainage de votre coopérative : le fournisseur lui verse une commission sur votre usage.": "enlace de patrocinio de tu cooperativa: el proveedor le paga una comisión sobre tu uso.",
 "{0} ẑ par semaine": "{0} ẑ por semana",
+"Requ\u00eates par minute": "Solicitudes por minuto",
+"Requêtes par minute que permet votre compte (vide : {0})": "Solicitudes por minuto que permite tu cuenta (vacío: {0})",
+"Requêtes par minute : un entier de 1 à 10 000": "Solicitudes por minuto: un entero de 1 a 10 000",
 };

@@ -9,7 +9,7 @@ export default {
 "L'IA de la station": "La IA de la estación",
 "La déclarer": "Declararla",
 "La station, et la leur": "La de la estación, y la suya",
-"Le prix sera prélevé chaque semaine avec l'hébergement (prochaine version) ; le quota s'appliquera dès que BRO discutera.": "El precio se cobrará cada semana con el alojamiento (próxima versión); la cuota se aplicará cuando BRO converse.",
+"Le prix est prélevé chaque semaine sur le MULTIPASS avec l'hébergement (locataires) et entre dans l'économie de la coopérative (3×1/3). Le quota compte les jetons de l'IA de la station.": "El precio se cobra cada semana al MULTIPASS con el alojamiento (inquilinos) y entra en la economía de la cooperativa (3×1/3). La cuota cuenta los tokens de la IA de la estación.",
 "Liens de parrainage de la coopérative": "Enlaces de patrocinio de la cooperativa",
 "Milliers de jetons par semaine": "Miles de tokens por semana",
 "Milliers de jetons par semaine (vide : sans limite)": "Miles de tokens por semana (vacío: sin límite)",
@@ -26,4 +26,5 @@ export default {
 "testée": "probada",
 "{0} k jetons/sem.": "{0} k tokens/sem.",
 "ẑ par semaine": "ẑ por semana",
+"{0} requêtes/min": "{0} solicitudes/min",
 };

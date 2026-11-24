@@ -57,4 +57,7 @@ export default {
 "jusqu'à {0} jetons par semaine": "up to {0} tokens a week",
 "lien de parrainage de votre coopérative : le fournisseur lui verse une commission sur votre usage.": "your cooperative's referral link: the provider pays it a commission on your usage.",
 "{0} ẑ par semaine": "{0} ẑ a week",
+"Requ\u00eates par minute": "Requests per minute",
+"Requêtes par minute que permet votre compte (vide : {0})": "Requests per minute your account allows (empty: {0})",
+"Requêtes par minute : un entier de 1 à 10 000": "Requests per minute: a whole number from 1 to 10,000",
 };

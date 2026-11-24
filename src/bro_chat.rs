@@ -29,14 +29,6 @@ const MAX_TOKENS: u32 = 1200;
 /// Requêtes par minute d'un membre sur l'IA prêtée par le Capitaine (part équitable d'une clé partagée).
 const MEMBER_PER_MINUTE: usize = 12;
 
-/// Requêtes par minute d'un fournisseur pour toute la station (une clé partagée a un plafond : 50 chez MixRoute).
-fn provider_per_minute(provider: &str) -> usize {
-    match provider {
-        "mixroute" => 50,
-        "local" => 600,
-        _ => 60,
-    }
-}
 
 const SYSTEM: &str = "Tu es BRO, l'assistant de la station Astroport du membre. Réponds en français, simplement et brièvement. \
 Pour ses fichiers, photos, documents ou son solde, utilise les outils quand ils sont proposés ; n'invente jamais un fichier, une date ni un montant. \
@@ -144,9 +136,10 @@ pub async fn ask<T: Tools>(ai: &MemberAi, rights: Option<&AiRights>, limiter: &L
             last_error = format!("quota de la semaine atteint ({used} jetons sur {quota}) : il repart lundi");
             continue;
         }
-        let provider = route.endpoint.provider().to_owned();
+        // Une fenêtre par clé : celle que prête le Capitaine est commune à la station, chaque clé de membre a la sienne.
         let t = now();
-        if let Err(wait) = limiter.take(&format!("p:{provider}:{}", route.source), provider_per_minute(&provider), t) {
+        let key = if route.source == "station" { format!("station:{}", route.endpoint.provider()) } else { format!("own:{owner}:{}", route.endpoint.provider()) };
+        if let Err(wait) = limiter.take(&key, usize::try_from(route.rpm).unwrap_or(usize::MAX), t) {
             last_error = format!("{} est très demandé : réessayez dans {wait} s", route.label);
             continue;
         }
@@ -318,7 +311,7 @@ mod tests {
 
     #[test]
     fn a_private_conversation_never_reaches_the_cloud_without_consent() {
-        let route = |family, source: &'static str, label: &str| Route { family, source, label: label.into(), endpoint: crate::ai_client::Endpoint::local("http://127.0.0.1:1").unwrap(), model: None };
+        let route = |family, source: &'static str, label: &str| Route { family, source, label: label.into(), endpoint: crate::ai_client::Endpoint::local("http://127.0.0.1:1").unwrap(), model: None, rpm: 50 };
         let both = || vec![route(Family::Cloud, "station", "MixRoute"), route(Family::UCloud, "station", "Ollama")];
         let names = |v: Vec<Route>| v.into_iter().map(|r| r.label).collect::<Vec<_>>();
         assert_eq!(names(order(both(), true, false, false)), ["Ollama"], "privée : uCloud seulement");

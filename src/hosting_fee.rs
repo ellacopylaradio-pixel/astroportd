@@ -114,7 +114,10 @@ struct Member {
     email: String,
     wallet: String,
     contract: Contract,
+    /// Total de la semaine : hébergement + IA.
     price: u64,
+    /// Part de l'IA dans `price` (droits du Capitaine, `crate::ai_rights`).
+    ai_price: u64,
     price_since: u64,
     state: Option<AccountState>,
 }
@@ -175,14 +178,17 @@ impl<C: Chain> HostingFees<C> {
                 let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))).collect_rows()?;
                 let mut out = Vec::new();
                 for (hex, email, wallet, contract) in rows {
-                    let (price, price_since) = price_and_since(c, &hex)?;
+                    let (hosting, hosting_since) = price_and_since(c, &hex)?;
+                    // L'IA s'ajoute à l'hébergement : un seul virement, un seul cycle, compté dans les loyers.
+                    let (ai_price, ai_since) = crate::ai_rights::weekly_price(c, &hex)?;
+                    let (price, price_since) = (hosting.saturating_add(ai_price).min(MAX_WEEKLY_ZEN), hosting_since.max(ai_since));
                     let state = c
                         .query_row(store::load_state_sql(), [&hex], |r| r.get::<_, String>(0))
                         .optional()?
                         .and_then(|raw| serde_json::from_str(&raw).ok())
                         .and_then(|v| AccountState::from_json(&v));
                     let contract = if contract.as_deref() == Some("cooperative_member") { Contract::CooperativeMember } else { Contract::ActiveRental };
-                    out.push(Member { hex, email, wallet, contract, price, price_since, state });
+                    out.push(Member { hex, email, wallet, contract, price, ai_price, price_since, state });
                 }
                 Ok(out)
             })
@@ -295,10 +301,11 @@ impl<C: Chain> HostingFees<C> {
         match self.chain.transfer(signer, to, Amount(g1_cents), TransferMode::KeepAlive, Some(&memo)).await {
             Ok(out) => {
                 self.set_marker(&key, "paid").await;
-                let record = json!({ "owner": m.hex, "cycle": cycle_start, "zen": m.price, "g1_cents": g1_cents, "block": hex::encode(out.block_hash) });
+                let record = json!({ "owner": m.hex, "cycle": cycle_start, "zen": m.price, "hosting_zen": m.price - m.ai_price.min(m.price), "ai_zen": m.ai_price.min(m.price), "g1_cents": g1_cents, "block": hex::encode(out.block_hash) });
                 let _ = self.db.writer().execute("INSERT INTO journal(stream, at, data) VALUES ('hosting_fee', ?1, ?2)", vec![now().into(), record.to_string().into()]).await;
                 self.save(&m.hex, next, at).await;
-                self.tell(&m.hex, format!("🏠 Hébergement : {} ẑ envoyés (prochain prélèvement dans 7 jours).", m.price)).await;
+                let ai = if m.ai_price > 0 { format!(", dont {} ẑ pour l'IA", m.ai_price) } else { String::new() };
+                self.tell(&m.hex, format!("🏠 Hébergement : {} ẑ envoyés{ai} (prochain prélèvement dans 7 jours).", m.price)).await;
                 Step::Paid
             }
             Err(ChainError::Connection(_)) => {
@@ -474,6 +481,25 @@ pub(crate) mod tests {
         let rents: i64 = r.db.readers().read(|c| Ok(c.query_row("SELECT COALESCE(SUM(amount_cents), 0) FROM rents WHERE owner_hex = 'aa'", [], |r| r.get(0))?)).await.unwrap();
         assert_eq!(rents, 600);
         assert!(r.told.lock().unwrap().iter().any(|t| t.contains("3 ẑ envoyés")));
+        let _ = std::fs::remove_dir_all(&r.dir);
+    }
+
+    /// Le prix de l'IA réglé par le Capitaine s'ajoute à l'hébergement : un seul virement, compté dans les loyers (3×1/3) ;
+    /// un membre dont l'IA est fermée ne la paie pas.
+    #[tokio::test]
+    async fn the_ai_price_is_charged_with_hosting_and_counted_as_rent() {
+        let r = rig("ai").await;
+        set(&r, PRICE_SCOPE, ALICE, "3", T0).await;
+        set(&r, PRICE_SCOPE, BOB, "0", T0).await;
+        set(&r, crate::ai_rights::KV_SCOPE, ALICE, r#"{"mode":"station","quota_tokens_week":0,"price_zen_week":2}"#, T0).await;
+        set(&r, crate::ai_rights::KV_SCOPE, BOB, r#"{"mode":"off","quota_tokens_week":0,"price_zen_week":4}"#, T0).await;
+        r.fees.run_cycles(T0).await.unwrap();
+        assert_eq!(r.fees.run_cycles(T0 + 7 * DAY).await.unwrap().paid, 1, "Bob : IA fermée, hébergement gratuit : rien");
+        assert_eq!(r.node.sent.lock().unwrap()[0].1, 50, "3 + 2 ẑ = 0,5 Ğ1");
+        let (rents, detail): (i64, String) = r.db.readers().read(|c| Ok(c.query_row("SELECT (SELECT SUM(amount_cents) FROM rents WHERE owner_hex = 'aa'), (SELECT data FROM journal WHERE stream = 'hosting_fee')", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).await.unwrap();
+        assert_eq!(rents, 500);
+        assert!(detail.contains("\"ai_zen\":2") && detail.contains("\"hosting_zen\":3"), "{detail}");
+        assert!(r.told.lock().unwrap().iter().any(|t| t.contains("5 ẑ envoyés, dont 2 ẑ pour l'IA")));
         let _ = std::fs::remove_dir_all(&r.dir);
     }
 
