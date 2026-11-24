@@ -352,11 +352,17 @@ impl Endpoint {
         if let Some(m) = wanted {
             return Ok(m.to_owned());
         }
-        match self.models().await {
+        let cached = PICKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&self.base).filter(|(_, at)| at.elapsed() < Duration::from_secs(3600)).map(|(m, _)| m.clone());
+        if let Some(m) = cached {
+            return Ok(m);
+        }
+        let picked = match self.models().await {
             Ok(list) => default_model(&self.provider, &list),
             Err(_) => preset_default(&self.provider).map(str::to_owned),
         }
-        .ok_or_else(|| AiClientError::Provider("aucun modèle disponible : choisissez-en un".into()))
+        .ok_or_else(|| AiClientError::Provider("aucun modèle disponible : choisissez-en un".into()))?;
+        PICKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(self.base.clone(), (picked.clone(), Instant::now()));
+        Ok(picked)
     }
 
     /// Fournisseur (`openrouter`…, `local` pour l'uCloud).
@@ -438,14 +444,36 @@ fn merge(mut a: Value, b: Value) -> Value {
     a
 }
 
+/// Familles généralistes préférées pour discuter, dans l'ordre (un Ollama en liste souvent des dizaines).
+const PREFERRED: [&str; 7] = ["qwen3", "mistral", "llama3", "gemma3", "qwen2.5", "hermes", "deepseek-v"];
+/// Modèles spécialisés, jamais choisis d'office pour discuter : code, vision, lecture, vecteurs.
+const SPECIALIZED: [&str; 9] = ["coder", "vision", "-vl", "vl:", "ocr", "moondream", "minicpm", "paraphrase", "image"];
+
 /// Modèle essayé quand le membre n'en a pas choisi : celui du fournisseur ([`preset_default`]) s'il est dans la liste, sinon
-/// le premier qui sait discuter.
+/// le premier d'une famille généraliste ([`PREFERRED`]), sinon le premier qui n'est pas spécialisé.
 fn default_model(provider: &str, models: &[ModelInfo]) -> Option<String> {
     if let Some(d) = preset_default(provider).filter(|d| models.iter().any(|m| m.id == *d)) {
         return Some(d.to_owned());
     }
-    models.iter().find(|m| !is_embedding(&m.id) && m.image_out != Some(true)).or_else(|| models.first()).map(|m| m.id.clone())
+    let general: Vec<&ModelInfo> = models
+        .iter()
+        .filter(|m| {
+            let id = m.id.to_lowercase();
+            !is_embedding(&id) && m.image_out != Some(true) && !SPECIALIZED.iter().any(|s| id.contains(s))
+        })
+        .collect();
+    let name = |m: &&ModelInfo| m.id.to_lowercase().rsplit('/').next().unwrap_or_default().to_owned();
+    PREFERRED
+        .iter()
+        .find_map(|f| general.iter().find(|m| name(m).starts_with(f)))
+        .or_else(|| general.first())
+        .map(|m| m.id.clone())
+        .or_else(|| models.first().map(|m| m.id.clone()))
 }
+
+/// Modèle choisi d'office, par adresse de fournisseur, gardé une heure : sans cela, chaque message sans modèle choisi
+/// redemanderait la liste au fournisseur.
+static PICKED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (String, Instant)>>> = std::sync::LazyLock::new(Default::default);
 
 /// Un modèle de vecteurs (il ne discute pas) : reconnu à son nom, faute de mieux dans la liste au format OpenAI.
 fn is_embedding(id: &str) -> bool {
@@ -611,6 +639,36 @@ mod tests {
             assert!(loopback_url(bad).is_err(), "{bad}");
         }
         assert_eq!(host_port("http://localhost:11434"), Some(("127.0.0.1".into(), 11434)));
+    }
+
+    /// Sur un vrai Ollama (liste de ce poste de développement) : ni modèle de code, ni de vision, ni de vecteurs d'office.
+    #[test]
+    fn the_default_model_is_a_general_one_not_a_coder_nor_a_vision_model() {
+        let list = |ids: &[&str]| ids.iter().map(|id| ModelInfo { id: (*id).to_owned(), context: None, vision: None, tools: None, image_out: None, price_in: None, price_out: None }).collect::<Vec<_>>();
+        let ollama = list(&["bge-m3:latest", "dagbs/deepseek-coder-v2-lite-instruct:latest", "gemma2:2b", "llama3.2-vision:11b", "llama3.2:latest", "moondream:latest", "myaniu/OCRFlux-3B:Q8_0", "nomic-embed-text:latest", "paraphrase-multilingual:latest", "qwen2.5-coder:7b", "qwen3-vl:4b-instruct", "qwen3:14b"]);
+        assert_eq!(default_model("local", &ollama).as_deref(), Some("qwen3:14b"));
+        assert_eq!(default_model("local", &list(&["qwen2.5-coder:7b", "gemma2:2b"])).as_deref(), Some("gemma2:2b"), "aucune famille préférée : le premier généraliste");
+        assert_eq!(default_model("local", &list(&["qwen2.5-coder:7b"])).as_deref(), Some("qwen2.5-coder:7b"), "rien d'autre : on prend ce qu'il y a");
+        assert_eq!(default_model("mixroute", &list(&["deepseek-v4-pro", "deepseek-v4-flash"])).as_deref(), Some("deepseek-v4-flash"), "le modèle gratuit du fournisseur d'abord");
+    }
+
+    /// Essai réel contre un Ollama local (jamais en CI) : `OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=llama3.2:latest cargo test
+    /// -p astroportd --lib ai_client::tests::ollama_for_real -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "Ollama réel"]
+    async fn ollama_for_real() {
+        let ep = Endpoint::local(&std::env::var("OLLAMA_URL").unwrap()).unwrap();
+        let model = std::env::var("OLLAMA_MODEL").ok();
+        let p = ep.probe(model.as_deref()).await;
+        println!("test : ok={} modèle={} délai={} ms modèles={} vecteurs={}", p["ok"], p["model"], p["latency_ms"], p["models_total"], p["caps"]["embeddings"]);
+        assert_eq!(p["ok"], true, "{p}");
+        let m = p["model"].as_str().unwrap().to_owned();
+        let got = std::sync::Mutex::new(String::new());
+        let t = ep.turn_stream(&m, &[json!({ "role": "user", "content": "Compte de un à cinq, en lettres, en français." })], &[], 200, &|x: &str| got.lock().unwrap().push_str(x)).await.unwrap();
+        println!("flux : {:?} ({} + {} jetons)", got.lock().unwrap(), t.tokens_in, t.tokens_out);
+        let tool = json!({ "type": "function", "function": { "name": "solde", "description": "Solde du membre en Ẑen.", "parameters": { "type": "object", "properties": {} } } });
+        let t = ep.turn_stream(&m, &[json!({ "role": "user", "content": "Quel est mon solde ?" })], std::slice::from_ref(&tool), 200, &|_: &str| {}).await.unwrap();
+        println!("outil en flux : {:?}", t.calls.iter().map(|c| &c.name).collect::<Vec<_>>());
     }
 
     #[test]

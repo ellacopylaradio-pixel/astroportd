@@ -4,8 +4,8 @@ Une station donne accès à des modèles d'IA de deux familles, montrées comme 
 
 - **Cloud** : un fournisseur joint par Internet avec une clé d'API (OpenRouter, Mistral, Gemini, Anthropic…). *Vos messages
   sortent de la constellation.*
-- **uCloud** : un modèle qui tourne sur cette station ou chez un Capitaine ami, joint en boucle locale (Ollama, vLLM, ComfyUI,
-  directement ou par un tunnel DRAGON). *Tout reste chez vous.*
+- **uCloud** : un modèle qui tourne sur cette station ou chez un Capitaine ami, joint en boucle locale (Ollama, vLLM,
+  directement ou par un tunnel DRAGON ; ComfyUI à part, pour les images). *Tout reste chez vous.*
 
 Le Capitaine décide qui s'en sert, combien, et pour combien de Ẑen par semaine. Écran membre : *Moi › Appareils*, carte
 « Intelligence artificielle » (`m-devices.js`) ; écran Capitaine : *Membres* (`m-members.js`).
@@ -91,7 +91,7 @@ Règle de bascule :
 
 | Demande | Où elle va |
 |---|---|
-| privée | uCloud seulement (Ollama de la station, d'un ami de la constellation, IA intégrée) |
+| privée | uCloud seulement (Ollama ou vLLM de la station, ou d'un ami de la constellation) |
 | privée, sans uCloud disponible | refus expliqué, ou accord explicite du membre pour cette fois (« envoyer à MixRoute ? ») |
 | ouverte, simple | uCloud s'il répond, sinon cloud |
 | ouverte, lourde (résumé long, code, contexte au-delà de celui du modèle local) | cloud |
@@ -114,26 +114,25 @@ Capitaine en cloud compte comme du cloud : ses messages partent chez le fourniss
 4. **Ẑen par semaine** : prix IA prélevé avec l'hébergement et compté dans la clôture.
 5. **uCloud de la constellation et fonctions** : service `vllm` (tunnel DRAGON, `modules.list`), offres des amis proposées,
    outils de BRO, vision, images (ComfyUI).
-6. **IA intégrée (ONNX)** : un petit modèle de discussion installable avec les modules (`astroportd models add`), exposé en
-   boucle locale au format OpenAI : une offre uCloud de plus (voir plus bas).
+6. **BRO programmable** (à venir) : des tâches que le membre crée, voit, met en pause ou supprime (« chaque lundi, résume
+   mes nouveaux partages ») ; rien d'automatique sans lui ; même routage (en local dès qu'elles lisent ses données).
 
-## Un modèle de discussion local, sans Ollama (ONNX)
+## Abandonné : un modèle de discussion en ONNX
 
-Piste pour une station sans Ollama : un petit modèle de langage dans le catalogue `astroportd models`, exécuté par ONNX
-Runtime (déjà chargé pour les visages, la lecture et la recherche), et exposé **en boucle locale au format OpenAI** : il
-devient une offre uCloud comme les autres (« IA intégrée à la station »), sans rien changer au client.
+Écarté (novembre 2026) : la génération demanderait une boucle de décodage que `ort` ne fournit pas, et resterait nettement
+plus lente sur processeur que llama.cpp (Ollama). Une station sans IA locale passe par l'Ollama d'un Capitaine ami (tunnel
+DRAGON) ou par le cloud, avec le routage hybride ci-dessus.
 
-Candidats (licences libres, bon français, exports ONNX publiés ; tailles en int4, à vérifier au moment de l'ajout) :
+## Limites connues (2.0)
 
-| Modèle | Licence | Taille | Pour |
-|---|---|---|---|
-| Qwen3 1,7B | Apache-2.0 | ≈ 1,2 Go | défaut : bon français, appel d'outils, raisonnement désactivable |
-| Qwen3 0,6B | Apache-2.0 | ≈ 0,5 Go | Raspberry Pi, petites machines |
-| SmolLM3 3B | Apache-2.0 | ≈ 2 Go | entraîné aussi en français ; recettes publiées |
-| Phi-4-mini 3,8B | MIT | ≈ 2,3 Go | machines de 16 Go et plus ; export ONNX officiel de Microsoft |
-
-Écartés : Llama 3.x et Gemma (licences non libres), Qwen2.5 3B (licence de recherche).
-
-Coût : la génération demande une boucle de décodage (cache clé-valeur, tokenizer, échantillonnage) que `ort` ne fournit pas
-(`onnxruntime-genai` le fait, sans liaison Rust stable). Sur processeur, llama.cpp (format GGUF, ce qu'utilise Ollama) reste
-nettement plus rapide qu'ONNX : l'IA intégrée vise le « ça marche partout », Ollama reste conseillé dès qu'on le peut.
+- Les **outils** (`chercher`, `solde`, `souvenirs`, `noter`) demandent un modèle qui sait les appeler : essais réels, `qwen3:14b`
+  réussit (« retiens que mon vélo est bleu » → `noter`, puis « de quelle couleur est mon vélo ? » → `souvenirs` → « bleu ») ;
+  `llama3.2` (3B) écrit parfois l'appel en texte (rattrapé quand le JSON est correct) ou le rate. Conseil : 8B et plus,
+  famille qwen3 (le choix par défaut la préfère).
+- `chercher` cherche aussi dans ce que montrent les photos (vecteurs SigLIP, comme l'écran Fichiers) seulement sur une station
+  qui a le modèle de vision.
+- La mémoire (`souvenirs`, `noter`) demande le moteur de vecteurs de BRO (Ollama ou bge-m3 local) : sans lui, ces outils ne
+  sont pas proposés.
+- Le quota est vérifié avant chaque question : celle qui le franchit passe, la suivante est refusée.
+- Le drapeau « privée » est tenu par l'écran du membre : un client modifié ne nuit qu'à lui-même.
+- Les capacités d'un modèle que le fournisseur ne décrit pas (MixRoute, Ollama) restent « ❔ » jusqu'à l'usage.

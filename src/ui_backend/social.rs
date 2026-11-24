@@ -26,12 +26,17 @@ pub struct SocialBackend<B: BlobStore> {
     pub(super) people: Option<Arc<crate::person_keys::PersonKeys>>,
     /// « Se rencontrer » : ajout d'un proche (liste de contacts signée, `Invites::follow`).
     pub(super) invites: Option<Arc<crate::invites::Invites<B>>>,
+    /// Moteur local de la recherche par l'image (l'outil « chercher » de BRO).
+    pub(super) seer: Option<Arc<astro_index::LocalIndexer>>,
 }
 
-/// Outils de BRO pour un membre, en lecture seule : la recherche de sa bibliothèque (mots, personnes, villes, dates) et son solde.
+/// Outils de BRO pour un membre : la recherche de sa bibliothèque (mots, personnes, villes, dates, et ce que montrent les photos),
+/// son solde, ses souvenirs ; une seule écriture, « noter », dans son propre journal, à sa demande.
 struct BroTools {
     services: Arc<StationServices>,
     hex: String,
+    memory: Option<Arc<BroMemory>>,
+    seer: Option<Arc<astro_index::LocalIndexer>>,
 }
 
 impl crate::bro_chat::Tools for BroTools {
@@ -43,12 +48,18 @@ impl crate::bro_chat::Tools for BroTools {
                     return Err("requête vide".into());
                 }
                 let owner = self.hex.clone();
+                // Comme l'écran Fichiers : les mots « à voir » (« plage », « chat roux ») cherchent aussi dans ce que montrent les photos.
+                let vector = super::ucloud::vision_query(&self.services, self.seer.as_ref(), &owner, &q).await.map_err(|e| e.to_string())?;
                 let found = self
                     .services
                     .db
                     .readers()
                     .read(move |c| {
-                        let s = crate::library::Search { q: Some(q), person: None, from: None, to: None, bbox: None, kind: None, after: None, limit: 8, seen: Vec::new(), near: Vec::new() };
+                        let seen = match &vector {
+                            Some(v) => crate::library::seen(c, &owner, v)?,
+                            None => crate::library::Seen::default(),
+                        };
+                        let s = crate::library::Search { q: Some(q), person: None, from: None, to: None, bbox: None, kind: None, after: None, limit: 8, seen: seen.strict, near: seen.near };
                         Ok(crate::library::search(c, &owner, &s)?)
                     })
                     .await
@@ -57,12 +68,31 @@ impl crate::bro_chat::Tools for BroTools {
                 let best = found["best"].as_array().filter(|b| !b.is_empty()).or(found["items"].as_array()).cloned().unwrap_or_default();
                 Ok(json!({ "trouvés": best.iter().take(8).map(pick).collect::<Vec<_>>(), "compris": found["understood"] }))
             }
+            "souvenirs" => {
+                let memory = self.memory.as_ref().ok_or("mémoire indisponible sur cette station")?;
+                let q: String = args.get("requete").and_then(Value::as_str).unwrap_or_default().chars().take(500).collect();
+                let found = memory.recall(&self.hex, &q, 6, None).await.map_err(|e| e.to_string())?;
+                Ok(json!({ "souvenirs": found.iter().map(|r| json!({ "texte": r.memory.content, "date": astro_core::week::date_string(r.memory.ts) })).collect::<Vec<_>>() }))
+            }
+            "noter" => {
+                let memory = self.memory.as_ref().ok_or("mémoire indisponible sur cette station")?;
+                let text: String = args.get("texte").and_then(Value::as_str).unwrap_or_default().chars().take(2000).collect();
+                let meta = Meta { source: "bro".into(), ..Meta::default() };
+                match memory.remember(&self.hex, Slot::Journal, &text, meta).await {
+                    Ok(r) if r.mem_id.is_some() => Ok(json!({ "noté": true })),
+                    Ok(_) => Ok(json!({ "noté": false, "raison": "déjà connu" })),
+                    Err(e) => Err(format!("non noté : {e}")),
+                }
+            }
             "solde" => {
                 let b = self.services.balance_of(&self.hex).await?;
                 Ok(json!({ "zen": format!("{}.{:02}", b.zen_cents / 100, b.zen_cents % 100) }))
             }
             _ => Err("outil inconnu".into()),
         }
+    }
+    fn has(&self, name: &str) -> bool {
+        !matches!(name, "souvenirs" | "noter") || self.memory.is_some()
     }
 }
 
@@ -541,7 +571,7 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
         if !ai.available(&who.hex, who.captain).await {
             return self.bro_say(who, ask.text).await;
         }
-        let tools = BroTools { services: self.services.clone(), hex: who.hex.clone() };
+        let tools = BroTools { services: self.services.clone(), hex: who.hex.clone(), memory: self.memory.clone(), seer: self.seer.clone() };
         let q = crate::bro_chat::Ask { text: ask.text, history: ask.history, private: ask.private, allow_cloud: ask.allow_cloud };
         crate::bro_chat::ask(ai, &who.hex, who.captain, q, &tools, None).await.map_err(ai_error)
     }
@@ -557,9 +587,9 @@ impl<B: BlobStore> SocialApi for SocialBackend<B> {
                 return Ok(rx);
             }
         };
-        let (hex, captain, services) = (who.hex.clone(), who.captain, self.services.clone());
+        let (hex, captain, services, memory, seer) = (who.hex.clone(), who.captain, self.services.clone(), self.memory.clone(), self.seer.clone());
         tokio::spawn(async move {
-            let tools = BroTools { services, hex: hex.clone() };
+            let tools = BroTools { services, hex: hex.clone(), memory, seer };
             let q = crate::bro_chat::Ask { text: ask.text, history: ask.history, private: ask.private, allow_cloud: ask.allow_cloud };
             let sink = |v: Value| {
                 let _ = tx.send(v);

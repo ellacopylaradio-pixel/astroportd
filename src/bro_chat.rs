@@ -30,14 +30,17 @@ const MEMBER_PER_MINUTE: usize = 12;
 
 
 const SYSTEM: &str = "Tu es BRO, l'assistant de la station Astroport du membre. Réponds en français, simplement et brièvement. \
-Pour ses fichiers, photos, documents ou son solde, utilise les outils quand ils sont proposés ; n'invente jamais un fichier, une date ni un montant. \
-Ne demande jamais de mot de passe ni de clé.";
+Pour ses fichiers, photos, documents, son solde ou ce qu'il t'a confié, utilise les outils quand ils sont proposés ; n'invente jamais un fichier, une date ni un montant. \
+Une question sur lui-même (ce qu'il t'a dit, ses préférences, ses objets) : consulte d'abord « souvenirs ». \
+N'utilise « noter » que si le membre te demande de retenir quelque chose. Si tu ne sais pas, dis-le. Ne demande jamais de mot de passe ni de clé.";
 
 /// Outils en lecture seule offerts au modèle (format OpenAI). Tous rendent une donnée privée.
 fn tool_specs() -> Vec<Value> {
     vec![
-        json!({ "type": "function", "function": { "name": "chercher", "description": "Cherche dans les fichiers, photos et documents du membre : mots, personnes reconnues, villes, mois, années (ex. « Léa Toulouse 2025 », « facture électricité »). Rend chemins, dates et extraits.", "parameters": { "type": "object", "properties": { "requete": { "type": "string" } }, "required": ["requete"] } } }),
+        json!({ "type": "function", "function": { "name": "chercher", "description": "Cherche dans les FICHIERS du membre (photos, vidéos, documents, factures) : mots, personnes reconnues, villes, mois, années, ou ce que montrent les photos (ex. « Léa Toulouse 2025 », « facture électricité », « plage »). Pas pour ce qu'il t'a dit : pour cela, « souvenirs ».", "parameters": { "type": "object", "properties": { "requete": { "type": "string" } }, "required": ["requete"] } } }),
         json!({ "type": "function", "function": { "name": "solde", "description": "Solde du membre en Ẑen.", "parameters": { "type": "object", "properties": {} } } }),
+        json!({ "type": "function", "function": { "name": "souvenirs", "description": "Ce que le membre t'a DIT ou demandé de retenir (son journal, ses faits personnels : préférences, objets, rendez-vous…). À consulter avant de répondre à une question sur lui-même (ex. « de quelle couleur est mon vélo ? »).", "parameters": { "type": "object", "properties": { "requete": { "type": "string" } }, "required": ["requete"] } } }),
+        json!({ "type": "function", "function": { "name": "noter", "description": "Retient un fait dans le journal du membre, quand il le demande (« retiens que… »).", "parameters": { "type": "object", "properties": { "texte": { "type": "string" } }, "required": ["texte"] } } }),
     ]
 }
 
@@ -45,6 +48,10 @@ fn tool_specs() -> Vec<Value> {
 pub trait Tools: Send + Sync {
     /// Résultat de l'outil `name` avec `args`, ou l'erreur à dire au modèle.
     fn run(&self, name: &str, args: &Value) -> impl Future<Output = Result<Value, String>> + Send;
+    /// L'outil `name` est-il disponible sur cette station (la mémoire demande un moteur de vecteurs) ?
+    fn has(&self, _name: &str) -> bool {
+        true
+    }
 }
 
 /// Une question à BRO.
@@ -195,7 +202,7 @@ struct Done {
 /// La conversation avec une IA : jusqu'à [`MAX_ROUNDS`] tours, les outils demandés exécutés entre deux. Un modèle qui refuse
 /// les outils est réessayé sans.
 async fn converse<T: Tools>(route: &Route, model: &str, mut messages: Vec<Value>, offer_tools: bool, tools: &T, sink: Sink<'_>) -> Result<Done, String> {
-    let specs = if offer_tools { tool_specs() } else { Vec::new() };
+    let specs: Vec<Value> = if offer_tools { tool_specs().into_iter().filter(|s| s.pointer("/function/name").and_then(Value::as_str).is_some_and(|n| tools.has(n))).collect() } else { Vec::new() };
     let mut done = Done { text: String::new(), private: false, used: Vec::new(), tokens_in: 0, tokens_out: 0 };
     let mut with_tools = !specs.is_empty();
     for round in 0..MAX_ROUNDS {
@@ -219,6 +226,14 @@ async fn converse<T: Tools>(route: &Route, model: &str, mut messages: Vec<Value>
         };
         done.tokens_in += turn.tokens_in;
         done.tokens_out += turn.tokens_out;
+        let mut turn = turn;
+        // Un petit modèle écrit parfois son appel d'outil en texte (`{"name": "noter", "parameters": {…}}`) : on le rattrape.
+        if turn.calls.is_empty() {
+            if let Some(call) = turn.text.as_deref().and_then(|t| text_call(t, offered)) {
+                turn.text = None;
+                turn.calls.push(call);
+            }
+        }
         if turn.calls.is_empty() {
             done.text = turn.text.unwrap_or_default();
             return Ok(done);
@@ -241,6 +256,23 @@ async fn converse<T: Tools>(route: &Route, model: &str, mut messages: Vec<Value>
     Err("trop d'allers-retours avec les outils".into())
 }
 
+/// Un texte qui n'est qu'un appel à l'un des outils `offered`, écrit en JSON (éventuellement entre ```), devient un appel.
+fn text_call(text: &str, offered: &[Value]) -> Option<crate::ai_client::ToolCall> {
+    let t = text.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+    if !t.starts_with('{') {
+        return None;
+    }
+    let v: Value = serde_json::from_str(t).ok()?;
+    let name = v.get("name").and_then(Value::as_str)?;
+    offered.iter().find(|s| s.pointer("/function/name").and_then(Value::as_str) == Some(name))?;
+    let args = v.get("parameters").or_else(|| v.get("arguments")).cloned().unwrap_or_else(|| json!({}));
+    let args = match args {
+        Value::String(raw) => serde_json::from_str(&raw).unwrap_or(Value::Null),
+        other => other,
+    };
+    Some(crate::ai_client::ToolCall { id: "texte".into(), name: name.to_owned(), args })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -256,6 +288,7 @@ mod tests {
     use crate::ai_rights::AiRights;
     use crate::register::PublishFn;
 
+    /// Outils factices ; la mémoire n'est pas branchée (station sans moteur de vecteurs) : « noter » et « souvenirs » absents.
     struct Fake;
     impl Tools for Fake {
         async fn run(&self, name: &str, args: &Value) -> Result<Value, String> {
@@ -264,6 +297,50 @@ mod tests {
                 _ => Err("outil inconnu".into()),
             }
         }
+        fn has(&self, name: &str) -> bool {
+            !matches!(name, "noter" | "souvenirs")
+        }
+    }
+
+    /// Une mémoire en mémoire vive, pour l'essai réel.
+    struct Remembers(Mutex<Vec<String>>, Mutex<Vec<String>>);
+    impl Tools for Remembers {
+        async fn run(&self, name: &str, args: &Value) -> Result<Value, String> {
+            self.1.lock().unwrap().push(name.to_owned());
+            match name {
+                "noter" => {
+                    self.0.lock().unwrap().push(args["texte"].as_str().unwrap_or_default().to_owned());
+                    Ok(json!({ "noté": true }))
+                }
+                "souvenirs" => Ok(json!({ "souvenirs": self.0.lock().unwrap().iter().map(|t| json!({ "texte": t })).collect::<Vec<_>>() })),
+                _ => Ok(json!({ "trouvés": [] })),
+            }
+        }
+    }
+
+    /// Essai réel (jamais en CI) : le modèle choisit-il « noter » puis « souvenirs » ? `OLLAMA_URL=http://127.0.0.1:11434
+    /// OLLAMA_MODEL=llama3.2:latest cargo test -p astroportd --lib bro_chat::tests::bro_remembers_for_real -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "Ollama réel"]
+    async fn bro_remembers_for_real() {
+        const ME: [u8; 32] = [0xA2; 32];
+        let dir = std::env::temp_dir().join(format!("astroportd-brochat-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Arc::new(Db::open(&dir.join("u.db"), 2).unwrap());
+        let url = std::env::var("OLLAMA_URL").unwrap();
+        let publish: PublishFn = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let ai = MemberAi::new(db, Arc::new(StaticKeySource::new().with(ME)), publish).with_offers(Some(url.clone()), None);
+        let me = pubkey_of(&ME).unwrap();
+        ai.set(&me, &json!({ "ollama_url": url, "model": std::env::var("OLLAMA_MODEL").ok() })).await.unwrap();
+        let tools = Remembers(Mutex::new(Vec::new()), Mutex::new(Vec::new()));
+        let a = ask(&ai, &me, false, Ask { text: "Retiens que mon vélo est bleu.".into(), ..Ask::default() }, &tools, None).await.unwrap();
+        println!("1 : {} — outils {:?}", a["reply"], tools.1.lock().unwrap());
+        let b = ask(&ai, &me, false, Ask { text: "De quelle couleur est mon vélo ?".into(), private: true, ..Ask::default() }, &tools, None).await.unwrap();
+        println!("2 : {} — outils {:?}", b["reply"], tools.1.lock().unwrap());
+        assert!(tools.1.lock().unwrap().iter().any(|t| t == "noter"), "« retiens » doit noter");
+        assert!(b["reply"].as_str().unwrap_or_default().to_lowercase().contains("bleu"), "{b}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Faux Ollama (`/v1`) : la première réponse demande l'outil « chercher », la suivante répond en texte.
@@ -319,12 +396,24 @@ mod tests {
         assert_eq!(r["tokens"], 280);
         let reqs = seen.lock().unwrap().join("\n");
         assert!(reqs.contains("\"tools\"") && reqs.contains("lea.jpg"), "l'outil est offert, et son résultat renvoyé au modèle local");
+        assert!(reqs.contains("\"solde\"") && !reqs.contains("\"noter\"") && !reqs.contains("\"souvenirs\""), "un outil indisponible n'est pas proposé");
         assert_eq!(rights.used(&me, &astro_core::week::iso_week(now())).await.unwrap(), (1, 280));
         // 280 < 300 : encore une ; ensuite le quota est atteint.
         ask(&ai, &me, false, Ask { text: "Et à Paris ?".into(), ..Ask::default() }, &Fake, None).await.unwrap();
         let stop = ask(&ai, &me, false, Ask { text: "Encore ?".into(), ..Ask::default() }, &Fake, None).await.unwrap();
         assert!(stop["reply"].as_str().unwrap().contains("quota de la semaine atteint"), "{stop}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_tool_call_written_as_text_is_caught_only_for_an_offered_tool() {
+        let offered = tool_specs();
+        let c = text_call("{\"name\": \"noter\", \"parameters\": {\"texte\": \"mon vélo est bleu\"}}", &offered).unwrap();
+        assert_eq!((c.name.as_str(), c.args["texte"].as_str()), ("noter", Some("mon vélo est bleu")));
+        assert!(text_call("```json\n{\"name\":\"solde\",\"arguments\":\"{}\"}\n```", &offered).is_some());
+        assert!(text_call("{\"name\": \"effacer_tout\", \"parameters\": {}}", &offered).is_none(), "jamais un outil non proposé");
+        assert!(text_call("Votre vélo est bleu.", &offered).is_none());
+        assert!(text_call("{\"name\": \"noter\"}", &[]).is_none(), "aucun outil proposé : rien");
     }
 
     #[test]

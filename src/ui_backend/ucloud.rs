@@ -23,6 +23,23 @@ pub struct UcloudBackend<B: BlobStore> {
 
 impl_auth!(UcloudBackend);
 
+/// Recherche par l'image : les mots « à voir » d'une requête (ni personne, ni lieu, ni date : `search_query`) deviennent un
+/// vecteur ici (moteur local SigLIP), avant de lire la base. `None` : pas de moteur, ou rien à voir. Partagé par l'écran
+/// Fichiers et l'outil « chercher » de BRO.
+pub(super) async fn vision_query(services: &StationServices, seer: Option<&Arc<astro_index::LocalIndexer>>, owner: &str, text: &str) -> Result<Option<Vec<f32>>, astro_db::DbError> {
+    let Some(seer) = seer.filter(|s| astro_index::Indexer::tasks(s.as_ref()).contains(&astro_index::Task::VisionQuery)) else { return Ok(None) };
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    let (o, t) = (owner.to_owned(), text.to_owned());
+    let to_see = services.db.readers().read(move |c| Ok(crate::search_query::to_see(&crate::search_query::understand(c, &o, &t)?))).await?;
+    if to_see.trim().is_empty() {
+        return Ok(None);
+    }
+    let input = astro_index::Input { mime: "text/plain".into(), bytes: bytes::Bytes::from(to_see.chars().take(200).collect::<String>()) };
+    Ok(astro_index::Indexer::index(seer.as_ref(), astro_index::Task::VisionQuery, input).await.ok().and_then(|o| o.vector))
+}
+
 impl<B: BlobStore> UcloudBackend<B> {
     fn now() -> i64 {
         SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
@@ -236,25 +253,9 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
         use astro_ui::api::LibraryQuery as Q;
         let owner = who.hex.clone();
         let now = now_secs();
-        // Recherche par l'image : les mots « à voir » de la requête (ni personne, ni lieu, ni date : `search_query`) deviennent
-        // un vecteur ici (moteur local), avant de lire la base.
-        let sees = self.seer.as_ref().filter(|seer| astro_index::Indexer::tasks(seer.as_ref()).contains(&astro_index::Task::VisionQuery));
-        let to_see = match (&q, sees) {
-            (Q::Search(s), Some(_)) => match s.q.clone().filter(|t| !t.trim().is_empty()) {
-                Some(text) => {
-                    let o = owner.clone();
-                    self.services.db.readers().read(move |c| Ok(crate::search_query::to_see(&crate::search_query::understand(c, &o, &text)?))).await.map_err(db_err)?
-                }
-                None => String::new(),
-            },
-            _ => String::new(),
-        };
-        let query_vec = match sees.filter(|_| !to_see.trim().is_empty()) {
-            Some(seer) => {
-                let input = astro_index::Input { mime: "text/plain".into(), bytes: bytes::Bytes::from(to_see.chars().take(200).collect::<String>()) };
-                astro_index::Indexer::index(seer.as_ref(), astro_index::Task::VisionQuery, input).await.ok().and_then(|o| o.vector)
-            }
-            None => None,
+        let query_vec = match &q {
+            Q::Search(s) => vision_query(&self.services, self.seer.as_ref(), &owner, s.q.as_deref().unwrap_or_default()).await.map_err(db_err)?,
+            _ => None,
         };
         self.services
             .db
