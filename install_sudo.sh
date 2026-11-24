@@ -32,7 +32,7 @@ ORIGIN_SWARM_KEY=$'/key/swarm/psk/1.0.0/\n/base16/\n0000000000000000000000000000
 ORIGIN_BOOTSTRAP=(
   /ip4/149.102.158.67/tcp/4101/p2p/12D3KooWMbbWfSd8vq4eUKkhpnLh3ZMzgTghnH1fJ7bxfqmyNCkv
   /dnsaddr/ipfs.sagittarius.copylaradio.com/p2p/12D3KooWAvWWWtscBjFwybk8WSr2tmiwDtvNzJEh8vwyFntbpxPX
-  /dnsaddr/ipfs.guenoel.fr/p2p/12D3KooWJRBjm6RHfse7oTMkSsvBk7XNKTTWQozoDZAFLSPRKPXt
+  /dnsaddr/astroport.guenoel.fr/p2p/12D3KooWLi29E5ZmQs4Rqu3p1ajKnhtn1nScQyM25xnRs6WSqSMS
 )
 
 TARGET="${SUDO_USER:-}"
