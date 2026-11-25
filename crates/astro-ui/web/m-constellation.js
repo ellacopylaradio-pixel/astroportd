@@ -1,6 +1,7 @@
 'use strict';
 // « Ma UPlanet » : le nom et la charte, les portefeuilles de la coopérative avec leurs soldes, et l'économie rejouée en carte animée.
-// Visible de tous les membres ; seul le Capitaine modifie le nom et la charte (écran Configuration coopérative).
+// Visible de tous les membres ; seul le Capitaine modifie le nom et la charte (écran Configuration coopérative) et règle
+// la PAF de sa machine (dans la Régie 3×1/3).
 import { flow, short } from '/ui/m-flow.js';
 
 const KIND = { wallet: 'portefeuille', master: 'maître', billets: 'billets', members: 'membres', outside: 'extérieur', intrus: 'intrusion' };
@@ -22,6 +23,27 @@ function svg(text, cls) {
   const doc = new DOMParser().parseFromString(text, 'image/svg+xml'), n = document.importNode(doc.documentElement, true);
   n.setAttribute('class', cls); n.removeAttribute('width'); n.removeAttribute('height');
   return n;
+}
+
+// Montant saisi en Ẑ (« 12 », « 12,5 », « 12.50 ») → centimes entiers, sans passer par un flottant ; NaN si illisible.
+export const toCents = s => { const m = /^\s*(\d{1,9})(?:[.,](\d{0,2}))?\s*$/.exec(s || ''); return m ? Number(m[1]) * 100 + Number((m[2] || '').padEnd(2, '0')) : NaN; };
+const zc = c => `${Math.trunc(c / 100)}.${String(Math.abs(c % 100)).padStart(2, '0')}`;
+
+// PAF de cette machine (Capitaine) : 1×PAF au NODE, 2×PAF à son MULTIPASS, estimée d'après ce que la machine apporte.
+function pafBlock(K, p, reload) {
+  const { h, t } = K, z = c => g1(c) + ' Ẑ', sg = p.suggestion;
+  const inp = h('input', { id: 'cs-paf', type: 'text', inputMode: 'decimal', autocomplete: 'off', size: 8, value: zc(p.paf_cents ?? sg.paf_cents), 'aria-describedby': 'cs-paf-h' });
+  const save = async cents => { try { await K.api('/api/v1/station/paf', { method: 'POST', body: { paf_cents: cents } }); K.toast(t('PAF enregistrée : elle sera réglée dès le redémarrage de la station.')); reload(); } catch (e) { K.toast(e.message); } };
+  return h('details', { class: 'cs-paf', open: p.paf_cents == null }, h('summary', {}, h('strong', {}, '💶 ', t('PAF de cette machine')), ' · ',
+    p.paf_cents != null ? t('{0} par semaine', z(p.paf_cents)) + ' · ' + t('NODE {0} · Capitaine {1}', z(p.paf_cents), z(2 * p.paf_cents)) : t('Non fixée : la station ne règle aucune charge hebdomadaire.')),
+    p.pending_restart ? h('p', { class: 'muted' }, '⏳ ', t('Enregistrée, pas encore réglée : redémarrez la station.')) : null,
+    p.source === 'flag' ? h('p', { class: 'muted' }, t('La commande de lancement impose --weekly-costs : elle l\'emporte sur cette valeur.')) : null,
+    h('p', { class: 'muted', id: 'cs-paf-h' }, t('Estimation : {0} d\'énergie ({1} W {2} × {3} Ẑ/kWh) + {4} de capacité (Power-Score {5}) = {6}, par paliers de {7}.', z(sg.energy_cents), sg.watts, sg.watts_source === 'measured' ? t('mesurés') : t('supposés'), g1(sg.kwh_price_cents), z(sg.capacity_cents), sg.power_score, z(sg.paf_cents), z(p.step_cents))),
+    sg.coverage_pct != null ? h('p', { class: sg.bingo_cents ? '' : 'muted' }, '☀️ ', t('Le solaire couvre {0} % de la consommation du mois : effort d\'autosuffisance {1}.', sg.coverage_pct, z(sg.solar_cents)), sg.bingo_cents ? [' ', h('strong', {}, t('🎯 Bingo résilience : la production dépasse la consommation, {0} de plus.', z(sg.bingo_cents)))] : null) : null,
+    p.coop_default_cents != null ? h('p', { class: 'muted' }, t('Valeur par défaut de la coopérative : {0}.', z(p.coop_default_cents))) : null,
+    h('form', { class: 'row', onsubmit: ev => { ev.preventDefault(); const c = toCents(inp.value); if (!Number.isInteger(c) || c > p.max_cents) return K.toast(t('Montant invalide')); save(c); } },
+      h('label', { for: 'cs-paf' }, t('PAF (Ẑ par semaine)')), ' ', inp, ' ', h('button', { type: 'submit', class: 'ck-btn' }, t('Enregistrer')), ' ',
+      h('button', { type: 'button', class: 'ck-btn', onclick: () => { inp.value = zc(sg.paf_cents); } }, t('Reprendre l\'estimation'))));
 }
 
 export default async function constellation(box, K) {
@@ -130,14 +152,15 @@ export default async function constellation(box, K) {
     signatories,
     me.captain ? h('p', {}, h('a', { href: '#/coop' }, t('Modifier le nom et la charte'))) : null);
 
-  const ec = me.captain ? await K.api('/api/v1/station/economy').catch(() => null) : null;
+  const [ec, paf] = me.captain ? await Promise.all([K.api('/api/v1/station/economy').catch(() => null), K.api('/api/v1/station/paf').catch(() => null)]) : [];
   const regie = ec && h('section', { class: 'card wide' }, h('h2', {}, t('Régie coopérative 3×1/3'), h('small', { class: 'muted' }, ec.week ? ` · ${t('semaine')} ${ec.week}` : '')),
     ec.kind === 'split' ? [h('div', { class: 'shares' }, ec.shares.map(x => h('div', {}, h('strong', {}, x.name), h('progress', { max: 100, value: x.pct, 'aria-label': `${x.name} ${x.pct} %` }), h('span', { class: 'muted' }, `${g1(x.cents)} Ẑ · ${x.pct} %`)))),
       h('p', { class: 'muted' }, t('Surplus réparti {0} Ẑ · provision fiscale {1} Ẑ · prime du Capitaine {2} Ẑ', g1(ec.allocation.surplus_cents), g1(ec.allocation.is_provision_cents), g1(ec.allocation.captain_bonus_cents)))]
       : ec.kind === 'none' ? h('p', { class: 'muted' }, t('Aucune clôture hebdomadaire enregistrée.'))
       : h('p', { class: 'degraded' }, ec.kind === 'drawdown' ? t('Semaine {0} : trésorerie entamée ({1} Ẑ).', ec.week, g1(ec.gap_cents)) : t('Semaine {0} : bénévolat actif, apport du Capitaine de {1} Ẑ.', ec.week, g1(ec.gap_cents))),
     h('h3', {}, 'Love Ledger'), h('p', {}, t('{0} Ẑ donnés sur {1} semaine(s)', g1(ec.love.total_cents), ec.love.weeks)),
-    h('p', {}, h('a', { class: 'ck-btn', href: '#/coop' }, t('Configuration coopérative'))));
+    h('p', {}, h('a', { class: 'ck-btn', href: '#/coop' }, t('Configuration coopérative'))),
+    paf ? pafBlock(K, paf, () => constellation(box, K)) : null);
 
   const banner2 = vg?.alert ? h('p', { class: 'card cs-alert down', role: 'alert' }, '🚨 ', vg.intruders?.length ? t('Des Ğ1 venus de l\'extérieur de cette UPlanet ont été renvoyés vers INTRUSION.') : t('INTRUSION détient des Ğ1 au-delà de sa réserve.'), ' ', h('button', { type: 'button', onclick: () => document.getElementById('cs-vigil')?.scrollIntoView({ behavior: 'smooth' }) }, t('Voir les intrus'))) : null;
   box.replaceChildren(...[banner2, h('h2', {}, c.name || t('Ma UPlanet')), h('p', { class: 'muted' }, c.name ? t('Le nom de cette constellation') : t('Cette constellation n\'a pas encore de nom : le Capitaine le choisit dans la configuration coopérative.')), map, wallets, deposit, ocCard, billets, regie, charter].filter(Boolean));

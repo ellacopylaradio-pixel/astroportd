@@ -87,6 +87,17 @@ pub trait AccountApi: Auth {
     fn account_eject(&self, _who: &Principal, _hex: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("éjection non disponible sur cette station")) }
     }
+    /// Le Capitaine retire un MULTIPASS resté sans activité plus d'un mois : clés mises à la corbeille (30 jours), compte
+    /// plus hébergé ici. Réversible pendant 30 jours.
+    fn account_remove(&self, _who: &Principal, _hex: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("retrait des comptes non disponible sur cette station")) }
+    }
+    /// Le Capitaine **supprime complètement** un MULTIPASS inactif depuis 30 jours ou déjà retiré : Ğ1 reversées, adieu
+    /// Nostr signé de sa clé (profil vidé, suppressions), données, blobs et clés effacés. Sans retour : `confirm` doit
+    /// redonner l'adresse du compte.
+    fn account_delete(&self, _who: &Principal, _hex: String, _confirm: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("suppression des comptes non disponible sur cette station")) }
+    }
     /// Montre le jeton WebDAV en vigueur, sans le changer.
     fn account_token_show(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("Mon compte n'est pas disponible sur cette station")) }
@@ -102,6 +113,11 @@ pub trait AccountApi: Auth {
     /// Retour d'un utilisateur (`POST /api/v1/feedback`) : issue Git de la coopérative, ou gardé sur la station.
     fn feedback(&self, _who: &Principal, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("retours non activés sur cette station")) }
+    }
+    /// Les fiches plantes sont-elles proposées ? (clé Pl@ntNet de la coopérative, ou fiches déjà écrites) Sans cela, pas de
+    /// rubrique « Plantes » à côté de la Médiathèque.
+    fn plants_offered(&self, _who: &Principal) -> impl Future<Output = bool> + Send {
+        async { false }
     }
     /// Le MULTIPASS a-t-il déclaré une IA (Ollama ou clé d'API) ? Sans cela, l'onglet BRO n'apparaît pas.
     fn ai_declared(&self, _who: &Principal) -> impl Future<Output = bool> + Send {
@@ -141,6 +157,8 @@ pub(super) fn routes<B: AccountApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/me/blog/settings", post(blog_op::<B, 3>))
         .route("/api/v1/station/accounts/{hex}/unlock-pass", post(pass_unlock::<B>))
         .route("/api/v1/station/accounts/{hex}/eject", post(account_eject::<B>))
+        .route("/api/v1/station/accounts/{hex}/remove", post(account_remove::<B>))
+        .route("/api/v1/station/accounts/{hex}/delete", post(account_delete::<B>))
         .route("/api/v1/account/keys", post(account_keys::<B>).options(cors_preflight))
         .route("/api/v1/station/accounts", get(accounts::<B>))
         .route("/api/v1/station/accounts/{hex}/token", post(account_token::<B>))
@@ -312,6 +330,35 @@ async fn account_eject<B: AccountApi>(State(st): State<Arc<UiState<B>>>, headers
     }
 }
 
+async fn account_remove<B: AccountApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap, method: Method, uri: Uri, Path(hex): Path<String>) -> Response {
+    match who(&st, &headers, &method, &uri).await {
+        Ok(p) => match captain_only(&p) {
+            Ok(()) if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => reply(st.backend.account_remove(&p, hex.to_ascii_lowercase()).await),
+            Ok(()) => reply(Err(ApiError::bad_request("clé de compte invalide (64 hexadécimaux)"))),
+            Err(r) => r,
+        },
+        Err(r) => r,
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteBody {
+    /// L'adresse du compte, retapée par le Capitaine.
+    #[serde(default)]
+    confirm: String,
+}
+
+async fn account_delete<B: AccountApi>(State(st): State<Arc<UiState<B>>>, headers: HeaderMap, method: Method, uri: Uri, Path(hex): Path<String>, Json(body): Json<DeleteBody>) -> Response {
+    match who(&st, &headers, &method, &uri).await {
+        Ok(p) => match captain_only(&p) {
+            Ok(()) if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) && body.confirm.len() <= 320 => reply(st.backend.account_delete(&p, hex.to_ascii_lowercase(), body.confirm).await),
+            Ok(()) => reply(Err(ApiError::bad_request("clé de compte invalide (64 hexadécimaux) ou confirmation trop longue"))),
+            Err(r) => r,
+        },
+        Err(r) => r,
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct KeysBody {
     #[serde(default)]
@@ -333,5 +380,5 @@ async fn feedback<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): A
 }
 
 async fn me<B: AccountApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
-    private(Json(json!({ "hex": p.hex, "email": p.email, "captain": p.captain, "ai": st.backend.ai_declared(&p).await, "billet_issuer": st.backend.billet_issuer(&p).await })).into_response())
+    private(Json(json!({ "hex": p.hex, "email": p.email, "captain": p.captain, "ai": st.backend.ai_declared(&p).await, "plants": st.backend.plants_offered(&p).await, "billet_issuer": st.backend.billet_issuer(&p).await })).into_response())
 }

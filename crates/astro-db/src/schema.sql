@@ -1007,6 +1007,22 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_text USING fts5(
   tokenize='unicode61 remove_diacritics 2'
 );
 
+-- Fiches plantes (CACHE LOCAL, rejouable, `src/plant_fiche.rs`) : la vérité est le fichier chiffré `/_/Plantes/<empreinte>.json`
+-- de l'uCloud du membre (emporté par sa sauvegarde) ; cette table en garde le contenu, relu quand le fichier change (`seen` = son
+-- CID, nommé hors de la règle `*_cid` : une ligne ici ne retient aucun blob). `sha` = empreinte de la photo décrite, `photo` =
+-- son chemin (retrouve la fiche d'une photo tournée). Le texte cherchable est dans `search_text` (src = 'plant', ref = `path`).
+-- Une base rejouée la reconstruit à la première ouverture d'une fiche.
+CREATE TABLE IF NOT EXISTS plant_fiches (
+  owner_hex TEXT NOT NULL,
+  path      TEXT NOT NULL,
+  seen      TEXT NOT NULL,
+  sha       TEXT NOT NULL,
+  photo     TEXT NOT NULL,
+  fiche     TEXT NOT NULL,
+  PRIMARY KEY (owner_hex, path)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS plant_fiches_sha ON plant_fiches(owner_hex, sha);
+
 -- Lecture des documents décidée par le Capitaine (état LOCAL) : une ligne par MULTIPASS dont il a changé le réglage ; sans ligne,
 -- le réglage par défaut de la station (`kv` options/search_index : { enabled, default }) s'applique. 0 = rien de ce compte n'est lu.
 CREATE TABLE IF NOT EXISTS index_members (

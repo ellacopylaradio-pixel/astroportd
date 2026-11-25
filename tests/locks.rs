@@ -42,7 +42,7 @@ async fn the_three_modes_move_the_locks_live() {
     let circle = Arc::new(DbCircle::new());
     let relay = Relay::new(db.clone(), circle.clone(), RelayConfig { policy: KindsControl::initial_policy(&db, &conf).await, ..RelayConfig::default() });
     let kinds = Arc::new(KindsControl::new(db.clone(), &conf, relay.clone()));
-    let facts = Facts { origin: true, crawl: true, register: true, p2p: true, ..Facts::default() };
+    let facts = Facts { origin: true, name: "origin".into(), uplanet: astroportd::init::ORIGIN_UPLANETNAME.into(), crawl: true, register: true, p2p: true, ..Facts::default() };
     let locks = Locks::new(db.clone(), kinds.clone(), circle.clone(), facts, ActivityBus::new());
     circle.refresh(&db).await.unwrap();
     let inside = |c: &DbCircle| [&BOB, &CAROL, &DAVE].map(|k| c.in_circle(&hex(k)));
@@ -50,6 +50,7 @@ async fn the_three_modes_move_the_locks_live() {
     // Village (défaut) : amis et amis d'amis.
     let v = locks.view().await.unwrap();
     assert_eq!(v["mode"], "village");
+    assert_eq!((v["plane"]["name"].as_str(), v["plane"]["tag"].as_str(), v["plane"]["origin"].as_bool()), (Some("origin"), Some("origin"), Some(true)), "nom et empreinte de l'UPlanet, jamais le secret");
     assert_eq!(v["people"], json!({ "hosted": 1, "n1": 2, "n1_mutual": 1, "n2": 1, "n2_known": 1 }));
     assert_eq!((v["gates"]["register"].as_bool(), v["gates"]["n2"].as_bool(), v["gates"]["photos_auto"].as_bool()), (Some(true), Some(true), Some(true)));
     assert_eq!(inside(&circle), [true, true, true]);

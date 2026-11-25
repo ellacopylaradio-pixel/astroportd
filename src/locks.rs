@@ -19,8 +19,12 @@ use crate::station_admin::KindsControl;
 /// Ce que `serve` sait de la station et qui ne change pas à chaud.
 #[derive(Debug, Clone, Default)]
 pub struct Facts {
-    /// ORIGIN (pas de `swarm.key`) ?
+    /// ORIGIN (pas de `swarm.key`, ou celle à zéros) ?
     pub origin: bool,
+    /// Nom du plan de cette UPlanet (`planes.json`, « origin » à défaut).
+    pub name: String,
+    /// `UPLANETNAME` : seule son empreinte courte sort de la vue, jamais le secret.
+    pub uplanet: String,
     /// Kubo branché (ORIGIN seulement) ?
     pub kubo: bool,
     /// Autres plans qui partagent le bassin de blobs.
@@ -74,7 +78,7 @@ impl Locks {
         let f = &self.facts;
         Ok(json!({
             "mode": mode.as_str(),
-            "plane": { "origin": f.origin, "kubo": f.kubo, "pool_peers": f.pool_peers, "p2p": f.p2p },
+            "plane": { "origin": f.origin, "name": f.name, "tag": crate::bridge::plane_tag(&f.uplanet), "kubo": f.kubo, "pool_peers": f.pool_peers, "p2p": f.p2p },
             "gates": {
                 "register": f.register && !fortress,
                 "register_cli": f.register,

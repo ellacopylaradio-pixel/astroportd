@@ -2,6 +2,7 @@
 //!
 //! Tout ce que la station met de côté au lieu de l'effacer tout de suite y va, rangé par raison :
 //! - `ejected` : MULTIPASS éjecté par le Capitaine (jamais connecté, voir [`crate::register::Registrar::eject`]) ;
+//! - `removed` : MULTIPASS retiré par le Capitaine après plus de 30 jours sans activité (voir [`crate::member_activity`]) ;
 //! - `moved` : dossier d'un compte parti vers une autre station (voir [`crate::private_backup`]).
 //!
 //! La nuit de 20h12 efface ce qui y dort depuis plus de [`KEEP_SECS`] (30 jours) ; d'ici là, le Capitaine peut tout

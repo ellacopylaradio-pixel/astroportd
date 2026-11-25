@@ -1,0 +1,15 @@
+/* Fiche plante (m-plant.js) : photo à côté de l'avertissement, champs en une colonne, au pouce sur téléphone. */
+.pl-head { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+.pl-head > div { flex: 1 1 16rem; min-width: 0; }
+.pl-photo { width: 10rem; max-width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: .75rem; }
+.pl-warn { border-left: 4px solid var(--warn); padding: .4rem .7rem; background: color-mix(in srgb, var(--warn) 12%, transparent); border-radius: .4rem; }
+.pl-grid { display: grid; gap: .35rem; }
+.pl-grid label { font-weight: 600; margin-top: .6rem; }
+.pl-grid input, .pl-grid textarea { width: 100%; box-sizing: border-box; min-height: 48px; font: inherit; }
+.pl-props { border: 0; padding: 0; margin: .8rem 0; }
+.pl-prop { display: flex; align-items: center; gap: .3rem; min-height: 48px; }
+.pl-bad { color: var(--bad); }
+.pl-save { position: sticky; bottom: env(safe-area-inset-bottom, 0px); padding: .6rem 0; background: var(--bg); }
+.pl-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: .75rem; }
+.pl-card { text-decoration: none; color: inherit; display: grid; gap: .25rem; }
+.pl-card img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: .6rem; }

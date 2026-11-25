@@ -2,6 +2,7 @@
 // Écluses de la station (Capitaine) : un canal animé à six sas, du coffre au public. Chaque porte est ouverte, filtrée ou
 // fermée selon le mode (Forteresse, Village, Place publique) et ce que `serve` a fermé. Un clic sur un mode en montre
 // l'aperçu sur le canal ; « Appliquer » seul change la station. SVG seul (CSP stricte), animations dans m-locks.css.
+// En bas, replié : la matrice du relai par kind (réglage fin des mêmes portes).
 const NS = 'http://www.w3.org/2000/svg';
 const el = (tag, attrs = {}, ...kids) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); e.append(...kids); return e; };
 
@@ -72,6 +73,7 @@ export default async function locks(root, K) {
   const { svg, parts } = canal();
   svg.setAttribute('aria-label', t('Canal des écluses : du coffre au public'));
   const cards = h('div', { class: 'lk-rooms' }), facts = h('ul', { class: 'lk-facts' }), apply = h('div', { class: 'lk-apply' });
+  const relay = h('details', { class: 'card wide fold', id: 'relai' });
   const modes = h('div', { class: 'lk-modes', role: 'radiogroup', 'aria-label': t('Mode de la station') });
 
   const draw = () => {
@@ -83,7 +85,7 @@ export default async function locks(root, K) {
     parts.gates.forEach((g, i) => { g.setAttribute('class', `lk-gate lk-${gs[i].state}`); g.lastChild.textContent = t(gs[i].why); });
     parts.rooms.forEach((g, i) => { g.lastChild.textContent = rs[i].icon; g.classList.toggle('lk-dry', i > (reach < 0 ? 5 : reach) && i > 1); });
     cards.replaceChildren(...rs.map((r, i) => h('div', { class: 'lk-card' + (i > (reach < 0 ? 5 : reach) && i > 1 ? ' lk-far' : '') },
-      h('span', { class: 'lk-big', 'aria-hidden': 'true' }, r.icon), h('strong', {}, t(r.name)), h('span', { class: 'muted' }, t(...r.who)),
+      h('span', { class: 'lk-big', 'aria-hidden': 'true' }, r.icon), h('strong', {}, t(r.name)), i === 4 && v.plane?.name ? h('span', {}, t('UPlanet « {0} »', v.plane.name)) : null, h('span', { class: 'muted' }, t(...r.who)),
       i > 0 && h('span', { class: `lk-k lk-${gs[i - 1].state}` }, t(gs[i - 1].why)))));
     modes.querySelectorAll('button').forEach(b => { b.setAttribute('aria-checked', String(b.dataset.mode === shown)); b.classList.toggle('lk-now', b.dataset.mode === v.mode); });
     apply.replaceChildren(...(shown === v.mode ? [h('p', { class: 'muted' }, t('Mode actuel : {0}. Touchez un autre mode pour voir ce qu\'il change sur le canal.', t(MODES.find(m => m.id === v.mode)?.name || v.mode)))] : [
@@ -95,6 +97,7 @@ export default async function locks(root, K) {
       h('button', { class: 'ghost', onclick: () => { shown = v.mode; draw(); } }, t('Annuler'))]));
     const g = v.gates, pl = v.plane;
     facts.replaceChildren(...[
+      pl.name && h('strong', {}, t('UPlanet « {0} »', pl.name), pl.tag && pl.tag !== 'origin' ? h('small', { class: 'muted' }, ` · ${pl.tag}`) : null),
       pl.origin ? t('ORIGIN : réseau ouvert, bac à sable (1 Ẑen = 0,1 Ğ1).') : t('ẐEN : réseau privé, on n\'y entre qu\'avec la swarm.key.'),
       pl.kubo && t('Kubo branché : le chiffré d\'ORIGIN est aussi sur l\'IPFS public.'),
       pl.pool_peers > 0 && t('Bassin de blobs partagé avec {0} autre(s) plan(s) : chaque plan ne sert que ses propres fichiers.', pl.pool_peers),
@@ -127,6 +130,15 @@ export default async function locks(root, K) {
     h('section', { class: 'card' }, h('h2', {}, t('Mode de la station')), modes, apply),
     follow,
     h('section', { class: 'card' }, h('h2', {}, t('Cette station')), facts,
-      h('p', { class: 'muted' }, t('Réglage fin, service par service et kind par kind : '), h('a', { href: '#/services' }, t('Partages')), ' · ', h('a', { href: '#/options' }, t('Réglages')), '.')));
+      h('p', { class: 'muted' }, t('Réglage fin, service par service : '), h('a', { href: '#/services' }, t('Partages')), '.')),
+    relay);
   draw();
+  // Réglage fin du relai, kind par kind (matrice de m-options.js), replié sous les écluses : il change les mêmes portes.
+  const showRelay = async () => {
+    try {
+      const card = await (await K.mod('m-options.js')).relayCard(K, showRelay), [title, ...body] = [...card.childNodes];
+      relay.replaceChildren(h('summary', {}, h('strong', {}, title.textContent), ' ', h('span', { class: 'muted' }, t('réglages avancés du relai'))), ...body);
+    } catch (e) { relay.replaceChildren(h('summary', {}, t('Relai')), h('p', { class: 'err' }, e.message)); }
+  };
+  showRelay();
 }

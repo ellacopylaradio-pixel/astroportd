@@ -59,4 +59,5 @@ export default {
 "Programme : {0} (c'est lui qui le dit)": "Programa: {0} (según dice él mismo)",
 "Le programme ne s'est pas présenté": "El programa no se ha presentado",
 "passe par une autre station de votre constellation": "pasa por otra estación de tu constelación",
+"Brancher l'agent n'ouvre aucun navigateur : le jeton ci-dessus est créé ici, puis, quand l'agent demande le mode navigateur, la demande apparaît dans « Demandes en cours » ; une fois acceptée, la page s'affiche ici et vous la voyez travailler.": "Conectar el agente no abre ningún navegador: el token de arriba se crea aquí; cuando el agente pide el modo navegador, la solicitud aparece en «Solicitudes en curso»; una vez aceptada, la página se muestra aquí y la ve trabajar.",
 };

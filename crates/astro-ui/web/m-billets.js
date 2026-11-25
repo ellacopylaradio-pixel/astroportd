@@ -25,7 +25,7 @@ export default async function billets(box, K) {
   const count = h('select', { id: 'bs-count' }, [6, 5, 4, 3, 2, 1].map(n => h('option', { value: n }, String(n))));
   const amount = num('bs-amount', 10, 0, 10000);
   const days = h('select', { id: 'bs-days' }, DAYS.map(([d, l]) => h('option', { value: d }, t(l))));
-  const style = h('select', { id: 'bs-style' }, [['profile', 'Mon profil Nostr (Eugro à défaut)'], ['eugro', 'Eugro'], ['astroport', 'Astroport']].map(([v, l]) => h('option', { value: v }, t(l))));
+  const style = h('select', { id: 'bs-style' }, [['profile', 'Mon Profil'], ['eugro', 'Eugro'], ['astroport', 'Astroport']].map(([v, l]) => h('option', { value: v }, t(l))));
   const back = h('input', { id: 'bs-return', type: 'checkbox', disabled: '' });
   const total = h('p', { class: 'muted', role: 'status' });
   const err = h('p', { class: 'err', role: 'alert' });

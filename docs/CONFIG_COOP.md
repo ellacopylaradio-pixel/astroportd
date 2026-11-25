@@ -108,6 +108,16 @@ Les bogues et idées envoyés depuis les applications (coracle, zelkova…) devi
 | `GIT_OWNER` | L'organisation ou le compte qui possède les dépôts des applications (`papiche` par exemple). |
 | `GIT_TOKEN` | **GitHub** : *Settings › Developer settings › Fine-grained tokens*, propriétaire = `GIT_OWNER`, droit **Issues : Read and write**. **GitLab** : *Préférences › Jetons d'accès*, portée `api`. |
 
+## Reconnaissance des plantes (Pl@ntNet) {#plantnet}
+
+Chaque photo a sa **fiche plante** (bouton « 🌿 Fiche plante » de la visionneuse) : l'espèce, puis *Comestible ?*, *Préparation*, *Propriétés médicinales*, *Dangers* et des notes personnelles, préremplies depuis Wikipédia dans la langue du membre (extraits des sections qui en parlent, source citée, CC BY-SA) et toujours modifiables. La fiche est un fichier chiffré de son uCloud (`/_/Plantes/`), emporté par sa sauvegarde, et tout ce qu'elle contient entre dans sa recherche (« plante », le nom, « comestible », « médicinale »…). Les plantes très toxiques souvent confondues avec des plantes comestibles (colchique, ciguës, vératre, muguet, digitale…) reçoivent un avertissement d'une liste embarquée. Sans clé, le membre écrit lui-même le nom de la plante.
+
+Quand la clé est renseignée, la fiche propose en plus **« Reconnaître la plante »**. Rien ne part seul : c'est le membre qui la demande, photo par photo. La station envoie une copie réduite (petit côté 1 280 px) et ré-encodée de la photo, **sans lieu ni date** (aucun EXIF), à `my-api.plantnet.org` ; la clé ne quitte jamais la station.
+
+| Champ | Où le trouver |
+|---|---|
+| `PLANTNET_API_KEY` | Compte sur **my.plantnet.org** › *Your API key*. L'offre gratuite compte 500 reconnaissances par jour et par clé (vérifié : la réponse de Pl@ntNet donne le reste du jour), pour **toute** la constellation ; au-delà, la station dit que le quota est épuisé. Les stations Astroport.ONE lisent la même clé. |
+
 ## Stations Astroport.ONE {#legacy}
 
 astroportd publie et garde ces clés **sans s'en servir** : seules les stations Astroport.ONE (les scripts bash) de la constellation les lisent. Une constellation 100 % astroportd peut les laisser vides.
@@ -118,6 +128,5 @@ astroportd publie et garde ces clés **sans s'en servir** : seules les stations 
 | `ZENCARD_SATELLITE`, `ZENCARD_CONSTELLATION` | Prix des parts sociales (50 € et 540 € par défaut). | Décision de la coopérative. |
 | `NCARD`, `ZCARD` | Loyers hebdomadaires d'un MULTIPASS et d'une ZEN Card. | Décision de la coopérative. |
 | `TIER_SLUG_CLOUD` | Paliers OpenCollective « cloud » de `oc2uplanet.sh`. | Voir [Routage des paliers](#tiers). |
-| `PLANTNET_API_KEY` | Reconnaissance des plantes. | Compte sur **my.plantnet.org** › *Your API key*. |
 | `MJ_APIKEY_PUBLIC`, `MJ_APIKEY_PRIVATE` | Envoi des courriels. | **app.mailjet.com** › *Paramètres du compte* › *Gestion des clés API* : *API Key* et *Secret Key*. |
 | `MJ_SENDER_EMAIL` | Expéditeur des courriels. | Une adresse **validée** dans Mailjet (*Adresses et domaines d'expéditeur*). |

@@ -1,0 +1,54 @@
+/* Station › Membres (m-members.js) : liste réglable sur place, aide « ? » par colonne ; à 400 px, une carte par compte. */
+.mb-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem 1rem; margin: 1rem 0 .4rem; }
+.mb-bar .filters { margin: 0; }
+.mb-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.mb-tools input[type=search] { width: 15rem; max-width: 100%; min-height: 44px; }
+.mb-tools select { width: auto; min-height: 44px; }
+.mb-wrap { overflow-x: auto; }
+.mb-list th { position: relative; white-space: nowrap; }
+.mb-th { display: inline-flex; align-items: center; gap: .4rem; }
+.mb-list .tip-body { width: min(20rem, 80vw); right: auto; white-space: normal; text-transform: none; }
+.mb-list th:last-child .tip-body, .mb-list th:nth-last-child(2) .tip-body { left: auto; right: 0; }
+.mb-list td { vertical-align: top; }
+.mb-who, .mb-act, .mb-disk { display: grid; gap: .2rem; }
+.mb-who { min-width: 10rem; }
+.mb-who strong { overflow-wrap: anywhere; }
+.mb-idle { color: var(--warn); font-weight: 600; }
+.mb-idle-row { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.mb-disk meter { width: 100%; max-width: 9rem; }
+.mb-host { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; min-width: 11rem; }
+.mb-host small { flex-basis: 100%; }
+.mb-in { display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; }
+.mb-in input { width: 4rem; min-height: 40px; padding-block: .3rem; margin: 0; }
+.mb-chk { display: inline-flex; align-items: center; gap: .3rem; min-height: 40px; cursor: pointer; }
+.mb-chk input { width: 1.2rem; height: 1.2rem; }
+.mb-list .acts { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: flex-end; }
+.mb-list .acts button { min-height: 44px; }
+.mb-list .acts button.danger { color: var(--bad); border-color: var(--bad); }
+.mb-ai > details, details.fold.card { margin-bottom: .8rem; }
+/* Petit écran : chaque ligne devient une carte, chaque cellule annonce sa colonne. */
+@media (max-width: 52rem) {
+  .mb-list thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .mb-list, .mb-list tbody, .mb-list tr, .mb-list td { display: block; width: auto; }
+  .mb-list tr { border: 1px solid var(--line); border-radius: var(--rc); background: var(--panel); margin: 0 0 .8rem; padding: .3rem .8rem; }
+  .mb-list td { border-top: 1px solid var(--line); padding: .55rem 0; text-align: left; }
+  .mb-list td > *, .mb-list td small { text-align: left; justify-items: start; }
+  .mb-list td:first-child { border-top: 0; }
+  .mb-list td::before { content: attr(data-label); display: block; color: var(--muted); font-size: .78rem; font-weight: 600; margin-bottom: .2rem; }
+  .mb-list td:first-child::before { display: none; }
+  .mb-list .acts { justify-content: flex-start; }
+  .mb-tools, .mb-tools input[type=search] { width: 100%; }
+}
+/* Suppression complète (boîte #share) : le bouton dit le danger ; grisé tant que l'adresse n'est pas retapée. */
+#share button.danger { background: var(--bad); border-color: var(--bad); color: #fff; min-height: 44px; }
+#share button.danger:disabled { opacity: .45; cursor: not-allowed; }
+#share #mb-wipe { width: 100%; }
+/* Identité (profil public) : bandeau discret en tête de la cellule, logo rond, site en lien court. */
+.mb-ban { display: block; width: 100%; max-width: 16rem; height: 2.4rem; object-fit: cover; border-radius: .5rem; opacity: .8; }
+.mb-id { display: flex; align-items: center; gap: .55rem; min-width: 0; }
+.mb-av { flex: none; width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; display: grid; place-items: center; font-weight: 700; color: var(--on-accent); background: var(--accent); border: 2px solid var(--panel); }
+.mb-ban + .mb-id .mb-av { margin-top: -1.3rem; }
+.mb-names { display: grid; min-width: 0; }
+.mb-names strong, .mb-names small { overflow-wrap: anywhere; }
+.mb-site { font-size: .85rem; overflow-wrap: anywhere; min-height: 32px; display: inline-flex; align-items: center; }
+@media (max-width: 52rem) { .mb-ban { max-width: none; height: 3rem; } }

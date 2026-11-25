@@ -12,6 +12,7 @@ pub struct CoopBackend<B: BlobStore> {
     pub(super) dav: Arc<DavState<B>>,
     pub(super) coop: Option<(CoopGetFn, CoopSetFn)>,
     pub(super) constellation: Option<ConstellationFn>,
+    pub(super) member_history: Option<MemberHistoryFn>,
     pub(super) charter: Option<CharterFn>,
     pub(super) billet: Option<BilletFn>,
     pub(super) zen_credit: Option<BilletFn>,
@@ -105,6 +106,14 @@ impl<B: BlobStore> CoopApi for CoopBackend<B> {
         let _ = who;
         Ok(view)
     }
+    async fn member_history(&self, who: &Principal, after: Option<String>) -> Result<Value, ApiError> {
+        let f = self.member_history.as_ref().ok_or_else(|| ApiError::unavailable("historique des virements non disponible sur cette station"))?;
+        let wallet = self.services.wallet_of(&who.hex).await.map_err(ApiError::unavailable)?;
+        f(wallet.ss58(), after).await.map_err(|e| {
+            eprintln!("interface : historique des virements : {e}");
+            ApiError::unavailable("l'historique des virements ne répond pas pour l'instant : réessayez dans un moment")
+        })
+    }
     async fn cooperative_view(&self, who: &Principal, ledger: Option<(u64, usize)>) -> Result<Value, ApiError> {
         let f = self.constellation.as_ref().ok_or_else(|| ApiError::unavailable("vision de la constellation non activée"))?;
         f(who.hex.clone(), ledger).await.map_err(|e| {
@@ -181,22 +190,36 @@ impl<B: BlobStore> CoopApi for CoopBackend<B> {
             }
             None => vec![None; others.len()],
         };
-        let describe = |node_id: &str, power: f64, pos: Option<(f64, f64)>, services: Vec<String>, is_self: bool| {
+        // Fiche d'une station : ce que sa balise annonce (nom, adresse, matériel, stockage, places, dernière balise).
+        let own_row = rows.iter().find(|r| r["station"].as_str() == Some(me.as_str())).cloned().unwrap_or(Value::Null);
+        let describe = |node_id: &str, power: f64, pos: Option<(f64, f64)>, services: Vec<String>, is_self: bool, row: &Value| {
             let distance = match (origin, pos) {
                 (Some(o), Some(p)) => Some((haversine_km(o, p) * 10.0).round() / 10.0),
                 _ => None,
             };
-            json!({
+            let mut v = json!({
                 "node_id": node_id, "self": is_self, "power_score": (power * 10.0).round() / 10.0, "tier": astro_p2p::routing::Tier::of(power).label(),
                 "distance_km": distance, "lat": pos.map(|p| p.0), "lon": pos.map(|p| p.1),
                 "status": if is_self { "local" } else if connected.iter().any(|c| c == node_id) { "connected" } else { "known" },
                 "services": services,
-            })
+            });
+            for k in ["name", "url", "mode", "uplanet", "health", "used", "total", "open", "cpu_cores", "ram_gb", "gpu_gb", "storage_free_gb", "storage_total_gb", "software", "at"] {
+                if let Some(x) = row.get(k).filter(|x| !x.is_null()) {
+                    v[k] = x.clone();
+                }
+            }
+            v
         };
-        let mut nodes = vec![describe(&me, svc.hardware.score(), origin, svc.exposed.clone(), true)];
+        let mut me_node = describe(&me, svc.hardware.score(), origin, svc.exposed.clone(), true, &own_row);
+        // Cette station : son disque se lit sur place, sans attendre sa propre balise.
+        if let Some((free, total)) = self.dav.blobs.disk_space() {
+            me_node["storage_free_gb"] = json!(free / 1_000_000_000);
+            me_node["storage_total_gb"] = json!(total / 1_000_000_000);
+        }
+        let mut nodes = vec![me_node];
         let mut rest: Vec<(&Value, Vec<String>)> = others.into_iter().zip(asked).map(|(r, a)| (r, a.unwrap_or_default())).collect();
         rest.sort_by(|a, b| b.0["power"].as_f64().unwrap_or(0.0).total_cmp(&a.0["power"].as_f64().unwrap_or(0.0)).then_with(|| a.0["station"].as_str().cmp(&b.0["station"].as_str())));
-        nodes.extend(rest.iter().map(|(r, services)| describe(r["station"].as_str().unwrap_or_default(), r["power"].as_f64().unwrap_or(0.0), r["lat"].as_f64().zip(r["lon"].as_f64()), services.clone(), false)));
+        nodes.extend(rest.iter().map(|(r, services)| describe(r["station"].as_str().unwrap_or_default(), r["power"].as_f64().unwrap_or(0.0), r["lat"].as_f64().zip(r["lon"].as_f64()), services.clone(), false, r)));
         Ok(json!({ "origin": origin.map(|o| json!({ "lat": o.0, "lon": o.1 })), "nodes": nodes }))
     }
     async fn fuel(&self, _who: &Principal) -> Result<Value, ApiError> {

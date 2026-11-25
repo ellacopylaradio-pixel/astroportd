@@ -34,6 +34,11 @@ pub const BORN_SCOPE: &str = "member_born";
 pub const PROOF_SCOPE: &str = "member_proof";
 /// `kv(member_primo, <hex>)` = `sending` | `paid` | `unknown`.
 pub const PRIMO_SCOPE: &str = "member_primo";
+/// `kv(member_seen, <hex>)` = dernière connexion authentifiée (état LOCAL, noté au plus une fois par heure et par compte) :
+/// une des traces de la « dernière activité » de l'écran Membres ([`crate::member_activity`]).
+pub const SEEN_SCOPE: &str = "member_seen";
+/// Intervalle minimal entre deux écritures de `member_seen` pour un même compte.
+const SEEN_EVERY: i64 = 3_600;
 /// Délai après lequel un compte sans preuve peut être éjecté.
 pub const EJECT_AFTER_SECS: i64 = 86_400;
 /// Plafond de primales par jour glissant.
@@ -49,16 +54,18 @@ fn now() -> i64 {
 pub struct Proofs {
     db: Arc<Db>,
     seen: Mutex<HashSet<String>>,
+    last: Mutex<std::collections::HashMap<String, i64>>,
 }
 
 impl Proofs {
     /// Registre des preuves.
     pub fn new(db: Arc<Db>) -> Arc<Self> {
-        Arc::new(Self { db, seen: Mutex::new(HashSet::new()) })
+        Arc::new(Self { db, seen: Mutex::new(HashSet::new()), last: Mutex::new(std::collections::HashMap::new()) })
     }
 
     /// Un compte vient de s'authentifier.
     pub fn note(self: &Arc<Self>, hex: &str) {
+        self.touch(hex);
         if !self.seen.lock().unwrap_or_else(|e| e.into_inner()).insert(hex.to_owned()) {
             return;
         }
@@ -75,6 +82,34 @@ impl Proofs {
                 .await;
             if let Err(e) = r {
                 eprintln!("preuve de réception des clés non notée : {e}");
+            }
+        });
+    }
+}
+
+impl Proofs {
+    /// Note la dernière connexion (`member_seen`), au plus une fois par heure et par compte.
+    fn touch(self: &Arc<Self>, hex: &str) {
+        let at = now();
+        {
+            let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+            if last.get(hex).is_some_and(|t| at - t < SEEN_EVERY) {
+                return;
+            }
+            last.insert(hex.to_owned(), at);
+        }
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        let (db, hex) = (self.db.clone(), hex.to_owned());
+        rt.spawn(async move {
+            let r = db
+                .writer()
+                .execute(
+                    "INSERT INTO kv(scope, key, value, updated_at) VALUES (?1, ?2, ?3, ?3) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    vec![SEEN_SCOPE.to_owned().into(), hex.into(), at.to_string().into(), at.into()],
+                )
+                .await;
+            if let Err(e) = r {
+                eprintln!("dernière connexion non notée : {e}");
             }
         });
     }

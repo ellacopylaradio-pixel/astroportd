@@ -50,6 +50,7 @@ assert.equal(resolve('/constellation', mem, 'station').space, 'me');
 assert.deepEqual(segments(resolve('/library', mem)).map(s => s.path), ['/cloud', '/library', '/media', '/favoris']);
 assert.equal(resolve('/media', mem).tab, 'files', 'la médiathèque est un sous-onglet de Fichiers');
 assert.deepEqual(segments(resolve('/constellation', cap, 'station')).map(s => s.path), ['/constellation', '/coop', '/ile']);
+for (const p of ['/coop', '/ile']) assert.deepEqual(segments(resolve(p, cap, 'station')).map(s => s.path), ['/constellation', '/coop', '/ile'], `${p} : Constellation reste dans le sous-menu Économie`);
 assert.deepEqual(segments(resolve('/cockpit', cap)).map(s => s.path), ['/cockpit', '/options'], 'Santé : état et réglages de la machine');
 assert.deepEqual(segments(resolve('/mesh', cap)).map(s => s.path), ['/mesh', '/services', '/planes', '/locks'], 'Réseau : les partages ont leur sous-onglet');
 assert.deepEqual(segments(resolve('/backup', mem)).map(s => s.path), ['/account', '/money', '/write', '/devices', '/backup'], 'Moi : une seule rangée, sans onglets dans les onglets');

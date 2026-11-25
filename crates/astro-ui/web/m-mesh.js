@@ -1,6 +1,7 @@
 'use strict';
-// Maillage et Capitaines amis (Capitaine) : sa station dans le maillage, les stations jointes (ajout à chaud, gardées comme
-// bootstrap), les Capitaines connus (suivre / ne plus suivre). Les services échangés avec eux sont dans Partages (m-services.js).
+// Maillage et Capitaines amis (Capitaine) : l'essaim (stations vues et leurs Capitaines, fiche et suivi : m-swarm.js), les
+// stations jointes (ajout à chaud, gardées comme bootstrap), sa station dans le maillage. Les services échangés avec les amis
+// sont dans Partages (m-services.js).
 export default async function mesh(root, K) {
   const { h, t } = K, api = p => K.api('/api/v1/station/admin/' + p), post = (p, body) => K.api('/api/v1/station/admin/' + p, { method: 'POST', body });
   root.replaceChildren(h('p', { class: 'muted' }, t('Chargement…')));
@@ -67,34 +68,8 @@ export default async function mesh(root, K) {
       h('p', { class: 'muted' }, t('Seule une station de la même constellation (même swarm.key) peut être jointe.')));
   }
 
-  // ── Capitaines ──
-  // Une rangée par Capitaine : qui, où en est le lien, et le seul geste utile (suivre en retour, ne plus suivre).
-  const card = cap => h('li', { class: 'ms-cap' }, h('div', { class: 'ms-who' }, h('span', {}, h('strong', {}, cap.label), ' ', h('span', { class: cap.friend ? 'pill ok' : 'pill disabled' }, cap.friend ? t('ami') : cap.follows_me ? t('vous suit') : cap.i_follow ? t('suivi') : t('inconnu'))),
-    h('small', { class: 'muted' }, !cap.friend ? (cap.i_follow ? t('En attente : il doit vous suivre aussi pour partager.') : '')
-      : !cap.peer ? t('Station inconnue.')
-      : cap.services?.error ? t('Station injoignable : {0}', cap.services.error)
-      : cap.services?.length ? [t('{0} service(s) partagé(s) avec vous', cap.services.length), ' · ', h('a', { href: '#/services' }, t('Utiliser'))] : t('Rien de partagé avec vous pour l\'instant.'))),
-    cap.i_follow ? sure(t('Ne plus suivre'), act('captains', { unfollow: cap.hex }, t('Vous ne suivez plus {0}', cap.label))) : h('button', { onclick: act('captains', { follow: cap.hex }, t('Vous suivez {0}', cap.label)) }, cap.follows_me ? t('Suivre en retour') : t('Suivre')));
-  // D'abord ceux qui attendent un geste (ils vous suivent), puis les amis, puis le reste.
-  const rank = x => (x.follows_me && !x.i_follow ? 0 : x.friend ? 1 : 2);
-  const caps = (c.captains || []).slice().sort((x, y) => rank(x) - rank(y)), list = h('ul', { class: 'ms-caps' }), find = h('input', { type: 'search', placeholder: t('Chercher un Capitaine'), 'aria-label': t('Chercher un Capitaine') });
-  const show = () => list.replaceChildren(...caps.filter(x => !find.value || x.label.toLowerCase().includes(find.value.toLowerCase())).map(card));
-  find.oninput = show; show();
-  const captains = h('section', { class: 'card wide' }, h('h2', {}, t('Capitaines')),
-    c.error ? h('p', { class: 'degraded' }, c.error) : !caps.length ? h('p', { class: 'muted' }, t('Aucun autre Capitaine connu pour l\'instant.')) : [caps.length > 8 ? find : null, list],
-    h('p', { class: 'muted' }, t('Un ami réciproque vous montre ce qu\'il vous partage ; c\'est sa station qui décide.'), ' ', h('a', { href: '#/services' }, t('Régler mes partages')), ' · ', h('a', { href: '#/locks' }, t('Ce que « Suivre » ouvre'))));
+  // ── Essaim : stations vues et leurs Capitaines, un seul encart ; chaque station s'ouvre en fiche (m-swarm.js) ──
+  const swarm = (await K.mod('m-swarm.js')).default(K, cs, c, () => mesh(root, K));
 
-  // ── Essaim : toutes les stations vues, de la plus puissante à la moins puissante ──
-  const TIER = { Light: '🌿', Standard: '⚡', Brain: '🔥' }, nodes = cs?.nodes || [];
-  const node = n => { const net = n.services?.filter(x => x !== 'ssh') || [];
-    return h('div', { class: 'card ck-node' + (n.self ? ' self' : '') }, h('div', {}, h('strong', {}, n.node_id ? '…' + n.node_id.slice(-8) : '—'), n.self ? h('small', { class: 'muted' }, ' ' + t('(vous)')) : null, ' ', h('span', { class: 'ck-st ' + (n.status === 'known' ? 'off' : 'on') }, n.status === 'known' ? t('vue') : t('en ligne'))),
-      h('p', {}, `${TIER[n.tier] || ''} ${n.tier} · ${n.power_score}`, n.distance_km == null ? '' : ` · ${n.distance_km} km`), net.length ? h('p', {}, net.map(x => h('span', { class: 'ck-chip' }, x))) : h('p', { class: 'muted' }, t('aucun service partagé'))); };
-  const grid = h('div', { class: 'grid' }), only = h('input', { type: 'checkbox', id: 'ms-ia' });
-  const paint = () => grid.replaceChildren(...nodes.filter(n => !only.checked || n.services?.includes('ollama')).map(node));
-  only.onchange = paint; paint();
-  const swarm = h('section', { class: 'card wide' }, h('h2', {}, t('L\'essaim'), h('small', { class: 'muted' }, ` · ${nodes.length}`)),
-    h('p', {}, h('label', { for: 'ms-ia' }, only, ' ', t('Seulement celles qui offrent l\'IA (Ollama)'))), grid,
-    h('p', {}, h('a', { class: 'ck-btn', href: '#/planes' }, t('Constellations'))));
-
-  root.replaceChildren(...[first, captains, swarm, stations, h('section', { class: 'card wide' }, h('h2', {}, t('Ma station')), me)].filter(Boolean));
+  root.replaceChildren(...[first, swarm, stations, h('section', { class: 'card wide' }, h('h2', {}, t('Ma station')), me)].filter(Boolean));
 }

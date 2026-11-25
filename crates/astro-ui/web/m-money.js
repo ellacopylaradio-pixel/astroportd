@@ -1,9 +1,16 @@
 'use strict';
-// Moi › Mes Ẑen : solde, durée couverte, espace, loyer, parts de matériel. Reprend l'ancien écran « Mes chiffres » (#/chiffres), en mots simples.
+// Moi › Mes Ẑen : solde (un geste dessus ouvre l'historique des virements, m-history.js), durée couverte, espace, loyer, parts de matériel. Reprend l'ancien écran « Mes chiffres » (#/chiffres), en mots simples.
 const zen = c => (c == null ? '—' : (c / 100).toFixed(2));
 
-export default async function money(root, K) {
+export default async function money(root, K, q) {
   const { h, t, api, bytes } = K;
+  // Historique des virements : ouvert d'un geste sur le solde (ici ou dans l'en-tête, `#/money?h=1`), gardé d'un redessin à l'autre.
+  let hist = null;
+  const showHistory = async () => {
+    hist ??= (await K.mod('m-history.js')).default(K);
+    if (!root.contains(hist)) root.append(hist);
+    hist.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  };
   const draw = async () => {
     const [d, fp, me, isle] = await Promise.all([api('/api/v1/dashboard'), api('/api/v1/me/footprint'), api('/api/v1/me'), api('/api/v1/island').catch(() => null)]);
     // Île : réseau Ğ1 coupé, ou des promesses encore à régler. Rien à voir sinon.
@@ -20,8 +27,8 @@ export default async function money(root, K) {
         h('p', {}, h('a', { class: 'ck-btn', href: '#/island' }, t('Voir mes promesses'))))] : []),
       h('div', { class: 'grid' },
         card('Solde',
-          b.error ? h('p', { class: 'degraded', role: 'status' }, b.error) : [big(zen(b.zen_cents), 'Ẑen'), h('p', { class: 'muted' }, `${zen(b.g1_cents)} Ğ1`), b.stale ? h('p', { class: 'muted' }, t('Dernier solde connu : le réseau est lent.')) : null,
-            h('p', { class: 'ck-acts' }, h('a', { class: 'ck-btn', href: '#/payer' }, '📷 ' + t('Payer')), h('a', { class: 'ck-btn', href: '#/recevoir' }, '📲 ' + t('Recevoir'))),
+          b.error ? h('p', { class: 'degraded', role: 'status' }, b.error) : [h('button', { type: 'button', class: 'zh-open', title: t('Voir l’historique des virements'), 'aria-label': t('{0} Ẑen : voir l’historique des virements', zen(b.zen_cents)), onclick: showHistory }, big(zen(b.zen_cents), 'Ẑen')), h('p', { class: 'muted' }, `${zen(b.g1_cents)} Ğ1`), b.stale ? h('p', { class: 'muted' }, t('Dernier solde connu : le réseau est lent.')) : null,
+            h('p', { class: 'ck-acts' }, h('a', { class: 'ck-btn', href: '#/payer' }, '📷 ' + t('Payer')), h('a', { class: 'ck-btn', href: '#/recevoir' }, '📲 ' + t('Recevoir')), h('button', { type: 'button', class: 'ck-btn', onclick: showHistory }, '🧾 ' + t('Historique'))),
             h('p', {}, h('button', { type: 'button', class: 'ghost', onclick: async () => (await K.mod('m-credit.js')).default(K, me.captain ? { to: me.hex } : { mode: 'member' }) }, me.captain ? t('Verser des Ẑen') : t('Envoyer des Ẑen')))]),
         card('Durée couverte',
           e.weeks == null ? h('p', { class: 'muted' }, t('Solde indisponible.')) : [
@@ -40,7 +47,9 @@ export default async function money(root, K) {
       h('p', { class: 'ck-acts' },
         me.billet_issuer ? h('a', { class: 'ck-btn', href: '#/billets' }, '🎫 ' + t('Mes Ğ1Billets')) : null,
         h('a', { class: 'ck-btn', href: '#/constellation' }, '🌍 ' + t('Voir la constellation'))));
+    if (hist) root.append(hist);
   };
   await draw();
+  if (q?.get('h') === '1') showHistory();
   K.every(30000, () => draw().catch(() => {}));
 }

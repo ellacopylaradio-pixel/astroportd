@@ -6,7 +6,7 @@ const LABEL = { UPLANET_NAME: 'Nom de la constellation', CHARTER_VERSION: 'Versi
 // Exemples de saisie.
 const HINT = { OVH_ZONE: 'copylaradio.com', OCSLUG: 'monnaie-libre', GIT_HOST: 'https://gitlab.exemple.org', GIT_OWNER: 'papiche', TIER_SLUG_SATELLITE: '*parrainage*128*,satellite', TIER_SLUG_CONSTELLATION: '*parrainage*gpu*,constellation', TIER_SLUG_LABO: 'labo,r-d,recherche', OC_URL_MEMBRE: 'https://opencollective.com/…/contribute/…' };
 
-const TITLE = { uplanet: 'Nom et charte de la constellation', ovh: 'Domaine de la coopérative (OVH)', mesh: 'Stations relais du maillage', oc: 'OpenCollective', tiers: 'Routage des paliers', '3x13': 'Règle 3×1/3 + 1 %', fiscal: 'Impôt sur les sociétés', shares: 'PAF suggérée', api: 'Retours des utilisateurs (Git)', legacy: 'Stations Astroport.ONE' };
+const TITLE = { uplanet: 'Nom et charte de la constellation', ovh: 'Domaine de la coopérative (OVH)', mesh: 'Stations relais du maillage', oc: 'OpenCollective', tiers: 'Routage des paliers', '3x13': 'Règle 3×1/3 + 1 %', fiscal: 'Impôt sur les sociétés', shares: 'PAF suggérée', api: 'Retours des utilisateurs (Git)', plantnet: 'Reconnaissance des plantes (Pl@ntNet)', legacy: 'Stations Astroport.ONE' };
 // Où trouver chaque valeur : une ancre par section (`id` de `coop_config::SECTIONS`) dans l'annexe publiée du guide.
 const DOC = 'https://papiche.github.io/astroportd/CONFIG_COOP.html#';
 // Par tâche : ce qui met la station en service d'abord ; le reste replié. [niveau, titre, pourquoi, ouvert]
@@ -14,7 +14,7 @@ const GROUPS = [
   ['essential', 'Mettre en service', ''],
   ['money', 'Recevoir les dons', 'Un don devient des Ẑen sur le MULTIPASS de même adresse e-mail.', true],
   ['rules', 'Règles communes', 'Communes à toute la constellation ; valent dès la clôture suivante.'],
-  ['services', 'Retours des utilisateurs', 'Bogues et idées des applications → tickets Git ; sans forge, journal de la station.'],
+  ['services', 'Services aux membres', 'Bogues et idées des applications → tickets Git ; sans forge, journal de la station. Avec une clé Pl@ntNet, chaque membre peut faire reconnaître une plante sur ses photos.'],
   ['legacy', 'Pour les stations Astroport.ONE', 'Lues seulement par les stations Astroport.ONE : laissez vide sinon.'],
 ];
 

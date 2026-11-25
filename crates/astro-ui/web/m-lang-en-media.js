@@ -59,7 +59,6 @@ export default {
 "Partager l'album avec mes amis": "Share the album with my friends",
 "Partagé avec vos amis": "Shared with your friends",
 "Partage retiré : les copies déjà faites restent chez vos amis": "Sharing removed: copies already made stay with your friends",
-"Reçu de {0}": "Received from {0}",
 "Copié par : {0}": "Copied by: {0}",
 "Personne ne l'a encore copié.": "Nobody has copied it yet.",
 "Repartagé par : {0}": "Shared again by: {0}",

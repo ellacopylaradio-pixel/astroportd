@@ -21,6 +21,32 @@ pub struct AccountBackend<B: BlobStore> {
 impl_auth!(AccountBackend);
 
 impl<B: BlobStore> AccountBackend<B> {
+    /// Ğ1 éventuelles d'un MULTIPASS (reçues d'un ami, d'un don…) reversées au portefeuille primal UPLANETNAME_G1 avant
+    /// qu'il quitte la station (éjection, retrait), comme le « CASH-BACK » de nostr_DESTROY_TW.sh ; elles seront restituées
+    /// si le membre revient. Solde illisible = rien ne se fait. Rend les centimes reversés.
+    async fn cash_back(&self, r: &crate::register::Registrar, hex: &str, email: &str, dir: &std::path::Path, (later, cancelled): (&str, &str)) -> Result<u64, ApiError> {
+        use astro_duniter::Chain;
+        let dunikey = dir.join(".secret.dunikey");
+        let Ok(text) = std::fs::read_to_string(&dunikey) else { return Ok(0) };
+        let chain = self.services.chain.clone().ok_or_else(|| ApiError::unavailable(format!("station non reliée à la Ğ1 : impossible de vérifier le solde du compte ({later})")))?;
+        let key = astro_lifecycle::dunikey::Dunikey::parse(&text).map_err(|e| ApiError::internal(format!("portefeuille du compte illisible : {e}")))?;
+        let signer = astro_duniter::Ed25519Signer::from_seed(*key.ed25519_seed());
+        let balance = chain.balance(&signer.account()).await.map_err(|e| ApiError::unavailable(format!("solde du compte illisible ({e}) : {later}")))?;
+        if balance.total.0 == 0 {
+            return Ok(0);
+        }
+        let master = crate::coop_wallets::Wallets::new(r.uplanet_name().to_owned(), self.services.db.clone()).master().await.map_err(ApiError::internal)?;
+        let user = email.split('@').next().unwrap_or(email);
+        let memo = format!("MULTIPASS:{user}:PRIMAL:CASH-BACK");
+        match chain.transfer(&signer, &master.account(), balance.total, astro_duniter::TransferMode::AllowDeath, Some(&memo)).await {
+            Ok(out) => {
+                let record = json!({ "hex": hex, "email": email, "from": signer.account().ss58(), "to": master.account().ss58(), "g1_cents": balance.total.0, "block": hex::encode(out.block_hash) });
+                let _ = self.services.db.writer().execute("INSERT INTO journal(stream, at, data) VALUES ('eject_cashback', ?1, ?2)", vec![now_secs().into(), record.to_string().into()]).await;
+                Ok(balance.total.0)
+            }
+            Err(e) => Err(ApiError::unavailable(format!("reversement des {} Ğ1 du compte impossible ({e}) : {cancelled}, rien n'a changé", balance.total))),
+        }
+    }
     fn account_service(&self) -> Result<&Arc<crate::account::AccountService>, ApiError> {
         self.account.as_ref().ok_or_else(|| ApiError::unavailable("Mon compte n'est pas disponible sur cette station"))
     }
@@ -397,37 +423,86 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
         Ok(json!({ "umap": umap }))
     }
     async fn account_eject(&self, _who: &Principal, hex: String) -> Result<Value, ApiError> {
-        use astro_duniter::Chain;
         let r = self.registrar.as_ref().ok_or_else(|| ApiError::unavailable("inscription non disponible sur cette station"))?;
         let email = r.ejectable(&hex).await.map_err(register_error)?;
-        // Ẑen éventuels (reçus d'un ami, d'un don…) : reversés au portefeuille primal UPLANETNAME_G1 avant l'éjection, comme
-        // le « CASH-BACK » de nostr_DESTROY_TW.sh ; ils seront restitués si le membre revient. Solde illisible = pas d'éjection.
-        let dunikey = r.nostr_root().join(&email).join(".secret.dunikey");
-        let mut cashback = 0u64;
-        if let Ok(text) = std::fs::read_to_string(&dunikey) {
-            let chain = self.services.chain.clone().ok_or_else(|| ApiError::unavailable("station non reliée à la Ğ1 : impossible de vérifier le solde du compte avant de l'éjecter"))?;
-            let key = astro_lifecycle::dunikey::Dunikey::parse(&text).map_err(|e| ApiError::internal(format!("portefeuille du compte illisible : {e}")))?;
-            let signer = astro_duniter::Ed25519Signer::from_seed(*key.ed25519_seed());
-            let balance = chain.balance(&signer.account()).await.map_err(|e| ApiError::unavailable(format!("solde du compte illisible ({e}) : éjection reportée")))?;
-            if balance.total.0 > 0 {
-                let master = crate::coop_wallets::Wallets::new(r.uplanet_name().to_owned(), self.services.db.clone()).master().await.map_err(ApiError::internal)?;
-                let user = email.split('@').next().unwrap_or(&email);
-                let memo = format!("MULTIPASS:{user}:PRIMAL:CASH-BACK");
-                match chain.transfer(&signer, &master.account(), balance.total, astro_duniter::TransferMode::AllowDeath, Some(&memo)).await {
-                    Ok(out) => {
-                        cashback = balance.total.0;
-                        let record = json!({ "hex": hex, "email": email, "from": signer.account().ss58(), "to": master.account().ss58(), "g1_cents": cashback, "block": hex::encode(out.block_hash) });
-                        let _ = self.services.db.writer().execute("INSERT INTO journal(stream, at, data) VALUES ('eject_cashback', ?1, ?2)", vec![now_secs().into(), record.to_string().into()]).await;
-                    }
-                    Err(e) => return Err(ApiError::unavailable(format!("reversement des {} Ğ1 du compte impossible ({e}) : éjection annulée, rien n'a changé", balance.total))),
-                }
-            }
-        }
+        let cashback = self.cash_back(r, &hex, &email, &r.nostr_root().join(&email), ("éjection reportée", "éjection annulée")).await?;
         let email = r.eject(&hex).await.map_err(register_error)?;
         if cashback > 0 {
             self.services.activity.publish_to(astro_core::Audience::Captain, "system", "register", format!("{email} : {} Ğ1 reversés au portefeuille primal (CASH-BACK) avant l'éjection", Amount(cashback)), None);
         }
         Ok(json!({ "ejected": email, "cashback_g1_cents": cashback }))
+    }
+    async fn account_remove(&self, _who: &Principal, hex: String) -> Result<Value, ApiError> {
+        let r = self.registrar.as_ref().ok_or_else(|| ApiError::unavailable("inscription non disponible sur cette station"))?;
+        let email = r.removable(&hex).await.map_err(register_error)?;
+        let cashback = self.cash_back(r, &hex, &email, &r.nostr_root().join(&email), ("retrait reporté", "retrait annulé")).await?;
+        let email = r.remove_inactive(&hex).await.map_err(register_error)?;
+        if cashback > 0 {
+            self.services.activity.publish_to(astro_core::Audience::Captain, "system", "register", format!("{email} : {} Ğ1 reversés au portefeuille primal (CASH-BACK) avant le retrait", Amount(cashback)), None);
+        }
+        Ok(json!({ "removed": email, "cashback_g1_cents": cashback }))
+    }
+    async fn account_delete(&self, _who: &Principal, hex: String, confirm: String) -> Result<Value, ApiError> {
+        use astro_crypto::KeySource;
+        let r = self.registrar.as_ref().ok_or_else(|| ApiError::unavailable("inscription non disponible sur cette station"))?;
+        let email = r.deletable(&hex).await.map_err(register_error)?;
+        if confirm.trim().to_lowercase() != email.to_lowercase() {
+            return Err(ApiError::bad_request(format!("pour supprimer sans retour, retapez l'adresse du compte ({email})")));
+        }
+        let db = self.services.db.clone();
+        let loss = db.readers().read({ let h = hex.clone(); move |c| Ok(crate::member_purge::loss(c, &h)?) }).await.map_err(db_err)?;
+        let dir = crate::member_purge::key_dir(r.nostr_root(), &email);
+        // 1. Ses Ğ1 reviennent à la coopérative : rien d'autre ne se fait si ce n'est pas possible.
+        let cashback = match &dir {
+            Some(d) => self.cash_back(r, &hex, &email, d, ("suppression reportée", "suppression annulée")).await?,
+            None => 0,
+        };
+        // 2. Adieu Nostr signé de sa clé, rangé ici puis envoyé aux relais.
+        let bus = &self.services.activity;
+        let secret = dir.as_ref().and_then(|d| d.parent()).and_then(|root| astro_crypto::FileKeySource::new(root).secret(&hex));
+        let (mut signed, mut announced) = (0usize, 0usize);
+        match secret {
+            Some(secret) => {
+                let events = crate::member_purge::farewell(&db, &hex, &secret, u64::try_from(now_secs()).unwrap_or(0)).await.map_err(ApiError::internal)?;
+                signed = events.len();
+                if let Some(publish) = self.account.as_ref().map(|a| a.publisher()) {
+                    for e in events {
+                        match publish(e).await {
+                            Ok(()) => announced += 1,
+                            Err(why) => {
+                                bus.publish_to(astro_core::Audience::Captain, "alert", "register", format!("suppression de {email} : adieu Nostr non diffusé ({why}) ; il reste rangé ici"), None);
+                            }
+                        }
+                    }
+                }
+            }
+            None => {
+                bus.publish_to(astro_core::Audience::Captain, "alert", "register", format!("suppression de {email} : clé introuvable, pas d'adieu signé ; ses événements sont seulement retirés de cette station"), None);
+            }
+        }
+        // 3. Ses données, puis les blobs que plus rien ne référence (le bassin partagé garde ceux d'un plan voisin).
+        let cids = crate::member_purge::purge(&db, &hex).await.map_err(ApiError::internal)?;
+        let (mut freed, mut kept) = (0usize, Vec::new());
+        for cid in &cids {
+            match self.dav.blobs.remove(cid).await {
+                Ok(()) => freed += 1,
+                Err(e) => kept.push(format!("{cid} : {e}")),
+            }
+        }
+        if !kept.is_empty() {
+            bus.publish_to(astro_core::Audience::Captain, "alert", "register", format!("suppression de {email} : {} blob(s) non effacé(s) : {}", kept.len(), kept.join(" ; ")), None);
+        }
+        // 4. En dernier, l'irréversible : ses clés, puis son identité.
+        let dirs = r.delete_keys(&email).await.map_err(register_error)?;
+        crate::member_purge::forget_identity(&db, &hex, now_secs(), freed).await.map_err(ApiError::internal)?;
+        bus.publish_to(
+            astro_core::Audience::Captain,
+            "system",
+            "register",
+            format!("MULTIPASS {email} supprimé par le Capitaine : {} fichier(s), {} Mo, {} blob(s) effacé(s), {signed} événement(s) d'adieu signé(s) ({announced} diffusé(s)), {dirs} dossier(s) de clés effacé(s){}", loss.files, loss.bytes >> 20, freed, if cashback > 0 { format!(", {} Ğ1 reversées", Amount(cashback)) } else { String::new() }),
+            None,
+        );
+        Ok(json!({ "deleted": email, "files": loss.files, "bytes": loss.bytes, "events": loss.events, "blobs_freed": freed, "farewell_signed": signed, "farewell_announced": announced, "cashback_g1_cents": cashback }))
     }
     async fn account_token_show(&self, who: &Principal) -> Result<Value, ApiError> {
         let v = self.account_service()?.show_token(&who.hex).await.map_err(account_error)?;
@@ -451,7 +526,7 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
             .readers()
             .read(|c| {
                 let mut stmt = c.prepare(
-                    "SELECT i.hex, i.role, i.email, i.contract, (SELECT value FROM kv WHERE scope = 'lifecycle' AND key = i.hex),                             COALESCE((SELECT SUM(size) FROM ucloud_entries e WHERE e.owner_hex = i.hex AND e.type = 'file'), 0) + COALESCE((SELECT SUM(size) FROM public_blobs p WHERE p.owner = i.hex), 0),                             (SELECT COUNT(*) FROM ucloud_entries e WHERE e.owner_hex = i.hex AND e.type = 'file')                      FROM identities i WHERE i.hosted = 1 AND i.role IN ('multipass', 'captain', 'zencard') ORDER BY i.email, i.hex",
+                    "SELECT i.hex, i.role, i.email, i.contract, (SELECT value FROM kv WHERE scope = 'lifecycle' AND key = i.hex),                             COALESCE((SELECT SUM(size) FROM ucloud_entries e WHERE e.owner_hex = i.hex AND e.type = 'file'), 0) + COALESCE((SELECT SUM(size) FROM public_blobs p WHERE p.owner = i.hex), 0),                             (SELECT COUNT(*) FROM ucloud_entries e WHERE e.owner_hex = i.hex AND e.type = 'file')                      FROM identities i WHERE (i.hosted = 1 OR (i.role = 'multipass' AND EXISTS (SELECT 1 FROM kv WHERE scope = 'member_removed' AND key = i.hex))) AND i.role IN ('multipass', 'captain', 'zencard') ORDER BY i.email, i.hex",
                 )?;
                 let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?.collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
@@ -490,12 +565,25 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
                 .map_err(db_err)?;
             let issuer: bool = self.services.db.readers().read({ let h = hex.clone(); move |c| Ok(rusqlite::OptionalExtension::optional(c.query_row("SELECT 1 FROM kv WHERE scope = 'billet_issuer' AND key = ?1", [&h], |_| Ok(())))?.is_some()) }).await.unwrap_or(false);
             let onboarding: Value = self.services.db.readers().read({ let h = hex.clone(); move |c| Ok(crate::member_primo::onboarding(c, &h)?) }).await.ok().flatten().map_or(Value::Null, |o| o.to_json(now_secs()));
+            // Dernière activité et ancienneté (`member_activity`) : tri de l'écran Membres et retrait après 30 jours d'inactivité.
+            let at = now_secs();
+            let (last_activity, since) = self.services.db.readers().read({ let h = hex.clone(); move |c| Ok(crate::member_activity::read(c, &h, at)?) }).await.map_err(db_err)?;
+            // Retiré (plus hébergé, clés en corbeille) : seule la suppression complète reste possible.
+            let removed_at: Option<i64> = self.services.db.readers().read({ let h = hex.clone(); move |c| Ok(rusqlite::OptionalExtension::optional(c.query_row("SELECT CAST(value AS INTEGER) FROM kv WHERE scope = 'member_removed' AND key = ?1 AND NOT EXISTS (SELECT 1 FROM identities WHERE hex = ?1 AND hosted = 1)", [h], |r| r.get(0)))?) }).await.map_err(db_err)?;
+            let inactive = crate::member_activity::removable(&role, last_activity, at).is_ok();
+            // Profil public (kind 0) : nom, logo et bandeau **servis par cette station** (`/ipfs/<cid>`, la CSP n'admet que
+            // `img-src 'self'` : une image ailleurs n'est pas affichée), site en http(s) seulement.
+            let kind0: Option<String> = self.services.db.readers().read({ let h = hex.clone(); move |c| Ok(rusqlite::OptionalExtension::optional(c.query_row("SELECT content FROM nostr_events WHERE kind = 0 AND pubkey = ?1 ORDER BY created_at DESC LIMIT 1", [h], |r| r.get(0)))?) }).await.map_err(db_err)?;
+            let profile = profile_card(kind0.as_deref());
+            let removable = self.registrar.is_some() && removed_at.is_none() && inactive;
+            let deletable = self.registrar.is_some() && role == "multipass" && (removed_at.is_some() || inactive);
             out.push(json!({
                 "onboarding": onboarding, "billet_issuer": issuer, "own_quota_bytes": own_quota, "own_weekly_zen": own_price, "weekly_zen": price, "fee": fee,
                 "pass_locked_until": pass_locked_until,
                 "hex": hex, "role": role, "email": email, "contract": contract, "status": status, "tracked": !life.is_null(),
                 "last_ok_at": life["last_ok_at"], "status_since": life["status_since"], "grace_ends_at": grace_ends,
                 "used_bytes": used, "files": files, "quota_bytes": quota, "unlimited": unlimited,
+                "last_activity": last_activity, "since": since, "removable": removable, "deletable": deletable, "removed_at": removed_at, "profile": profile,
             }));
         }
         Ok(json!({ "accounts": out }))
@@ -530,11 +618,43 @@ impl<B: BlobStore> AccountApi for AccountBackend<B> {
             None => false,
         }
     }
+    async fn plants_offered(&self, who: &Principal) -> bool {
+        crate::plant_fiche::offered(&self.services.db, &self.services.uplanet_name, &who.hex).await
+    }
     async fn ai_declared(&self, who: &Principal) -> bool {
         match &self.ai {
             // BRO s'ouvre selon les droits : l'IA que le Capitaine prête, ou la sienne s'il y a droit.
             Some(ai) => ai.available(&who.hex, who.captain).await,
             None => false,
         }
+    }
+}
+
+/// Carte de profil d'une ligne de l'écran Membres, tirée du kind 0 : `name` (`display_name`, sinon `name`), `picture` et
+/// `banner` en chemin local `/ipfs/<cid>` quand l'image est une image publique servie par une station (sinon absente : la CSP
+/// de l'interface n'admet que les images de la station), `website` seulement en `http(s)://`.
+fn profile_card(content: Option<&str>) -> Value {
+    let p: Value = content.and_then(|c| serde_json::from_str(c).ok()).unwrap_or(Value::Null);
+    let text = |k: &str| p[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+    let local = |k: &str| p[k].as_str().and_then(crate::profile_image::cid_of).map(|cid| format!("/ipfs/{cid}"));
+    let website = text("website").filter(|w| (w.starts_with("https://") || w.starts_with("http://")) && w.len() <= 256 && !w.contains(char::is_whitespace));
+    let name = text("display_name").or_else(|| text("name")).map(|n| n.chars().take(64).collect::<String>());
+    json!({ "name": name, "picture": local("picture"), "banner": local("banner"), "website": website })
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::profile_card;
+
+    #[test]
+    fn only_station_images_and_web_sites_reach_the_members_list() {
+        let cid = "bafkreidba4gprxrfwhusk3uocaw62soy2jfig2png3xyj7pscve6najfua";
+        let p = profile_card(Some(&format!(r#"{{"name":"bob","display_name":" Bob L. ","picture":"https://st.example/ipfs/{cid}","banner":"https://ailleurs.example/b.jpg","website":"javascript:alert(1)"}}"#)));
+        assert_eq!(p["name"], "Bob L.");
+        assert_eq!(p["picture"], format!("/ipfs/{cid}"), "image publique : servie ici");
+        assert!(p["banner"].is_null(), "image externe : la CSP l'interdirait");
+        assert!(p["website"].is_null(), "seulement http(s)");
+        assert_eq!(profile_card(Some(r#"{"website":"https://bob.example/blog"}"#))["website"], "https://bob.example/blog");
+        assert!(profile_card(None)["name"].is_null() && profile_card(Some("pas du json"))["picture"].is_null());
     }
 }

@@ -60,6 +60,22 @@ pub trait UcloudApi: Auth {
     fn public_images(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("site public non disponible sur cette station")) }
     }
+    /// Fiche plante de la photo `path` : `{ available, exists, fiche }` (`available` : reconnaissance Pl@ntNet proposée).
+    fn plant_fiche(&self, _who: &Principal, _path: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("fiches plantes non disponibles sur cette station")) }
+    }
+    /// Toutes les fiches plantes du membre : `{ available, items: [{ photo, name, scientific, edible, medicinal, toxic, updated_at }] }`.
+    fn plant_list(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("fiches plantes non disponibles sur cette station")) }
+    }
+    /// Enregistre la fiche plante éditée par le membre (`edit` : espèce, rubriques, `wiki` pour préremplir) ; rend `{ fiche, warning }`.
+    fn plant_edit(&self, _who: &Principal, _path: String, _edit: Value, _lang: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("fiches plantes non disponibles sur cette station")) }
+    }
+    /// Lance la reconnaissance de la plante de la photo `path`, à la demande du membre ; rend `{ fiche, warning }`.
+    fn plant_identify(&self, _who: &Principal, _path: String, _lang: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("reconnaissance des plantes non disponible sur cette station")) }
+    }
     /// Tourne des photos d'un quart de tour (`turn` : 1 vers la droite, -1 vers la gauche) ; rend `{ rotated, failed: [{path, error}] }`.
     fn rotate_photos(&self, _who: &Principal, _paths: Vec<String>, _turn: i8) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("rotation non disponible sur cette station")) }
@@ -158,6 +174,9 @@ pub trait UcloudApi: Auth {
 pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
     Router::new()
         .route("/api/v1/ucloud/rotate", post(library_rotate::<B>))
+        .route("/api/v1/ucloud/plant", get(plant_fiche::<B>).post(plant_identify::<B>))
+        .route("/api/v1/ucloud/plant/fiche", post(plant_edit::<B>))
+        .route("/api/v1/ucloud/plants", get(plant_list::<B>))
         .route("/api/v1/ucloud/list", get(ucloud_list::<B>))
         .route("/api/v1/ucloud/photos", get(ucloud_photos::<B>))
         .route("/api/v1/ucloud/have", post(library_have::<B>))
@@ -366,6 +385,45 @@ if b.paths.is_empty() || b.paths.len() > 200 || !matches!(b.turn, 1 | -1) {
 return reply(Err(ApiError::bad_request("1 à 200 photos, quart de tour 1 ou -1")));
 }
 reply(st.backend.rotate_photos(&p, b.paths, b.turn).await)
+}
+
+#[derive(Deserialize)]
+struct PlantBody {
+    path: String,
+    #[serde(default)]
+    lang: String,
+    #[serde(default)]
+    fiche: Value,
+}
+
+/// Langue des noms communs et de Wikipédia : deux lettres minuscules, français sinon.
+fn plant_lang(l: String) -> String {
+    if l.len() == 2 && l.bytes().all(|c| c.is_ascii_lowercase()) { l } else { "fr".to_owned() }
+}
+
+async fn plant_fiche<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<TextQuery>) -> Response {
+    match q.path.filter(|p| p.starts_with('/') && p.len() <= 4096) {
+        Some(path) => reply(st.backend.plant_fiche(&p, path).await),
+        None => reply(Err(ApiError::bad_request("chemin attendu (?path=/…)"))),
+    }
+}
+
+async fn plant_list<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.plant_list(&p).await)
+}
+
+async fn plant_identify<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<PlantBody>) -> Response {
+    if !b.path.starts_with('/') || b.path.len() > 4096 {
+        return reply(Err(ApiError::bad_request("chemin attendu")));
+    }
+    reply(st.backend.plant_identify(&p, b.path, plant_lang(b.lang)).await)
+}
+
+async fn plant_edit<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<PlantBody>) -> Response {
+    if !b.path.starts_with('/') || b.path.len() > 4096 || !b.fiche.is_object() {
+        return reply(Err(ApiError::bad_request("chemin et fiche attendus")));
+    }
+    reply(st.backend.plant_edit(&p, b.path, b.fiche, plant_lang(b.lang)).await)
 }
 
 async fn import_meta<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<Value>) -> Response {

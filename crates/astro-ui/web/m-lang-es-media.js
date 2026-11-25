@@ -59,7 +59,6 @@ export default {
 "Partager l'album avec mes amis": "Compartir el álbum con mis amigos",
 "Partagé avec vos amis": "Compartido con tus amigos",
 "Partage retiré : les copies déjà faites restent chez vos amis": "Compartición retirada: las copias ya hechas se quedan con tus amigos",
-"Reçu de {0}": "Recibido de {0}",
 "Copié par : {0}": "Copiado por: {0}",
 "Personne ne l'a encore copié.": "Nadie lo ha copiado todavía.",
 "Repartagé par : {0}": "Recompartido por: {0}",

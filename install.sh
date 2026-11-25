@@ -1006,8 +1006,8 @@ if [ -z "$LAT" ] && [ "$LOCATE" = 1 ]; then
   if command -v curl >/dev/null 2>&1; then
     geo="$(curl -fsS --max-time 5 'http://ip-api.com/json/?fields=status,country,city,lat,lon' 2>/dev/null || true)"
     if printf '%s' "$geo" | grep -q '"status":"success"'; then
-      LAT="$(printf '%s' "$geo" | sed -n 's/.*"lat":\(-\?[0-9.]*\).*/\1/p')"
-      LON="$(printf '%s' "$geo" | sed -n 's/.*"lon":\(-\?[0-9.]*\).*/\1/p')"
+      LAT="$(printf '%s' "$geo" | sed -n 's/.*"lat":\(-\?[0-9]*\.\?[0-9]\{0,2\}\)[0-9]*.*/\1/p')"
+      LON="$(printf '%s' "$geo" | sed -n 's/.*"lon":\(-\?[0-9]*\.\?[0-9]\{0,2\}\)[0-9]*.*/\1/p')"
       place="$(printf '%s' "$geo" | sed -n 's/.*"city":"\([^"]*\)".*/\1/p')"
       if [ -n "$LAT" ] && [ -n "$LON" ]; then
         say "▶ Position devinée d'après l'IP : ${place:-?} (${LAT}, ${LON}) — modifiable dans station.conf"

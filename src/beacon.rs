@@ -240,6 +240,12 @@ pub fn station_row(summary: &Value, swarm: &str, me: Option<&str>, updated: i64)
         "tier": tag("hw:tier").unwrap_or("light").to_ascii_lowercase(),
         "power": num("hw:power_score").unwrap_or(0.0),
         "gpu_gb": num("hw:gpu_vram_gb").unwrap_or(0.0),
+        "cpu_cores": count("hw:cpu_cores"),
+        "ram_gb": num("hw:ram_gb"),
+        // Stockage annoncé (astroportd ≥ 2.0 ; absent chez le legacy) : place libre et taille du disque des blobs, en Go.
+        "storage_free_gb": count("storage:free_gb"),
+        "storage_total_gb": count("storage:total_gb"),
+        "software": tag("software"),
         "price": tag("price:multipass"),
         "paf_cents": count("paf:machine"),
         "health": tag("health:status").unwrap_or("unknown"),
@@ -298,6 +304,16 @@ pub struct Beacon<P: Publisher> {
     pub p2p: Option<astro_p2p::P2pHandle>,
     /// Adresses publiques de maillage annoncées telles quelles (`--p2p-external`, entrée de la station dans `P2P_RELAYS`).
     pub p2p_announce: Vec<astro_p2p::Multiaddr>,
+    /// Dossier des blobs : sa place libre et sa taille sont annoncées (`storage:free_gb`, `storage:total_gb`), pour que
+    /// l'essaim sache combien il peut encore garder.
+    pub blobs_dir: Option<std::path::PathBuf>,
+}
+
+/// Place libre et taille du disque qui porte `dir`, en Go entiers (`None` : illisible).
+pub fn storage_gb(dir: &std::path::Path) -> Option<(u64, u64)> {
+    let st = rustix::fs::statvfs(dir).ok()?;
+    const GB: u64 = 1_000_000_000;
+    Some((st.f_bavail.saturating_mul(st.f_frsize) / GB, st.f_blocks.saturating_mul(st.f_frsize) / GB))
 }
 
 impl<P: Publisher> Beacon<P> {
@@ -380,6 +396,10 @@ impl<P: Publisher> Beacon<P> {
         add("hw:cpu_cores", hw.cpu_cores.to_string());
         add("hw:ram_gb", format!("{:.1}", hw.ram_gb));
         add("hw:gpu_vram_gb", format!("{:.0}", hw.vram_gb));
+        if let Some((free, total)) = self.blobs_dir.as_deref().and_then(storage_gb) {
+            add("storage:free_gb", free.to_string());
+            add("storage:total_gb", total.to_string());
+        }
         add("software", format!("astroportd/{}", env!("CARGO_PKG_VERSION")));
         let p2p = self.p2p_addrs();
         if !p2p.is_empty() {

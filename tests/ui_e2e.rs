@@ -269,11 +269,11 @@ async fn the_dashboard_reports_the_station_the_relay_and_the_sovereignty_widget(
 async fn the_album_paginates_without_losing_photos_that_share_a_timestamp() {
     let b = bench("album", None).await;
     let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
-    // 4 photos de la même seconde, 3 plus anciennes, 1 vidéo, 1 document (exclu), 1 sans contenu (exclue).
-    let rows: Vec<(String, &str, i64, Option<&str>)> = [("t1", "image/jpeg", 5000), ("t2", "image/jpeg", 5000), ("t3", "image/png", 5000), ("t4", "video/mp4", 5000), ("o1", "image/jpeg", 4000), ("o2", "image/jpeg", 3000), ("o3", "image/jpeg", 2000), ("doc", "application/pdf", 6000)]
+    // 3 photos de la même seconde, 3 plus anciennes, 1 vidéo d'appareil photo (reste dans l'album), 1 vidéo rangée ailleurs (va à la Médiathèque), 1 document (exclu), 1 sans contenu (exclue).
+    let rows: Vec<(String, &str, i64, Option<&str>)> = [("t1", "image/jpeg", 5000), ("t2", "image/jpeg", 5000), ("t3", "image/png", 5000), ("v", "video/mp4", 5000), ("o1", "image/jpeg", 4000), ("o2", "image/jpeg", 3000), ("o3", "image/jpeg", 2000), ("doc", "application/pdf", 6000)]
         .iter()
         .map(|(n, m, t)| (format!("/Album/{n}"), *m, *t, Some("QmCid")))
-        .chain([("/Album/vide".to_owned(), "image/jpeg", 7000, None)])
+        .chain([("/Album/vide".to_owned(), "image/jpeg", 7000, None), ("/DCIM/Camera/t4".to_owned(), "video/mp4", 5000, Some("QmCid"))])
         .collect();
     for (path, mime, t, cid) in rows {
         db_insert(&b.db, &hex(&ALICE), &path, mime, t, cid).await;
@@ -290,7 +290,7 @@ async fn the_album_paginates_without_losing_photos_that_share_a_timestamp() {
             None => break,
         }
     }
-    assert_eq!(seen, ["/Album/t1", "/Album/t2", "/Album/t3", "/Album/t4", "/Album/o1", "/Album/o2", "/Album/o3"], "ordre antéchronologique, ex æquo complets, rien en double");
+    assert_eq!(seen, ["/Album/t1", "/Album/t2", "/Album/t3", "/DCIM/Camera/t4", "/Album/o1", "/Album/o2", "/Album/o3"], "ordre antéchronologique, ex æquo complets, rien en double");
     assert!(b.get("/api/v1/ucloud/photos", &bob).await.1["items"].as_array().unwrap().is_empty());
 }
 
@@ -1935,6 +1935,9 @@ async fn the_media_library_indexes_fiches_streams_with_range_and_lets_the_owner_
         "source": { "kind": "disc", "rights": "private_copy" }, "sharing": { "level": "private" } });
     put(&b.app, &alice, "/Vidéos/Films/Chihiro (2001).media.json", fiche.to_string().as_bytes()).await;
     put(&b.app, &alice, "/Vidéos/Films/Vacances.jpg", b"\xff\xd8\xff souvenir").await;
+    // Vidéos déposées sans fiche : dans la Médiathèque (titre tiré du nom), pas dans Photos, sauf si elles viennent d'un appareil photo.
+    put(&b.app, &alice, "/Vidéos/Mariage_Léa.mp4", &film).await;
+    put(&b.app, &alice, "/DCIM/Camera/clip.mp4", &film).await;
 
     // Index : la fiche résumée, ses images et sous-titres à côté ; Bob ne voit rien.
     let (s, lib) = b.get("/api/v1/ucloud/media", &alice).await;
@@ -1951,6 +1954,9 @@ async fn the_media_library_indexes_fiches_streams_with_range_and_lets_the_owner_
     let (_, photos) = b.get("/api/v1/ucloud/photos", &alice).await;
     let shown: Vec<&str> = photos["items"].as_array().unwrap().iter().map(|i| i["path"].as_str().unwrap()).collect();
     assert!(shown.contains(&"/Vidéos/Films/Vacances.jpg") && !shown.iter().any(|p| p.contains("poster")), "{shown:?}");
+    assert!(shown.contains(&"/DCIM/Camera/clip.mp4") && !shown.contains(&"/Vidéos/Mariage_Léa.mp4"), "la vidéo d'appareil reste dans Photos, l'autre non : {shown:?}");
+    let titles: Vec<(&str, &str)> = lib["items"].as_array().unwrap().iter().map(|i| (i["path"].as_str().unwrap(), i["title"].as_str().unwrap())).collect();
+    assert!(titles.contains(&("/Vidéos/Mariage_Léa.mp4", "Mariage Léa")), "vidéo sans fiche dans la médiathèque : {titles:?}");
 
     // Lecture en flux : une adresse par fichier lisible (pas l'affiche), Range servi en clair sans autre authentification.
     let (s, play) = b.post("/api/v1/ucloud/media/play", &alice, json!({ "paths": ["/Vidéos/Films/Chihiro (2001).mp4", "/Vidéos/Films/Chihiro (2001).fr.vtt", "/Vidéos/Films/Chihiro (2001).poster.jpg"] })).await;
@@ -2201,4 +2207,47 @@ async fn the_web_of_trust_counts_only_proven_meetings_from_members_and_needs_fiv
     assert_eq!((v["member"].as_bool(), v["certs"].as_u64(), v["reached_pct"].as_u64(), v["web"]["members"].as_u64()), (Some(true), Some(5), Some(100), Some(roots + 1)), "{v}");
     assert_eq!(v["certifiers"].as_array().map(Vec::len), Some(5));
     assert!(!v.to_string().contains('@'), "jamais d'email : {v}");
+}
+
+/// Fiche plante : sans clé Pl@ntNet, le membre écrit lui-même l'espèce et ses notes ; la fiche est un fichier de son uCloud
+/// (`/_/Plantes/<empreinte>.json`), relu après perte du cache, et la photo se retrouve par la recherche (« plante », le nom,
+/// « comestible »). Un texte démesuré est borné ; un autre compte ne voit rien.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plant_sheet_is_written_by_the_member_kept_in_the_ucloud_and_searchable() {
+    let b = bench("plante", None).await;
+    let (alice, bob) = (basic("alice@example.org", &ALICE), basic("bob@example.org", &BOB));
+    let mut jpeg = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 48, image::Rgb([40, 150, 60]))).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    put(&b.app, &alice, "/Photos/ail.jpg", &jpeg).await;
+    let (s, r) = b.get("/api/v1/ucloud/plant?path=/Photos/ail.jpg", &alice).await;
+    assert_eq!((s, r["available"].as_bool(), r["exists"].as_bool()), (StatusCode::OK, Some(false), Some(false)), "{r}");
+    // Pas de clé de la coopérative : la reconnaissance automatique est refusée, sans rien appeler.
+    let (s, r) = b.post("/api/v1/ucloud/plant", &alice, json!({ "path": "/Photos/ail.jpg" })).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{r}");
+    let fiche = json!({ "species": { "scientific": "Allium ursinum", "common": ["Ail des ours"], "family": "Amaryllidaceae" }, "edible": "Feuilles crues au printemps", "notes": "x".repeat(10_000) });
+    let (s, r) = b.post("/api/v1/ucloud/plant/fiche", &alice, json!({ "path": "/Photos/ail.jpg", "fiche": fiche })).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["fiche"]["notes"].as_str().unwrap().chars().count() <= 4000, "texte borné");
+    let sha = r["fiche"]["sha"].as_str().unwrap().to_owned();
+    let file = format!("/_/Plantes/{sha}.json");
+    let n: i64 = b.db.readers().read(move |c| Ok(c.query_row("SELECT count(*) FROM ucloud_entries WHERE path = ?1 AND type = 'file'", [&file], |r| r.get(0))?)).await.unwrap();
+    assert_eq!(n, 1, "la fiche est un fichier de l'uCloud");
+    for q in ["plante", "ursinum", "ours", "comestible"] {
+        let (_, r) = b.get(&format!("/api/v1/ucloud/search?q={q}"), &alice).await;
+        assert!(r["items"].as_array().unwrap().iter().any(|i| i["path"] == "/Photos/ail.jpg"), "{q} : {r}");
+    }
+    let (_, r) = b.get("/api/v1/ucloud/search?q=ursinum", &bob).await;
+    assert!(r["items"].as_array().unwrap().is_empty(), "Bob ne voit pas la fiche d'Alice");
+    assert_eq!(b.get("/api/v1/ucloud/plant?path=/Photos/ail.jpg", &bob).await.0, StatusCode::BAD_REQUEST, "pas sa photo");
+    // Cache perdu (base rejouée) : la fiche revient de l'uCloud.
+    b.db.writer().execute("DELETE FROM plant_fiches", vec![]).await.unwrap();
+    b.db.writer().execute("DELETE FROM search_text WHERE src = 'plant'", vec![]).await.unwrap();
+    let (_, r) = b.get("/api/v1/ucloud/plant?path=/Photos/ail.jpg", &alice).await;
+    assert_eq!((r["exists"].as_bool(), r["fiche"]["species"]["common"][0].as_str(), r["fiche"]["edible"].as_str()), (Some(true), Some("Ail des ours"), Some("Feuilles crues au printemps")), "{r}");
+    let (_, r) = b.get("/api/v1/ucloud/search?q=ours", &alice).await;
+    assert!(!r["items"].as_array().unwrap().is_empty(), "de nouveau cherchable : {r}");
+    // Espèce de la liste des plantes très toxiques : l'avertissement s'ajoute aux dangers.
+    let (_, r) = b.post("/api/v1/ucloud/plant/fiche", &alice, json!({ "path": "/Photos/ail.jpg", "fiche": { "species": { "scientific": "Colchicum autumnale" } } })).await;
+    assert!(r["fiche"]["dangers"].as_str().unwrap().contains("Colchique"), "{r}");
+    assert_eq!(b.post("/api/v1/ucloud/plant/fiche", &alice, json!({ "path": "/Photos/ail.jpg", "fiche": "texte" })).await.0, StatusCode::BAD_REQUEST);
 }

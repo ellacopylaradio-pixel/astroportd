@@ -100,7 +100,8 @@ export default async function agents(root, K) {
     h('p', {}, t('L\'agent parle à votre station par le protocole MCP, avec son jeton :')),
     h('dl', { class: 'stack' }, h('dt', {}, t('Adresse')), h('dd', {}, code(mcp)), h('dt', {}, t('En-tête')), h('dd', {}, code('Authorization: Bearer <jeton>'))),
     h('p', {}, t('Par exemple, pour Claude Code :')), code(`claude mcp add --transport http astroport ${mcp} --header "Authorization: Bearer <jeton>"`),
-    h('p', { class: 'muted' }, t('Pour agir sur un site, l\'agent demande le mode navigateur ; une fois prêté, il pilote la page avec Playwright ou Puppeteer. Il doit tourner sur cette station ou sur une station de votre constellation.')), remoteHow);
+    h('p', { class: 'muted' }, t('Pour agir sur un site, l\'agent demande le mode navigateur ; une fois prêté, il pilote la page avec Playwright ou Puppeteer. Il doit tourner sur cette station ou sur une station de votre constellation.')),
+    h('p', { class: 'muted' }, t('Brancher l\'agent n\'ouvre aucun navigateur : le jeton ci-dessus est créé ici, puis, quand l\'agent demande le mode navigateur, la demande apparaît dans « Demandes en cours » ; une fois acceptée, la page s\'affiche ici et vous la voyez travailler.')), remoteHow);
 
   load = async () => {
     const [r, a] = await Promise.all([K.api('/api/v1/agents/requests'), K.api('/api/v1/agents')]);

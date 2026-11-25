@@ -67,6 +67,13 @@ ADMIN['captains'] = dict(captains=[dict(label='Marie', hex='dd' * 32, friend=Tru
 ADMIN['assist'] = dict(services=['ssh', 'bureau-vnc'], friends=[dict(hex='dd' * 32, label='Marie')], outgoing=[],
                        incoming=[dict(id='a1', other='dd' * 32, **{'from': 'Marie'}, service='ssh', hours=2, note='mon disque est plein', status='pending', station='12D3KooWAmiLyon')])
 ADMIN['locks'] = dict(mode='village', plane=dict(origin=True, kubo=True, pool_peers=1, p2p=True), gates=dict(register=True, register_cli=True, crawl=True, n2=True, mutual_only=False, photos_auto=True, open_writes=[]), people=dict(hosted=4, n1=9, n1_mutual=5, n2=37, n2_known=37), faces=dict(auto_off_members=1), public=dict(files=12, unserved=0, sensitive=3, members=1))
+# Essaim (m-mesh.js, m-swarm.js) : cette station, Marie (en ligne, Capitaine ami) et une station vue sans Capitaine connu.
+ADMIN['mesh'] = dict(active=True, plane='ORIGIN', peer_id='12D3KooWMaStation', connected=['12D3KooWAmiLyon'], addrs=['/ip4/203.0.113.7/tcp/4101/p2p/12D3KooWMaStation'], relays=[], relay_server=False, bootstrap=[])
+CONSTELLATION = dict(origin=dict(lat=43.6, lon=1.44), nodes=[
+    dict(node_id='12D3KooWMaStation', self=True, power_score=30.7, tier='Standard', distance_km=0.0, status='local', services=['ai-index', 'ollama'], name='station.example', storage_free_gb=812, storage_total_gb=1000),
+    dict(node_id='12D3KooWAmiLyon', self=False, power_score=56, tier='Brain', distance_km=337.1, status='connected', services=['ollama'], name='Station de Marie', url='https://marie.example', mode='village', uplanet='Ğ1 Libre', used=12, total=50, open=True, cpu_cores=16, ram_gb=64.0, gpu_gb=24, storage_free_gb=3200, storage_total_gb=4000, software='astroportd/2.0.0', at=1790000000),
+    dict(node_id='12D3KooWVueSansCap', self=False, power_score=43, tier='Brain', distance_km=0.8, status='known', services=[], name='…SansCap'),
+])
 ACCOUNT = dict(hex='aa' * 32, npub='npub1test', email='alice@example.org', role='multipass', g1pub='G1TEST', home_station='Qm:ab', lang='fr', langs=['fr', 'en', 'es'], profile=dict(name='Alice', about='Bonjour', picture=None),
                dav=dict(url='/dav', login='alice@example.org'), token_generation=0, keys_exportable=True, has_g1_key=True, relays=[dict(url='wss://s.example', read=True, write=True)])
 CONTACTS = dict(contacts=[dict(path='/Contacts/Lea.vcf', name='Léa Martin', emails=['lea@example.org'], pubkey='ab' * 32, via='vcard', g1pub=None, warning=None, hosted_here=None, friends=True, faces=12, faces_linked=12),
@@ -78,11 +85,34 @@ TOKEN = 'a1' * 16
 QR = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 CARD = 'astro-share:v1|alice@example.org|' + 'ab' * 32 + '|isolated|0123456789abcdef|1|c2VjcmV0c2VjcmV0|abcd'
 STATE = dict(faces=make_faces(), posts=[], deleted=[], chat=[])
+# Historique des virements du membre (`GET /api/v1/me/zen/history`, src/constellation.rs::member_history) : centimes entiers.
+_H = lambda i, d, c, **kw: {**dict(id=f'h{i}', at=1790000000 - i * 86400, dir=d, g1_cents=c, zen_cents=c * 10, other='g1Inconnu7Zs9q', name=None, coop=False, memo=None), **kw}
+ZEN_HISTORY = [dict(indexer=True, next='WyJuZXh0Il0=', items=[_H(0, 'in', 150, name='Léa', memo='Pain du marché'), _H(1, 'out', 30, name='Marc'), _H(2, 'in', 1000, coop=True, kind='credit'), _H(3, 'out', 5)]),
+               dict(indexer=True, next=None, items=[_H(4, 'in', 2500, name='Station de Marie', memo='Merci pour la réparation')])]
 # Lecture des documents : vue du membre (état modifiable par le test) et réglages du Capitaine.
+# Fiche plante (m-plant.js) : forme de `plant_fiche::view` / `edit` / `recognize` ; propositions tirées d'une vraie réponse de
+# Pl@ntNet, rubriques tirées du vrai article de Wikipédia (fr) sur l'ail des ours.
+PLANT = dict(available=True, fiche=None)
+PLANT_PROPS = [dict(scientific='Allium ursinum', author='L.', common=['Ail des ours', 'Ail sauvage'], genus='Allium', family='Amaryllidaceae', score=87, gbif='2856681', powo='528475-1', danger=None),
+               dict(scientific='Convallaria majalis', author='L.', common=['Muguet'], genus='Convallaria', family='Asparagaceae', score=6, gbif='2742212', powo='534427-1', danger="Muguet : toxique, feuilles confondues avec l'ail des ours.")]
+PLANT_WIKI = dict(description="L'ail des ours est une plante herbacée vivace de la famille des Amaryllidacées.", edible='Ses feuilles se consomment crues dans les salades, se préparent sous forme de pesto et soupe.',
+                  preparation='Alimentation humaine — On peut manger ses feuilles comme légume ou condiment.', medicinal="Thérapeutique — L'ail des ours est une plante médicinale très ancienne.",
+                  dangers="Confusions possibles avec d'autres plantes — Avant floraison, l'ail des ours peut être confondu avec l'arum tacheté, le colchique d'automne, le muguet de mai.",
+                  source=dict(title='Ail des ours', url='https://fr.wikipedia.org/wiki/Ail_des_ours', license='CC BY-SA 4.0'))
+def plant_fiche(path):
+    return PLANT['fiche'] or dict(v=1, sha='ab' * 32, photo=path, species=None, proposals=[], description='', edible='', preparation='', medicinal='', dangers='', notes='', source=None, updated_at=0)
+
 READING = dict(state='off', blocked=None, stations=[], local=[], progress=dict(read=0, by_friend=0, failed=0, waiting=37, more=False), photos=None, tasks=[dict(id='ocr', ready=True)], paused=False, pack=None)
 OFFERS = dict(stations=[dict(peer='12D3KooWMarie', name='La station de Marie', distance_km=12.4, power=31.0), dict(peer='12D3KooWAtelier', name='Atelier du Lez', distance_km=None, power=12.0)], silent=1)
-ACCOUNTS = [dict(hex='bb' * 32, email='bob@example.org', status='cooperative_member', quota_bytes=10 ** 10, used_bytes=2 * 10 ** 9, unlimited=False, weekly_zen=1, files=420),
-            dict(hex='cc' * 32, email='chloe@example.org', status='active_rental', quota_bytes=10 ** 10, used_bytes=10 ** 8, unlimited=False, weekly_zen=1, files=12)]
+ACCOUNTS = [dict(hex='bb' * 32, email='bob@example.org', role='multipass', status='cooperative_member', quota_bytes=10 ** 10, used_bytes=2 * 10 ** 9, unlimited=False, weekly_zen=1, files=420,
+                 profile=dict(name='Bob Martin', picture='/ipfs/bafkreiboblogo', banner='/ipfs/bafkreibobban', website='https://bob.example.org/atelier/'),
+                 last_activity=int(time.time()) - 3600, since=int(time.time()) - 400 * 86400, removable=False),
+            dict(hex='cc' * 32, email='chloe@example.org', role='multipass', status='active_rental', quota_bytes=10 ** 10, used_bytes=10 ** 8, unlimited=False, weekly_zen=1, own_weekly_zen=1, files=12,
+                 last_activity=int(time.time()) - 5 * 86400, since=int(time.time()) - 90 * 86400, removable=False, billet_issuer=True),
+            dict(hex='dd' * 32, email='dormeur@example.org', role='multipass', status='active_rental', quota_bytes=10 ** 10, used_bytes=9 * 10 ** 9, unlimited=False, weekly_zen=1, files=3,
+                 last_activity=int(time.time()) - 45 * 86400, since=int(time.time()) - 200 * 86400, removable=True, deletable=True, onboarding=dict(born_at=int(time.time()) - 200 * 86400, proved_at=1, primo='paid', ejectable=False)),
+            dict(hex='ee' * 32, email='parti@example.org', role='multipass', status='active_rental', quota_bytes=0, used_bytes=3 * 10 ** 8, unlimited=False, weekly_zen=1, files=57,
+                 last_activity=int(time.time()) - 80 * 86400, since=int(time.time()) - 300 * 86400, removable=False, deletable=True, removed_at=int(time.time()) - 20 * 86400)]
 ADMIN['index'] = dict(enabled=True, default=True, engine=[], lend=None, members=[dict(hex='bb' * 32, email='bob@example.org', enabled=True, own=False, read=120, friend='La station de Marie'), dict(hex='cc' * 32, email='chloe@example.org', enabled=False, own=True, read=0, friend=None)])
 
 # Agents (m-agents.js) : un agent déclaré, une demande en mode navigateur ; l'écran prêté est une page de connexion dessinée.
@@ -218,6 +248,9 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/invites': return self.send(200, INVITES)
         if p == '/api/v1/invite/' + 'b2' * 16: return self.send(410, dict(error='ce lien a expiré : demandez-en un nouveau', code='invite_expired'))
         if p == f'/api/v1/invite/{TOKEN}': return self.send(200, dict(**{'from': 'alice'}, label='Léa', count=4, photos=4, thumbs=[0, 1], expires_at=1791000000, email_hint='l**@example.org'))
+        if p.startswith('/ipfs/bafkrei'):  # images publiques des profils (écran Membres) : logo carré, bandeau large
+            ban = p.endswith('ban')
+            im = Image.new('RGB', (240, 80) if ban else (64, 64), (40, 110, 200) if ban else (220, 120, 40)); b = io.BytesIO(); im.save(b, 'PNG'); return self.send(200, b.getvalue(), 'image/png')
         if p.startswith(f'/api/v1/invite/{TOKEN}/thumb/'):
             im = Image.new('RGB', (16, 12), (180, 90, 60)); b = io.BytesIO(); im.save(b, 'PNG'); return self.send(200, b.getvalue(), 'image/png')
         if p.startswith('/ui/'):
@@ -256,7 +289,7 @@ class H(BaseHTTPRequestHandler):
             return
         if p == '/api/v1/me':
             if not (self.headers.get('Authorization') or '').startswith(('Basic ', 'Nostr ')): self.send(401, dict(error='authentification requise'))
-            return self.send(200, dict(hex='aa' * 32, email='alice@example.org', captain=True, ai=STATE.get('ai', True)))
+            return self.send(200, dict(hex='aa' * 32, email='alice@example.org', captain=True, ai=STATE.get('ai', True), plants=True))
         if p == '/api/v1/me/meet/code':
             proof = f'{int(__import__("time").time()) // 120}.' + 'ab' * 64
             url = f'http://127.0.0.1:{self.server.server_port}/#/rencontre?to={"aa" * 32}&m={proof}'
@@ -286,6 +319,8 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/contacts': return self.send(200, CONTACTS)
         if p == '/api/v1/me/links': return self.send(200, dict(plane='origin', siblings=['zen1'], keys=[dict(plane='origin', hex='aa' * 32, via='fiche'), dict(plane='zen1', hex='ee' * 32, via='station')]))
         if p == '/api/v1/island': return self.send(200, STATE.setdefault('island', island_state()))
+        if p == '/api/v1/me/zen/history':  # Mes Ẑen › historique (m-history.js) : deux pages, la seconde par le curseur
+            return self.send(200, ZEN_HISTORY[1] if 'after=' in self.path else ZEN_HISTORY[0])
         if p == '/api/v1/station/island': return self.send(200, ISLAND_STATION)
         if p == '/api/v1/friends': return self.send(200, dict(friends=[dict(hex='ab' * 32, label='Léa', hosted=False), dict(hex='cd' * 32, label='Marc', hosted=True)]))
         if p == '/api/v1/chat':
@@ -296,6 +331,7 @@ class H(BaseHTTPRequestHandler):
         if p == '/health': return self.send(200, dict(status='ok'))
         if p == '/api/v1/me/footprint': return self.send(200, dict(disk=dict(used_bytes=2_400_000_000, files=5321, quota_bytes=10_000_000_000, unlimited=False, tier='Basic', by_kind=dict(ucloud=dict(photo=1_500_000_000, video=600_000_000, music=120_000_000, doc=40_000_000, other=20_000_000), public=dict(photo=90_000_000, doc=30_000_000)), spread=STATE.get('spread')),
                                                                     opex=dict(total_28d_cents=400, weekly_rent_cents=100, rent_28d_cents=400), capex=dict(assets=[], zencard=False, net_cents=0, value_cents=0, amortized_cents=0)))  # Mes Ẑen (m-money.js)
+        if p == '/api/v1/station/constellation': return self.send(200, CONSTELLATION)
         if p.startswith('/api/v1/station/admin/'): k = p.rsplit('/', 1)[1]; return self.send(200, ADMIN[k]) if k in ADMIN else self.send(404, dict(error='non simulé'))
         if p == '/api/v1/faces/folders': return self.send(200, dict(folders=[dict(dir='/Images/2026/10', faces=12, todo=9), dict(dir='/Images/2026/09', faces=4, todo=0)]))
         if p == '/api/v1/faces/board':
@@ -343,6 +379,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, dict(messages=[dict(peer='bb' * 32, id='m1', at=1790000000, mine=False, group=False, name='Léa Martin', excerpt='La facture d’électricité est arrivée'), dict(peer='dd' * 32, id='m2', at=1789000000, mine=True, group=True, name='', excerpt='je paie la facture demain')],
                 notes=[dict(id='ee' * 32, author='bb' * 32, mine=False, name='Léa Martin', article=True, d='energie', title='Baisser sa facture', at=1788000000, excerpt='…notre facture a baissé de moitié…'), dict(id='ff' * 32, author='bb' * 32, mine=False, name='Léa Martin', article=False, d=None, title=None, at=1787000000, excerpt='Qui connaît un électricien ?')],
                 contacts=[dict(path='/Contacts/enercoop.vcf', name='Enercoop', org='SCIC')]))
+        if p == '/api/v1/ucloud/plants': return self.send(200, dict(available=True, items=[dict(photo='/Photos/ail.jpg', name='Ail des ours', scientific='Allium ursinum', edible=True, medicinal=True, toxic=False, updated_at=1), dict(photo='/Photos/muguet.jpg', name='Muguet', scientific='Convallaria majalis', edible=False, medicinal=False, toxic=True, updated_at=2)]))
+        if p == '/api/v1/ucloud/plant': return self.send(200, dict(available=PLANT['available'], exists=PLANT['fiche'] is not None, fiche=plant_fiche(_uq(self.path.split('path=', 1)[1]))))
         if p == '/api/v1/ucloud/text': return self.send(200, dict(text='FACTURE N° 2026-117\nÉlectricité du hameau des Écluses' if 'scan001' in self.path else None))
         if p == '/api/v1/ucloud/timeline':
             q = self.path.split('ym=')[1] if 'ym=' in self.path else None
@@ -448,6 +486,17 @@ class H(BaseHTTPRequestHandler):
             if 'share' in body: STATION_AI['share'] = body['share']
             return self.send(200, STATION_AI)
         if p == '/api/v1/book/delete-many': return self.send(200, dict(deleted=len(body['paths']), failed=[]))
+        if p == '/api/v1/ucloud/plant':
+            f = plant_fiche(body['path']); best = PLANT_PROPS[0]
+            if not f['species']: f.update({k: v for k, v in PLANT_WIKI.items() if not f.get(k)}, species=dict(scientific=best['scientific'], common=best['common'], family=best['family'], gbif=best['gbif']))
+            f['proposals'] = PLANT_PROPS; PLANT['fiche'] = f
+            return self.send(200, dict(fiche=f, warning=None))
+        if p == '/api/v1/ucloud/plant/fiche':
+            f = plant_fiche(body['path']); e = body['fiche']
+            f.update({k: e.get(k, '') for k in ('description', 'edible', 'preparation', 'medicinal', 'dangers', 'notes')}, species=e.get('species'))
+            if e.get('wiki'): f.update({k: v for k, v in PLANT_WIKI.items() if not f.get(k)})
+            PLANT['fiche'] = f
+            return self.send(200, dict(fiche=f, warning=None))
         if p == '/api/v1/ucloud/rotate': return self.send(200, dict(rotated=len(body['paths']), failed=[]))
         if p == '/api/v1/ucloud/media/share':
             for it in MEDIA:
@@ -519,6 +568,9 @@ class H(BaseHTTPRequestHandler):
         if p == '/api/v1/station/restart': return self.send(200, dict(restarting=True))
         if p == '/api/v1/station/update': STATE.setdefault('update_posts', []).append(1); STATE['update'] = {**STATE.get('update', {}), 'running': True, 'log': ['▶ Téléchargement et vérification', '  ✔ empreinte SHA-256 vérifiée']}; return self.send(200, dict(started=True, version='v1.8.0'))
         if p == '/api/v1/station/planes/service': STATE['unit'] = 'planes'; return self.send(200, dict(state='switched', unit='/h/u', command='x', backup='/h/u.bak-1', carried=[], carried_to=None, to_carry=[], unreadable=False))
+        if p == '/api/v1/station/admin/captains':  # suivre / ne plus suivre (Captains::act) : la vue revient
+            hx = body.get('follow') or body.get('unfollow'); c = next(x for x in ADMIN['captains']['captains'] if x['hex'] == hx)
+            c['i_follow'] = 'follow' in body; c['friend'] = c['i_follow'] and c['follows_me']; STATE['followed'] = body; return self.send(200, ADMIN['captains'])
         if p == '/api/v1/station/admin/locks': ADMIN['locks']['mode'] = body['mode']; return self.send(200, ADMIN['locks'])
         if p == '/api/v1/station/admin/tunnels':  # comme TunnelPolicy::set : share, unshare, mode, grant, revoke, reset
             sv = {s['name']: s for s in TUNNELS['services']}
@@ -554,6 +606,22 @@ class H(BaseHTTPRequestHandler):
                 for x in (r['services'] if isinstance(r['services'], list) else []):
                     if x['name'] == body['disconnect']['service'] and r['peer'] == body['disconnect'].get('peer', r['peer']): x['local'] = None
             return self.send(200, dict(closed=1))
+        if p.startswith('/api/v1/station/accounts/') and p.endswith('/remove'):
+            hx = p.split('/')[5]
+            a = next((x for x in ACCOUNTS if x['hex'] == hx), None)
+            if not a or not a.get('removable'): return self.send(400, dict(error='compte actif : il ne se retire qu’après 30 jours sans activité'))
+            ACCOUNTS.remove(a); return self.send(200, dict(removed=a['email'], cashback_g1_cents=0))
+        if p.startswith('/api/v1/station/accounts/') and p.endswith('/delete'):
+            a = next((x for x in ACCOUNTS if x['hex'] == p.split('/')[5]), None)
+            if not a or not a.get('deletable'): return self.send(400, dict(error='compte actif : il ne se supprime qu’après 30 jours sans activité'))
+            if body.get('confirm', '').strip().lower() != a['email']: return self.send(400, dict(error=f"pour supprimer sans retour, retapez l'adresse du compte ({a['email']})"))
+            ACCOUNTS.remove(a); return self.send(200, dict(deleted=a['email'], files=a['files'], bytes=a['used_bytes'], events=3, blobs_freed=a['files'], farewell_signed=2, farewell_announced=2, cashback_g1_cents=0))
+        if p.startswith('/api/v1/station/accounts/') and p.endswith('/hosting'):
+            a = next(x for x in ACCOUNTS if x['hex'] == p.split('/')[5])
+            a.update(own_quota_bytes=body.get('quota_bytes'), own_weekly_zen=body.get('weekly_zen'), weekly_zen=1 if body.get('weekly_zen') is None else body['weekly_zen'])
+            if body.get('quota_bytes'): a['quota_bytes'] = body['quota_bytes']
+            if 'billet_issuer' in body: a['billet_issuer'] = body['billet_issuer']
+            return self.send(200, dict(hex=a['hex'], quota_bytes=body.get('quota_bytes'), weekly_zen=body.get('weekly_zen')))
         if p == '/api/v1/station/admin/index':
             ix = ADMIN['index']
             for k in ('enabled', 'default'):
@@ -606,8 +674,17 @@ class H(BaseHTTPRequestHandler):
         self.send(404, dict(error='simulé : ' + p))
 
 
-def start():
-    """Démarre la station simulée sur un port libre ; rend `(serveur, port)`."""
-    srv = ThreadingHTTPServer(('127.0.0.1', 0), H)
+def start(port=0):
+    """Démarre la station simulée (port libre par défaut) ; rend `(serveur, port)`."""
+    srv = ThreadingHTTPServer(('127.0.0.1', port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, srv.server_address[1]
+
+
+if __name__ == '__main__':
+    # Atelier de l'interface : `~/.astro/bin/python tests/browser/mock_station.py [port]`, puis ouvrir l'adresse dans un
+    # navigateur. Les fichiers de `crates/astro-ui/web/` sont relus à chaque requête : on modifie, on recharge, sans compiler.
+    srv, port = start(int(sys.argv[1]) if len(sys.argv) > 1 else 8765)
+    print(f'station simulée : http://127.0.0.1:{port}/#/members  (Ctrl+C pour arrêter)')
+    try: threading.Event().wait()
+    except KeyboardInterrupt: srv.shutdown()

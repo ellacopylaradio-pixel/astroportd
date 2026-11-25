@@ -1,3 +1,18 @@
+## astroportd 2.1.0 — Membres refondus, plantes, vidéos dans la Médiathèque, sections pliables
+
+- **Membres, une liste qui se règle sur place** : quota, prix, Ğ1Billets, lecture et IA enregistrés aussitôt, aide « ? » sur chaque colonne, tri par activité, disque ou ancienneté, filtre « Inactifs +30 j ». Chaque ligne montre le logo, le bandeau et le site du membre (champs de son profil). Le Capitaine retire un compte inactif depuis plus d'un mois, confirmé en deux temps, et peut **supprimer complètement un MULTIPASS et ses données** (`src/member_purge.rs`, `POST /api/v1/station/accounts/{hex}/delete`) : solde rendu, profil vidé, fichiers (seuls les blobs que personne d'autre ne référence), clés.
+- **Mes Ẑen** : le solde est dans l'en-tête et ouvre l'**historique des transactions** (`GET /api/v1/me/zen/history`, lu auprès de l'indexeur Ğ1 ; non éprouvé contre un indexeur réel).
+- **Plantes (Pl@ntNet)** : la clé se règle dans la configuration coopérative (*Services aux membres*). Une photo de plante a sa **fiche** (comestible ?, préparation, propriétés médicinales, dangers, notes), prérempli depuis Wikipédia avec la source citée, modifiable, rangée chiffrée dans l'uCloud du membre et cherchable. **Plantes** apparaît à côté de Médiathèque quand la clé est réglée ou que le membre a déjà des fiches. Un avertissement de toxicité est toujours affiché ; la liste des plantes toxiques connues est en français seulement.
+- **Réseau** : stations cliquables avec leur fiche, Capitaines réunis dans le même encart, « Suivre » son Capitaine, stockage libre total de l'essaim (les autres stations l'annoncent après leur mise à jour).
+- **Écluses** : nom de l'UPlanet affiché, ORIGIN reconnu aussi avec une `swarm.key` de zéros, réglages du relai déplacés ici depuis Options.
+- **Économie** : la PAF se règle dans « Régie coopérative 3×1/3 » (Constellation), plus dans le cockpit ; « Constellation » reste dans le sous-menu.
+- **Sections pliables** : chaque carte titrée se plie d'un geste sur son titre, et l'état est retenu par écran (`m-fold.js`).
+- **Médiathèque** : les vidéos déposées par WebDAV **sans fiche** y apparaissent (onglet Vidéos, titre tiré du nom du fichier) et ne polluent plus Photos, sauf celles d'un dossier d'appareil photo (`DCIM`, `Camera`).
+- **Mes agents** : l'écran dit que brancher un agent par MCP n'ouvre aucun navigateur ; la page n'apparaît dans l'application qu'après acceptation de la demande de mode navigateur. La cause du « rien ne s'ouvre » n'a pas été reproduite : aucun jeton d'agent n'existe sur cette station (à confirmer avec le client MCP utilisé).
+- **Chat** : le « ⋮ » est calé à droite.
+- **Plugin `corpus`** (astroportd-plugins) : le corpus d'essai s'installe en option (`install-plugins.sh corpus`).
+- Budget des écrans à la demande : 884 Ko bruts, 344 Ko compressés (876 Ko avant cette version).
+
 ## astroportd 2.0.0 — BRO parle, l'IA de la station se partage, vos données restent chez vous
 
 - **BRO discute, en flux.** Il répond avec l'IA qui vous est attribuée, mot à mot, et dit **où** chaque réponse a été calculée (🏠 chez vous, 🌐 sur Internet) et avec quel modèle. Il **cherche dans vos fichiers** (mots, personnes reconnues, villes, dates, et ce que montrent vos photos), lit **votre solde**, relit **ce que vous lui avez confié** (sa mémoire) et **retient** ce que vous lui demandez (« retiens que… », dans votre journal privé, seule écriture). Un modèle de 8B ou plus est conseillé pour des outils fiables (essai réel : `qwen3:14b` réussit, `llama3.2` 3B non). Chaque message se copie, se partage ou se supprime (il sort alors de ce que BRO relit). `src/bro_chat.rs`, `POST /api/v1/bro/stream` (SSE) et `/bro/say`.

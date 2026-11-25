@@ -1,12 +1,15 @@
 'use strict';
 // Coque de navigation, pilotée par la table des routes : onglets de l'espace courant, sous-onglets, retour, interrupteur
-// Mon espace ⇄ Ma station (Capitaine), pastille « Aide » et bouton de l'assistant.
+// Mon espace ⇄ Ma station (Capitaine), pastille « Aide », solde en Ẑen, pli des sections et bouton de l'assistant.
 import { TABS, segments, parentOf, titleOf } from '/ui/m-routes.js';
+import { folds } from '/ui/m-fold.js';
 
 export default function shell(K, me) {
   const { h, t } = K;
   const nav = document.querySelector('header nav'), tools = document.querySelector('.tools');
   let space = null, bar = null, fab = null, sw = null;
+  // Toute carte titrée se plie d'un geste sur son titre ; l'état est retenu par écran et par titre (m-fold.js).
+  folds(document.getElementById('main'));
 
   const tabs = sp => {
     nav.replaceChildren(...TABS[sp].map(([id, icon, label, to]) => h('a', { href: '#' + to, 'data-r': id }, h('span', { class: 'ic', 'aria-hidden': 'true' }, icon), h('span', { class: 'lb' }, t(label)))));
@@ -33,6 +36,19 @@ export default function shell(K, me) {
   }, () => {});
   if (me.captain) { poll(); setInterval(poll, 30000); }
 
+  // Solde en Ẑen du membre, discret dans l'en-tête ; un clic ouvre Mes Ẑen sur l'historique des virements. Centimes entiers, mis en forme sans flottant.
+  const zc = c => `${c < 0 ? '-' : ''}${Math.trunc(Math.abs(c) / 100)}${c % 100 ? ',' + String(Math.abs(c) % 100).padStart(2, '0') : ''}`;
+  let purse = null;
+  const balance = () => K.api('/api/v1/dashboard').then(d => {
+    const c = d.balance?.zen_cents;
+    if (c == null) { purse?.remove(); purse = null; return; }
+    if (!purse) { purse = h('a', { class: 'zen-in', href: '#/money?h=1' }); tools.prepend(purse); }
+    purse.textContent = `${zc(c)} Ẑ`;
+    purse.title = t('Voir l’historique des virements') + (d.balance.stale ? ' · ' + t('Dernier solde connu : le réseau est lent.') : '');
+    purse.setAttribute('aria-label', `${t('Mes Ẑen')} : ${zc(c)} Ẑen`);
+  }, () => {});
+  balance(); setInterval(balance, 120000);
+
   // Une seule case de recherche pour tout le uCloud, sous les sous-onglets de Fichiers (Dossiers, Photos, Médiathèque) ; son
   // texte grisé ne promet que ce que la station sait chercher (le serveur le dit).
   let hintP = null;
@@ -50,7 +66,7 @@ export default function shell(K, me) {
   };
   // Barre sous l'en-tête : retour (écran enfant) ou sous-onglets (écrans frères), et la recherche dans Fichiers.
   const strip = res => {
-    const back = parentOf(res), segs = segments(res);
+    const back = parentOf(res), segs = segments(res, me);
     bar?.remove(); bar = null;
     let nav = null;
     if (back) nav = h('nav', { class: 'segs back', 'aria-label': t('Retour') }, h('a', { href: '#' + back.path }, '← ' + t(back.title)), h('strong', {}, t(titleOf(res))));

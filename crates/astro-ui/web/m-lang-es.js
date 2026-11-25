@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire es, phrases communes. Les écrans de `parts` ont aussi m-lang-es-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'about account agents ai aiadmin bro beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles services replication devices backup card';
+export const parts = 'about account agents ai aiadmin members bro beta billets call contacts cosurf coop files guard locks media mesh swarm move options planes reading screen favs start sync write island pay circles services replication devices backup card plant';
 export default {
 "{0} message(s) non lu(s)": "{0} mensaje(s) sin leer",
 "trouvée par ce qu’elle montre": "encontrada por lo que muestra",
@@ -324,6 +324,7 @@ export default {
 "Il y a 1 an": "Hace 1 año",
 "Il y a {0} ans": "Hace {0} años",
 "Copier le texte": "Copiar el texto",
+"Fiche plante": "Ficha de la planta",
 "Texte copié": "Texto copiado",
 "Copie impossible": "No se pudo copiar",
 "Autres fichiers": "Otros archivos",
@@ -645,4 +646,23 @@ export default {
 "Ollama d'une station amie": "Ollama de una estación amiga",
 "vLLM d'une station amie": "vLLM de una estación amiga",
 "IA": "IA",
+"Reçu de {0}": "Recibido de {0}",
+"Envoyé à {0}": "Enviado a {0}",
+"La coopérative": "La cooperativa",
+"adresse inconnue": "dirección desconocida",
+"Voir plus": "Ver más",
+"Historique": "Historial",
+"Historique des virements": "Historial de transferencias",
+"Voir l’historique des virements": "Ver el historial de transferencias",
+"{0} Ẑen : voir l’historique des virements": "{0} Ẑen: ver el historial de transferencias",
+"Cette station ne lit pas encore le détail des virements : votre solde reste juste, seul l’historique manque.": "Esta estación aún no lee el detalle de las transferencias: su saldo es correcto, solo falta el historial.",
+"Aucun virement pour l’instant. Ce que vous recevez et envoyez s’affichera ici.": "Ninguna transferencia por ahora. Lo que reciba y envíe aparecerá aquí.",
+"Crédit de Ẑen par la coopérative": "Crédito de Ẑen por la cooperativa",
+"Part de sociétaire": "Parte de socio",
+"Part recherche et développement": "Parte de investigación y desarrollo",
+"Part matériel": "Parte de material",
+"Part du Capitaine": "Parte del Capitán",
+"Apport à la coopérative": "Aporte a la cooperativa",
+"Virement entre membres": "Transferencia entre miembros",
+"Opération de la station": "Operación de la estación",
 };

@@ -1,6 +1,6 @@
 'use strict';
 // Dictionnaire en, phrases communes. Les écrans de `parts` ont aussi m-lang-en-<écran>.js, chargé avec eux (K.mod).
-export const parts = 'about account agents ai aiadmin bro beta billets call contacts cosurf coop files guard locks media mesh move options planes reading screen favs start sync write island pay circles services replication devices backup card';
+export const parts = 'about account agents ai aiadmin members bro beta billets call contacts cosurf coop files guard locks media mesh swarm move options planes reading screen favs start sync write island pay circles services replication devices backup card plant';
 export default {
 "{0} message(s) non lu(s)": "{0} unread message(s)",
 "trouvée par ce qu’elle montre": "found by what it shows",
@@ -323,6 +323,7 @@ export default {
 "Il y a 1 an": "1 year ago",
 "Il y a {0} ans": "{0} years ago",
 "Copier le texte": "Copy the text",
+"Fiche plante": "Plant sheet",
 "Texte copié": "Text copied",
 "Copie impossible": "Copy failed",
 "Autres fichiers": "Other files",
@@ -644,4 +645,23 @@ export default {
 "Ollama d'une station amie": "A friend station's Ollama",
 "vLLM d'une station amie": "A friend station's vLLM",
 "IA": "AI",
+"Reçu de {0}": "Received from {0}",
+"Envoyé à {0}": "Sent to {0}",
+"La coopérative": "The cooperative",
+"adresse inconnue": "unknown address",
+"Voir plus": "Show more",
+"Historique": "History",
+"Historique des virements": "Transfer history",
+"Voir l’historique des virements": "See the transfer history",
+"{0} Ẑen : voir l’historique des virements": "{0} Ẑen: see the transfer history",
+"Cette station ne lit pas encore le détail des virements : votre solde reste juste, seul l’historique manque.": "This station does not read transfer details yet: your balance is right, only the history is missing.",
+"Aucun virement pour l’instant. Ce que vous recevez et envoyez s’affichera ici.": "No transfers yet. What you receive and send will show here.",
+"Crédit de Ẑen par la coopérative": "Credit of Ẑen by the cooperative",
+"Part de sociétaire": "Member share",
+"Part recherche et développement": "Research and development share",
+"Part matériel": "Hardware share",
+"Part du Capitaine": "Captain's share",
+"Apport à la coopérative": "Contribution to the cooperative",
+"Virement entre membres": "Transfer between members",
+"Opération de la station": "Station operation",
 };

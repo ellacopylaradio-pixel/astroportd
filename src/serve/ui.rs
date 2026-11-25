@@ -36,6 +36,11 @@ pub(super) fn wire<B: astro_dav::BlobStore>(mut ui: StationUi<B>, db: &Arc<Db>, 
             Box::pin(async move { a.accept_charter(&captain, &sha256).await })
         }),
     );
+    let history = constellation.clone();
+    ui = ui.with_member_history(Arc::new(move |wallet, after| {
+        let c = history.clone();
+        Box::pin(async move { c.member_history(&wallet, after.as_deref()).await })
+    }));
     if let Some(home) = std::env::var_os("HOME") {
         ui = ui.with_planes_home(PathBuf::from(home));
     }

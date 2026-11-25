@@ -32,6 +32,7 @@ export default c => {
   const actions = (it, isImg) => [
     ...(isImg ? [[-1, '↺', 'Tourner vers la gauche'], [1, '↻', 'Tourner vers la droite']].map(([q, g, l]) => h('button', { class: 'ghost', 'aria-label': t(l), title: t(l), onclick: () => turn([it.path], q) }, g)) : []),
     copyText(it),
+    ...(isImg ? [plant(it)] : []),
     h('button', { class: 'ghost danger', onclick: () => remove([it.path]) }, t('Supprimer'))];
   // « Copier le texte » : seulement si la station a lu un texte dans ce fichier (OCR).
   function copyText(it) {
@@ -40,5 +41,7 @@ export default c => {
     api('/api/v1/ucloud/text?path=' + encodeURIComponent(it.path)).then(r => { if (r.text) { b.dataset.text = r.text; b.hidden = false; } }, () => {});
     return b;
   }
+  // « Fiche plante » : ouvre la fiche de la photo (reconnaissance, ce qu'on en sait, notes).
+  const plant = it => h('a', { class: 'btn ghost', href: '#/plante?path=' + encodeURIComponent(it.path), onclick: () => viewer.close() }, '🌿 ' + t('Fiche plante'));
   return { turn, remove, actions };
 };

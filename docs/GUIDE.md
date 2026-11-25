@@ -350,6 +350,10 @@ astroportd multipass list
 >
 > **Limites.** La création reprend l'essentiel de `make_NOSTRCARD.sh` d'Astroport.ONE, mais pas : l'import de la clé IPNS dans Kubo, l'envoi du zine par email ni la ZenCard. La **primo-transaction** (1 Ğ1 du portefeuille maître) n'est plus envoyée à la création : elle part à la **première connexion** du membre (navigateur, WebDAV ou NIP-98), preuve qu'il a bien reçu ses clés — au plus 20 par jour (`--no-primal-init` coupe toutes les transactions primales). Un MULTIPASS créé ici qui ne s'est jamais connecté en 24 h peut être **éjecté** depuis l'écran Station (bouton « Éjecter ») : si quelqu'un lui a tout de même envoyé des Ğ1, elles sont d'abord reversées au portefeuille primal `UPLANETNAME_G1` (mémo `MULTIPASS:<nom>:PRIMAL:CASH-BACK`, comme `nostr_DESTROY_TW.sh`) ; ses clés vont dans la **corbeille** de la station (`~/.zen/game/trash/ejected/`, vidée à 20h12 après 30 jours, comme `trash/moved/` pour les comptes partis vers une autre station) et l'adresse peut se réinscrire. À l'inscription, le membre peut aussi **indiquer son quartier** : la station n'en garde que la maille UMAP (0,01°, ≈ 1 km), écrite aussi dans les fichiers `GPS` et `ZUMAP` du compte comme le faisait Astroport.ONE. Le découpage SSSS du DISCO envoyé chiffré au Capitaine n'est pas repris tel quel : il est remplacé par la **clé de secours en trois parts** (voir plus bas), avec son QR (`astroportd multipass card <email> --svg`). Retrouver un compte repose donc sur cette clé de secours.
 
+**Comptes inactifs : retirer, puis supprimer.** L'écran *Ma station › Membres* classe les comptes par **dernière activité** (connexion, fichier déposé, note ou message publié, appareil synchronisé ; `src/member_activity.rs`), par disque occupé (%) ou par ancienneté, et chaque réglage s'y fait dans la ligne. Un MULTIPASS resté **plus de 30 jours sans activité** peut être :
+- **retiré** (« Retirer le compte », réversible 30 jours) : ses Ğ1 reviennent au portefeuille primal (CASH-BACK), ses clés vont dans `~/.zen/game/trash/removed/`, il n'est plus hébergé ici ; ses fichiers restent. Pour le rendre : remettre le dossier dans `nostr/` et repasser `hosted = 1` ;
+- **supprimé complètement** (« Supprimer… », sans retour ; aussi pour un compte déjà retiré) : la boîte dit ce qui sera perdu et demande de **retaper l'adresse** du compte. Dans l'ordre (`src/member_purge.rs`) : Ğ1 reversées ; **adieu Nostr signé de sa clé** — profil (kind 0) vidé et suppressions NIP-09 (kind 5) de tout ce qu'il a publié, rangés ici puis envoyés aux relais ; ses données (uCloud, recherche, plantes, visages, mémoire de BRO, chat, carnet, partages, sauvegardes, appareils, réglages, messages privés reçus) ; les blobs que plus rien ne référence (le bassin partagé garde ceux d'un plan voisin, le miroir Kubo désépingle au passage suivant) ; enfin ses clés, corbeille comprise, et son identité. Un `astroportd replay` ne le fait pas revenir : son DID et ses manifestes sont supprimés par ses propres kind 5.
+
 ### 🌐 Navigateur (Web)
 
 Les **membres** s'inscrivent depuis le navigateur, une fois la station démarrée ([étape 5](#etape-4)).
@@ -601,19 +605,19 @@ Il faut aussi `poppler-utils` pour les PDF et `ffmpeg` pour les vidéos, tous de
 3. Une **seule case de recherche**, sous *Dossiers*, *Photos* et *Médiathèque*, cherche dans tout le uCloud. Son texte grisé annonce ce qui marche sur cette station. Chaque mot peut être trouvé n'importe où : dans le nom, dans le texte lu, ou parce que c'est le prénom d'une **personne reconnue**, une **ville** où le membre a pris des photos, un **mois** ou une **année**. « Léa plage 2024 » donne les photos de Léa, prises en 2024, qui montrent une plage ; la station dit ce qu'elle a compris.
 4. Les résultats commencent par **Les plus proches**, puis se rangent en *Documents*, *Photos et vidéos* et *Films et musique*. Une pastille dit pourquoi un fichier est là : **T** pour le texte lu (avec l'extrait), **👁** pour ce que montre l'image. Une vidéo porte le moment trouvé (« ▶ 1:23 ») et s'ouvre à ce moment. Quand rien n'est sûr, la station propose **Peut-être** : ce qui répond à un des mots, ou les photos les plus proches. Le type et la période se choisissent dans **Affiner**, replié par défaut.
 
-**Vérifier que votre station cherche bien.** Le dépôt fournit un **corpus d'essai** de 45 fichiers :
+**Vérifier que votre station cherche bien.** Le plugin facultatif **corpus** fournit un **corpus d'essai** de 45 fichiers :
 - 35 photos libres de Wikimedia Commons : un chat, un chien, une plage, la tour Eiffel, une pizza… et 23 portraits de personnalités, d'Einstein et Marie Curie à John Conway, Katherine Johnson, Thomas Pesquet ou Marilyn Monroe ;
 - un panneau et un ticket de caisse photographiés, une facture et une ordonnance en PDF, une attestation scannée sans texte ;
 - des notes, et deux vidéos.
 
-Les photos portent des dates et des lieux fictifs. Fabriquez-le, puis déposez-le dans le uCloud d'un compte d'essai :
+Les photos portent des dates et des lieux fictifs. Installez le plugin : il fabrique le corpus, puis propose de le déposer dans votre uCloud (dossier `/Essais/Recherche`) :
 
 ```bash
-~/.astro/bin/python tests/corpus/fabriquer_corpus.py            # → ~/.zen/tmp/corpus-recherche (photos gardées en cache)
-read -rs ASTRO_TOKEN && export ASTRO_TOKEN                         # le jeton d'appareil, tapé sans écho : ni historique ni argument
-ASTRO_DAV=https://<station>/dav ASTRO_LOGIN=essai@<domaine> \
-  ~/.astro/bin/python tests/corpus/fabriquer_corpus.py --envoyer /Essais/Recherche
+~/.zen/astroportd-plugins/install-plugins.sh corpus          # → ~/.zen/tmp/corpus-recherche (photos gardées en cache)
+~/.zen/astroportd-plugins/corpus/setup.sh                    # le déposer plus tard, ou dans un compte d'essai (--login)
 ```
+
+Le jeton d'appareil est demandé sans écho : il ne passe ni par l'historique ni en argument.
 
 Une fois l'analyse finie, chaque ligne du fichier `LISEZMOI.md` du corpus dit quoi taper et ce qui doit sortir. Une ligne vérifie une voie de la recherche :
 - « chat » ou « tour Eiffel » : l'image ;
@@ -1250,7 +1254,7 @@ Le **Capitaine** autorise un MULTIPASS avec la case « Peut créer des Ğ1Billet
 >
 > **Retour automatique.** Si l'option est choisie, la station garde **P2 et P3, chiffrées pour son NODE seul** (dans le témoin, événement kind 31903 `d = billet:<adresse>` signé par la coopérative, tags `p` émetteur, `a` valeur, `u` date de fin, `r` retour). À la date de fin, si le billet n'a pas été encaissé, le porteur est refusé et la station renvoie la valeur au portefeuille de l'émetteur (par le même circuit), **une fois par jour, à 20h12 solaire** (étape « billets » de la nuit ; sans l'orchestrateur de nuit, rien n'est renvoyé). Sans l'option, la station ne garde **aucune part** : elle ne peut pas toucher au billet. Avec elle, la station garde le billet **en dépôt** jusqu'à l'échéance ; sur ORIGIN (clés publiques) ce dépôt n'est protégé que par la clé du NODE.
 >
-> **Fond et icône.** Chaque billet prend pour **fond le bandeau (`banner`)** et pour **icône l'image (`picture`)** du profil Nostr (kind 0) de l'émetteur, voilés pour garder les QR lisibles. Dans **Moi › Compte › Profil**, on envoie une image depuis l'appareil (réduite dans le navigateur puis réencodée par la station, qui la range comme **blob public** — CID brut, JPEG sans métadonnées — et republie le profil avec l'adresse `/ipfs/<cid>` plus `picture_cid`/`banner_cid` ; toute station amie qui l'a vue la sert à son tour et la rapatrie chez ses pairs si la station d'origine s'éteint) ou on colle une adresse `https://`. Une image d'un site tiers est lue par la station (taille limitée, adresses privées refusées) et intégrée au billet ; ce qui manque ou reste illisible est complété par le style **Eugro**. L'écran propose ce choix (« Fond et logo ») : *Mon profil Nostr (Eugro à défaut)*, *Eugro* ou *Astroport*.
+> **Fond et icône.** Chaque billet prend pour **fond le bandeau (`banner`)** et pour **icône l'image (`picture`)** du profil Nostr (kind 0) de l'émetteur, voilés pour garder les QR lisibles. Dans **Moi › Compte › Profil**, on envoie une image depuis l'appareil (réduite dans le navigateur puis réencodée par la station, qui la range comme **blob public** — CID brut, JPEG sans métadonnées — et republie le profil avec l'adresse `/ipfs/<cid>` plus `picture_cid`/`banner_cid` ; toute station amie qui l'a vue la sert à son tour et la rapatrie chez ses pairs si la station d'origine s'éteint) ou on colle une adresse `https://`. Une image d'un site tiers est lue par la station (taille limitée, adresses privées refusées) et intégrée au billet ; ce qui manque ou reste illisible est complété par le style **Eugro**. L'écran propose ce choix (« Fond et logo ») : *Mon Profil*, *Eugro* ou *Astroport*.
 >
 > La mise en page a été vérifiée en code et sur la vraie chaîne Ğ1 (création, financement, retour automatique), pas sur du papier imprimé. Le retour automatique se fait à 20h12 : un billet expiré à 9 h revient le soir même.
 

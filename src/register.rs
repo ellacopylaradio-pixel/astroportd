@@ -482,6 +482,95 @@ impl Registrar {
         Ok(email)
     }
 
+    /// Le compte peut-il être retiré (MULTIPASS sans activité depuis 30 jours, [`crate::member_activity`]) ? Renvoie son email.
+    pub async fn removable(&self, hex: &str) -> Result<String, RegisterError> {
+        let at = i64::try_from(now()).unwrap_or(0);
+        let h = hex.to_owned();
+        let (role, email, last) = self
+            .db
+            .readers()
+            .read(move |c| {
+                let row = rusqlite::OptionalExtension::optional(c.query_row("SELECT role, email FROM identities WHERE hex = ?1 AND hosted = 1", [&h], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))))?;
+                let (last, _) = crate::member_activity::read(c, &h, at)?;
+                Ok(row.map(|(role, email)| (role, email, last)))
+            })
+            .await
+            .map_err(|e| RegisterError::Internal(e.to_string()))?
+            .ok_or_else(|| RegisterError::Invalid("compte non hébergé ici".into()))?;
+        crate::member_activity::removable(&role, last, at).map_err(RegisterError::Invalid)?;
+        email.ok_or_else(|| RegisterError::Internal("compte sans email".into()))
+    }
+
+    /// Retire un MULTIPASS resté sans activité plus de 30 jours : ses clés vont dans la corbeille
+    /// (`trash/removed/<email>.<date>`, effacée après 30 jours), il cesse d'être hébergé ici ; ses fichiers restent.
+    /// Réversible pendant 30 jours (voir [`crate::member_activity`]).
+    pub async fn remove_inactive(&self, hex: &str) -> Result<String, RegisterError> {
+        let at = i64::try_from(now()).unwrap_or(0);
+        let email = self.removable(hex).await?;
+        let dir = self.nostr_root.join(&email);
+        let game = self.nostr_root.parent().map_or_else(|| self.nostr_root.clone(), Path::to_path_buf);
+        let (dir2, name) = (dir.clone(), email.clone());
+        let aside = tokio::task::spawn_blocking(move || -> std::io::Result<Option<PathBuf>> { if dir2.is_dir() { crate::trash::put(&game, crate::member_activity::TRASH_REASON, &name, &dir2, at).map(Some) } else { Ok(None) } })
+            .await
+            .map_err(|e| RegisterError::Internal(e.to_string()))?
+            .map_err(|e| RegisterError::Internal(format!("dossier {} non rangé : {e}", dir.display())))?;
+        let h = hex.to_owned();
+        self.db
+            .writer()
+            .transaction(move |tx| {
+                tx.execute("UPDATE identities SET hosted = 0 WHERE hex = ?1 AND hosted = 1", [&h])?;
+                tx.execute("INSERT INTO kv(scope, key, value, updated_at) VALUES ('member_removed', ?1, ?2, ?2) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", rusqlite::params![h, at])?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| RegisterError::Internal(e.to_string()))?;
+        if let Some(bus) = &self.activity {
+            let place = aside.map_or_else(|| "aucun dossier de clés ici".to_owned(), |p| format!("clés dans {} (30 jours)", p.display()));
+            bus.publish_to(astro_core::Audience::Captain, "system", "register", format!("MULTIPASS {email} retiré par le Capitaine (plus de 30 jours sans activité) ; {place} ; ses fichiers restent"), None);
+        }
+        Ok(email)
+    }
+
+    /// Le compte peut-il être **supprimé complètement** ([`crate::member_purge`]) ? Un MULTIPASS inactif depuis 30 jours, ou
+    /// déjà retiré. Renvoie son email.
+    pub async fn deletable(&self, hex: &str) -> Result<String, RegisterError> {
+        let at = i64::try_from(now()).unwrap_or(0);
+        let h = hex.to_owned();
+        let (role, email, hosted, removed, last) = self
+            .db
+            .readers()
+            .read(move |c| {
+                let row = c
+                    .query_row("SELECT role, email, hosted, EXISTS (SELECT 1 FROM kv WHERE scope = 'member_removed' AND key = ?1) FROM identities WHERE hex = ?1", [&h], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, bool>(2)?, r.get::<_, bool>(3)?)))
+                    .optional()?;
+                let (last, _) = crate::member_activity::read(c, &h, at)?;
+                Ok(row.map(|(role, email, hosted, removed)| (role, email, hosted, removed, last)))
+            })
+            .await
+            .map_err(|e| RegisterError::Internal(e.to_string()))?
+            .ok_or_else(|| RegisterError::Invalid("compte inconnu ici".into()))?;
+        if !(hosted || removed) {
+            return Err(RegisterError::Invalid("compte qui n'est pas hébergé ici : rien à supprimer".into()));
+        }
+        if !removed {
+            crate::member_activity::removable(&role, last, at).map_err(RegisterError::Invalid)?;
+        } else if role != "multipass" {
+            return Err(RegisterError::Invalid("seul un MULTIPASS peut être supprimé".into()));
+        }
+        email.ok_or_else(|| RegisterError::Internal("compte sans email".into()))
+    }
+
+    /// Efface pour de bon les dossiers de clés du compte (vivant et corbeille). Dernière étape d'une suppression complète.
+    pub async fn delete_keys(&self, email: &str) -> Result<usize, RegisterError> {
+        let dirs = crate::member_purge::key_dirs(&self.nostr_root, email);
+        let n = dirs.len();
+        tokio::task::spawn_blocking(move || dirs.iter().try_for_each(std::fs::remove_dir_all))
+            .await
+            .map_err(|e| RegisterError::Internal(e.to_string()))?
+            .map_err(|e| RegisterError::Internal(format!("clés du compte non effacées : {e}")))?;
+        Ok(n)
+    }
+
     /// Dossier des comptes (`~/.zen/game/nostr`).
     pub fn nostr_root(&self) -> &Path {
         &self.nostr_root
@@ -655,6 +744,38 @@ mod tests {
         db.writer().execute("UPDATE kv SET value = ?2 WHERE scope = 'member_born' AND key = ?1", vec![hex2.clone().into(), old.to_string().into()]).await.unwrap();
         db.writer().execute("INSERT INTO kv(scope, key, value, updated_at) VALUES ('member_proof', ?1, '1', 0)", vec![hex2.clone().into()]).await.unwrap();
         assert!(r.eject(&hex2).await.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_account_is_removed_only_after_a_month_without_activity_and_its_keys_wait_in_the_trash() {
+        let (dir, db, r) = setup("remove", Limits::default());
+        let hex = r.register(None, "dave@exemple.org", "fr").await.unwrap().account.hex;
+        // Compte neuf : sa création compte comme activité.
+        assert!(matches!(r.remove_inactive(&hex).await, Err(RegisterError::Invalid(_))), "créé à l'instant");
+        // Tout ce qu'il a laissé date de 40 jours…
+        let old = i64::try_from(now()).unwrap() - 40 * 86_400;
+        db.writer().execute("UPDATE kv SET value = ?2 WHERE scope = 'member_born' AND key = ?1", vec![hex.clone().into(), old.to_string().into()]).await.unwrap();
+        db.writer().execute("UPDATE identities SET created_at = ?2 WHERE hex = ?1", vec![hex.clone().into(), old.into()]).await.unwrap();
+        db.writer().execute("UPDATE nostr_events SET created_at = ?2 WHERE pubkey = ?1", vec![hex.clone().into(), old.into()]).await.unwrap();
+        // … mais il s'est connecté il y a 29 jours : refusé.
+        let recent = i64::try_from(now()).unwrap() - 29 * 86_400;
+        db.writer().execute("INSERT INTO kv(scope, key, value, updated_at) VALUES ('member_seen', ?1, ?2, 0)", vec![hex.clone().into(), recent.to_string().into()]).await.unwrap();
+        let e = r.remove_inactive(&hex).await.unwrap_err().to_string();
+        assert!(e.contains("29 jour"), "{e}");
+        // Sa dernière connexion a 31 jours : retiré, clés dans la corbeille, plus hébergé, l'identité reste dans le cache.
+        db.writer().execute("UPDATE kv SET value = ?2 WHERE scope = 'member_seen' AND key = ?1", vec![hex.clone().into(), (old + 9 * 86_400).to_string().into()]).await.unwrap();
+        assert_eq!(r.remove_inactive(&hex).await.unwrap(), "dave@exemple.org");
+        assert!(!dir.join("nostr/dave@exemple.org").exists());
+        assert_eq!(std::fs::read_dir(dir.join("trash/removed")).unwrap().count(), 1);
+        let h = hex.clone();
+        let hosted: i64 = db.readers().read(move |c| Ok(c.query_row("SELECT hosted FROM identities WHERE hex = ?1", [h], |r| r.get(0))?)).await.unwrap();
+        assert_eq!(hosted, 0);
+        assert!(r.remove_inactive(&hex).await.is_err(), "déjà retiré");
+        // Le Capitaine ne se retire jamais.
+        let cap = "cd".repeat(32);
+        db.writer().execute("INSERT INTO identities(hex, role, hosted) VALUES (?1, 'captain', 1)", vec![cap.clone().into()]).await.unwrap();
+        assert!(r.remove_inactive(&cap).await.is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

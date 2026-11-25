@@ -63,6 +63,7 @@ GET /api/v1/me/meet/{hex} anon=401 member=400
 GET /api/v1/me/reading anon=401 member=501
 GET /api/v1/me/reading/offers anon=401 member=501
 GET /api/v1/me/wot anon=401 member=200
+GET /api/v1/me/zen/history anon=401 member=501
 GET /api/v1/me/zen/receive anon=401 member=200
 GET /api/v1/organize anon=401 member=501
 GET /api/v1/presence anon=401 member=501
@@ -102,6 +103,8 @@ GET /api/v1/ucloud/media/trace anon=401 member=400
 GET /api/v1/ucloud/memories anon=401 member=200
 GET /api/v1/ucloud/person anon=401 member=400
 GET /api/v1/ucloud/photos anon=401 member=200
+GET /api/v1/ucloud/plant anon=401 member=400
+GET /api/v1/ucloud/plants anon=401 member=200
 GET /api/v1/ucloud/search anon=401 member=200
 GET /api/v1/ucloud/text anon=401 member=400
 GET /api/v1/ucloud/timeline anon=401 member=200
@@ -210,9 +213,11 @@ POST /api/v1/push/subscribe anon=401 member=501
 POST /api/v1/register anon=400 member=400
 POST /api/v1/restore anon=400 member=400
 POST /api/v1/restore/ask anon=400 member=400
+POST /api/v1/station/accounts/{hex}/delete anon=401 member=403
 POST /api/v1/station/accounts/{hex}/eject anon=401 member=403
 POST /api/v1/station/accounts/{hex}/hosting anon=401 member=403
 POST /api/v1/station/accounts/{hex}/quota anon=401 member=403
+POST /api/v1/station/accounts/{hex}/remove anon=401 member=403
 POST /api/v1/station/accounts/{hex}/token anon=401 member=403
 POST /api/v1/station/accounts/{hex}/unlock-pass anon=401 member=403
 POST /api/v1/station/admin/{section} anon=401 member=403
@@ -245,6 +250,8 @@ POST /api/v1/ucloud/media/edit anon=401 member=422
 POST /api/v1/ucloud/media/friends/request anon=401 member=422
 POST /api/v1/ucloud/media/play anon=401 member=422
 POST /api/v1/ucloud/media/share anon=401 member=422
+POST /api/v1/ucloud/plant anon=401 member=422
+POST /api/v1/ucloud/plant/fiche anon=401 member=422
 POST /api/v1/ucloud/rotate anon=401 member=422
 POST /api/v1/ucloud/send anon=401 member=422
 POST /api/v1/ucloud/share anon=422 member=422

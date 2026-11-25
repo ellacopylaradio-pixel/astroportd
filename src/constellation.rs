@@ -74,6 +74,60 @@ pub fn ledger_query(wallets: &[String], after: Option<&str>) -> String {
     .to_string()
 }
 
+/// Virements par page de l'historique d'un membre (« Mes Ẑen »).
+pub const HISTORY_PAGE: usize = 30;
+/// Longueur gardée du motif d'un virement (le reste est coupé).
+const MEMO_MAX: usize = 140;
+
+/// Requête GraphQL : les virements reçus ou envoyés par `wallet`, du plus récent au plus ancien, avec leur motif
+/// (`comment.remark` du schéma de l'indexeur Duniter v2s).
+pub fn history_query(wallet: &str, after: Option<&str>) -> String {
+    json!({
+        "query": format!("query($w:String!,$a:Cursor){{transfers(filter:{{or:[{{fromId:{{equalTo:$w}}}},{{toId:{{equalTo:$w}}}}]}},orderBy:BLOCK_NUMBER_DESC,first:{HISTORY_PAGE},after:$a){{pageInfo{{hasNextPage endCursor}} nodes{{id blockNumber timestamp amount fromId toId comment{{remark}}}}}}}}"),
+        "variables": { "w": wallet, "a": after },
+    })
+    .to_string()
+}
+
+/// Motif d'un virement pour le membre : une référence technique de la station (`UPLANET:<8 car.>:<GENRE>:…`, voir
+/// `zen_credit`) devient son genre (`credit`, `share`, `rnd`, `assets`, `captain`, `cash`, `transfer`) et n'est jamais montrée
+/// telle quelle (elle porte un email ou des préfixes de clés) ; un texte libre reste le motif. Rend `(motif, genre)`.
+pub fn memo_of(remark: Option<String>) -> (Option<String>, Option<&'static str>) {
+    let Some(r) = remark else { return (None, None) };
+    let Some(rest) = r.strip_prefix("UPLANET:") else { return (Some(r), None) };
+    let kind = match rest.split(':').nth(1).unwrap_or_default() {
+        "ZENCOIN" => "credit",
+        "SOCIETY" => "share",
+        "RnD" => "rnd",
+        "ASSETS" => "assets",
+        "CAPTAIN" => "captain",
+        "CASH" => "cash",
+        "TRANSFER" => "transfer",
+        _ => "station",
+    };
+    (None, Some(kind))
+}
+
+/// Page d'historique : les virements, leur motif (même ordre) et le curseur suivant.
+pub fn parse_history(body: &[u8]) -> Result<(Page, Vec<Option<String>>), String> {
+    let page = parse_page(body)?;
+    let v: Json = serde_json::from_slice(body).map_err(|e| format!("réponse illisible : {e}"))?;
+    let memos = v["data"]["transfers"]["nodes"]
+        .as_array()
+        .map(|nodes| {
+            nodes
+                .iter()
+                .map(|n| {
+                    let clean: String = n["comment"]["remark"].as_str()?.chars().filter(|c| !c.is_control()).take(MEMO_MAX).collect();
+                    let clean = clean.trim().to_owned();
+                    (!clean.is_empty()).then_some(clean)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((page, memos))
+}
+
 /// Secondes Unix d'une date `AAAA-MM-JJThh:mm:ss[.fff][Z|+hh:mm]` (lue comme UTC).
 pub fn unix_of(stamp: &str) -> Option<u64> {
     let b = stamp.as_bytes();
@@ -179,6 +233,76 @@ impl<C: Chain> Constellation<C> {
     /// Indexeurs configurés ?
     pub fn has_indexer(&self) -> bool {
         !self.squid.read().unwrap_or_else(|e| e.into_inner()).is_empty()
+    }
+
+    /// Historique des virements du portefeuille Ğ1 `wallet` d'un membre, le plus récent d'abord, par pages de
+    /// [`HISTORY_PAGE`] (`after` : curseur rendu par la page précédente). Montants en centimes entiers (Ğ1 et Ẑen). La
+    /// contrepartie est nommée quand la station la connaît (portefeuille de la coopérative, compte au profil connu), sinon
+    /// seule son adresse est rendue. Sans indexeur, l'historique est vide et le dit (`indexer: false`).
+    pub async fn member_history(&self, wallet: &str, after: Option<&str>) -> Result<Json, String> {
+        let urls = self.squid.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if urls.is_empty() {
+            return Ok(json!({ "items": [], "next": null, "indexer": false }));
+        }
+        let query = history_query(wallet, after);
+        let mut errors = Vec::new();
+        let mut got = None;
+        for url in &urls {
+            match post_json(url, &query, &self.limits).await.map_err(|e| e.to_string()).and_then(|b| parse_history(&b)) {
+                Ok(p) => {
+                    got = Some(p);
+                    break;
+                }
+                Err(e) => errors.push(format!("{url} : {e}")),
+            }
+        }
+        let (page, memos) = got.ok_or_else(|| format!("aucun indexeur n'a répondu ({})", errors.join(" ; ")))?;
+        let coop: HashSet<String> = self.named().await.map(|w| w.into_iter().map(|(_, a)| a).collect()).unwrap_or_default();
+        let others: Vec<String> = page.transfers.iter().filter_map(|t| if t.from.as_deref() == Some(wallet) { t.to.clone() } else { t.from.clone() }).collect::<HashSet<_>>().into_iter().collect();
+        let names = self.names_of_wallets(others).await?;
+        let items: Vec<Json> = page
+            .transfers
+            .iter()
+            .zip(memos.into_iter().chain(std::iter::repeat(None)))
+            .map(|(t, memo)| {
+                let out = t.from.as_deref() == Some(wallet);
+                let other = if out { t.to.clone() } else { t.from.clone() };
+                let is_coop = other.as_ref().is_some_and(|o| coop.contains(o));
+                let name = other.as_ref().and_then(|o| names.get(o).cloned());
+                let (memo, kind) = memo_of(memo);
+                json!({
+                    "id": t.id, "at": t.at, "dir": if out { "out" } else { "in" },
+                    "g1_cents": t.cents, "zen_cents": t.cents.saturating_mul(crate::station::ZEN_PER_G1),
+                    "other": other, "name": name, "coop": is_coop, "memo": memo, "kind": kind,
+                })
+            })
+            .collect();
+        Ok(json!({ "items": items, "next": page.next, "indexer": true }))
+    }
+
+    /// Nom connu de chaque adresse Ğ1 donnée : profil du compte, sinon début de son email. Les inconnues sont absentes.
+    async fn names_of_wallets(&self, addrs: Vec<String>) -> Result<HashMap<String, String>, String> {
+        if addrs.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.db
+            .readers()
+            .read(move |c| {
+                let mut st = c.prepare(
+                    "SELECT COALESCE(NULLIF(trim((SELECT json_extract(e.content, '$.name') FROM nostr_events e WHERE e.pubkey = i.hex AND e.kind = 0 ORDER BY e.created_at DESC LIMIT 1)), ''), \
+                            NULLIF(substr(i.email, 1, instr(i.email, '@') - 1), '')) \
+                     FROM identities i WHERE (i.g1pub_nostr = ?1 OR i.g1pub = ?1) LIMIT 1",
+                )?;
+                let mut out = HashMap::new();
+                for a in addrs.into_iter().take(HISTORY_PAGE) {
+                    if let Some(Some(n)) = rusqlite::OptionalExtension::optional(st.query_row([&a], |r| r.get::<_, Option<String>>(0)))? {
+                        out.insert(a, n);
+                    }
+                }
+                Ok(out)
+            })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Les portefeuilles : `UPLANETNAME_G1` (le maître) d'abord, puis ceux que marque la transaction primale. `(nom, ss58)`.
@@ -663,6 +787,32 @@ mod tests {
         assert!(parse_page(br#"{"data":{"transfers":{"nodes":[{"id":"x"}]}}}"#).is_err());
         let last = br#"{"data":{"transfers":{"pageInfo":{"hasNextPage":false,"endCursor":"z"},"nodes":[]}}}"#;
         assert_eq!(parse_page(last).unwrap().next, None);
+    }
+
+    /// Historique d'un membre : un seul portefeuille, du plus récent au plus ancien, motif lu (nettoyé, borné) ou absent.
+    #[test]
+    fn a_member_history_page_reads_the_memo_of_each_transfer() {
+        let q: Json = serde_json::from_str(&history_query("g1moi", Some("c9"))).unwrap();
+        let text = q["query"].as_str().unwrap();
+        assert!(text.contains("BLOCK_NUMBER_DESC") && text.contains(&format!("first:{HISTORY_PAGE}")) && text.contains("comment{remark}"), "{text}");
+        assert_eq!((q["variables"]["w"].as_str(), q["variables"]["a"].as_str()), (Some("g1moi"), Some("c9")));
+        let long = "x".repeat(500);
+        let body = format!(
+            r#"{{"data":{{"transfers":{{"pageInfo":{{"hasNextPage":true,"endCursor":"n2"}},"nodes":[
+              {{"id":"t2","blockNumber":9,"timestamp":"2025-01-02T00:00:00","amount":"150","fromId":"g1moi","toId":"g1ami","comment":{{"remark":" Pain\u0007 du marché "}}}},
+              {{"id":"t1","blockNumber":8,"timestamp":"2025-01-01T00:00:00","amount":"1000","fromId":"g1coop","toId":"g1moi","comment":null}},
+              {{"id":"t0","blockNumber":7,"timestamp":"2025-01-01T00:00:00","amount":"1","fromId":"g1x","toId":"g1moi","comment":{{"remark":"{long}"}}}}]}}}}}}"#
+        );
+        let (page, memos) = parse_history(body.as_bytes()).unwrap();
+        assert_eq!((page.transfers.len(), page.next.as_deref()), (3, Some("n2")));
+        assert_eq!(memos[0].as_deref(), Some("Pain du marché"), "caractères de contrôle retirés, espaces rognés");
+        assert_eq!(memos[1], None);
+        assert_eq!(memos[2].as_ref().map(|m| m.chars().count()), Some(MEMO_MAX), "motif borné");
+        assert!(parse_history(br#"{"errors":[{"message":"boom"}]}"#).is_err(), "une panne de l'indexeur n'est pas un historique vide");
+        assert_eq!(memo_of(Some("UPLANET:ab12cd34:ZENCOIN:membre@exemple.org".into())), (None, Some("credit")), "référence technique : jamais l'email");
+        assert_eq!(memo_of(Some("UPLANET:ab12cd34:TRANSFER:aa11bb22:cc33dd44".into())), (None, Some("transfer")));
+        assert_eq!(memo_of(Some("UPLANET:x:INCONNU".into())), (None, Some("station")));
+        assert_eq!(memo_of(Some("Pain".into())), (Some("Pain".into()), None));
     }
 
     #[test]

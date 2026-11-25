@@ -70,5 +70,6 @@ export default {
 "filtrée": "filtered",
 "fermée": "closed",
 "Cette station": "This station",
-"Réglage fin, service par service et kind par kind : ": "Fine tuning, service by service and kind by kind: ",
+"Réglage fin, service par service : ": "Fine tuning, service by service: ",
+"UPlanet « {0} »": "UPlanet “{0}”",
 };

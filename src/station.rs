@@ -139,7 +139,7 @@ impl StationServices {
     }
 
     /// Portefeuille Ğ1 d'un MULTIPASS : `g1pub_nostr` du DID, sinon le fichier `G1PUBNOSTR` du compte.
-    async fn wallet_of(&self, owner: &str) -> Result<Account, String> {
+    pub async fn wallet_of(&self, owner: &str) -> Result<Account, String> {
         let hex = owner.to_owned();
         let (email, did): (Option<String>, Option<String>) = self
             .db

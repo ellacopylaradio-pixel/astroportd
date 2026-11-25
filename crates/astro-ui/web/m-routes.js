@@ -18,10 +18,13 @@ const R = [
   ['/cloud', null, 'me', 'files', 'Dossiers', null, 'Fichiers'],
   ['/library', 'm-library.js', 'me', 'files', 'Photos', null, 'Photos'],
   ['/media', 'm-media.js', 'me', 'files', 'Médiathèque', null, 'Médiathèque'],
+  // Plantes : seulement si la coopérative a une clé Pl@ntNet ou si le membre a déjà des fiches (`me.plants`).
+  ['/plantes', 'm-plant.js', 'me', 'files', 'Plantes', null, 'Mes plantes', 'plants'],
   ['/favoris', 'm-favs.js', 'me', 'files', 'Favoris', null, 'Favoris'],
   ['/move', 'm-move.js', 'me', 'files', null, '/cloud', 'Déménager'],
   ['/find', 'm-find.js', 'me', 'files', null, null, 'Recherche'],
   ['/person', 'm-person.js', 'me', 'files', null, '/library', 'Personne'],
+  ['/plante', 'm-plant.js', 'me', 'files', null, '/plantes', 'Fiche plante'],
   ['/people', 'm-contacts.js', 'me', 'people', 'Carnet', null, 'Proches'],
   ['/chat', 'c-chat.js', 'me', 'people', 'Conversations', null, 'Conversations'],
   ['/people/tri', 'm-people.js', 'me', 'people', null, '/people', 'Trier les visages'],
@@ -56,7 +59,8 @@ const R = [
   ['/coop', 'm-coop.js', 'station', 'eco', 'Régie', null, 'Régie'],
   ['/ile', 'm-island.js', 'station', 'eco', 'Île', null, 'Île Ğ1'],
 ];
-export const ROUTES = R.map(([path, file, space, tab, seg, parent, title]) => ({ path, file, space, tab, seg, parent, title }));
+// `need` : drapeau de `/api/v1/me` sans lequel le sous-onglet n'est pas montré (l'adresse, elle, reste ouverte).
+export const ROUTES = R.map(([path, file, space, tab, seg, parent, title, need]) => ({ path, file, space, tab, seg, parent, title, need }));
 // Les adresses d'avant la refonte continuent de marcher.
 export const ALIASES = { '/chiffres': '/money', '/station': '/cockpit', '/contacts': '/people', '/sort': '/people/tri', '/tunnels': '/services', '/replication': '/backup' };
 // Une route « both » vit dans l'espace Station pour le Capitaine qui y était, sinon dans « Mes Ẑen ».
@@ -77,10 +81,11 @@ export function resolve(path, me, last = 'me') {
 }
 
 // Sous-onglets de l'onglet courant (au moins deux, sinon rien).
-export function segments(res) {
+export function segments(res, me) {
   const entry = TABS[res.space].find(t => t[0] === res.tab)?.[3];
-  const all = ROUTES.filter(r => r.space === res.space && r.tab === res.tab && r.seg).map(r => ({ path: r.path, label: r.seg }));
-  if (res.route.space === 'both' && res.space === 'station') all.push({ path: res.route.path, label: 'Constellation' });
+  const all = ROUTES.filter(r => r.space === res.space && r.tab === res.tab && r.seg && (!r.need || me?.[r.need])).map(r => ({ path: r.path, label: r.seg }));
+  // Les routes « both » rangées sous cet onglet de la Station y restent visibles depuis ses autres sous-onglets.
+  if (res.space === 'station' && BOTH.station.tab === res.tab) all.push(...ROUTES.filter(r => r.space === 'both').map(r => ({ path: r.path, label: BOTH.station.seg })));
   all.sort((a, b) => (b.path === entry) - (a.path === entry));
   return all.length > 1 ? all : [];
 }

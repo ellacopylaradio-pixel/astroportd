@@ -559,8 +559,12 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         let d = astroportd::station_domain::normalize_domain(&d).map_err(|e| format!("--public-domain : {e}"))?;
         a.public_domain = Some(d);
     }
+    // Constellation = secret partagé de la swarm.key (ẐEN) ou 64 zéros (ORIGIN). ORIGIN se juge au secret, pas au fichier :
+    // une station ORIGIN d'Astroport.ONE peut être lancée avec la swarm.key à zéros de son kubo.
+    let uplanet_name = astroportd::init::uplanet_name_of(a.swarm_key.as_deref())?;
+    let origin = astroportd::init::is_origin(&uplanet_name);
     // Étanchéité des constellations : les CID d'une UPlanet privée ne sortent jamais de son essaim (même règle que `planes`).
-    if a.swarm_key.is_some() && a.kubo.is_some() {
+    if !origin && a.kubo.is_some() {
         return Err("--kubo n'appartient qu'à ORIGIN : une UPlanet privée (--swarm-key) n'a jamais de Kubo (ses CID ne doivent pas sortir de son essaim)".into());
     }
     let station = identity::resolve(a.game_dir.as_deref(), true)?;
@@ -577,7 +581,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     // Politique des tunnels : qui ouvre quel service (SSH fermé par défaut, sauf en ORIGIN), réglée par le Capitaine.
     let ssh_managed = a.p2p_ssh != "none";
     let ssh_dir = ssh_managed.then(|| a.ssh_dir.clone().or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".ssh")))).flatten();
-    let tunnel_policy = TunnelPolicy::load(db.clone(), a.swarm_key.is_none(), ssh_dir, activity.clone()).await;
+    let tunnel_policy = TunnelPolicy::load(db.clone(), origin, ssh_dir, activity.clone()).await;
     tunnel_policy.set_ai_index_default(a.ai_index == "friends");
     // Recherche multimédia : moteurs installés ici. S'il y en a, la station peut les prêter à ses amis par le service `ai-index`,
     // qui n'écoute que sur 127.0.0.1 : on n'y entre que par le tunnel, derrière la politique du Capitaine (fermé par défaut).
@@ -607,11 +611,6 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         (None, None) => String::new(),
     };
 
-    // Constellation = secret partagé de la swarm.key (ẐEN) ou 64 zéros (ORIGIN).
-    let uplanet_name = match &a.swarm_key {
-        Some(path) => std::fs::read_to_string(path)?.lines().map(str::trim).rfind(|l| !l.is_empty()).map(str::to_owned).ok_or("swarm.key vide")?,
-        None => astroportd::init::ORIGIN_UPLANETNAME.to_owned(),
-    };
     // La base note sa constellation (empreinte, jamais la clé) : le pont entre plans (`bridge-copy`) y lit le sens du passage.
     astroportd::bridge::record_plane(&db, &uplanet_name).await?;
     // Stations relais publiées par la coopérative : la station s'y trouve-t-elle ? Alors elle sert de relais.
@@ -1072,6 +1071,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
             activity: Some(activity.clone()),
             p2p: p2p_handle.clone(),
             p2p_announce: p2p_role.announce.clone(),
+            blobs_dir: Some(a.blobs.clone()),
         });
         background.push(tokio::spawn(beacon.run(stop_watch.clone())));
         println!("balise de station (30850) : publiée au démarrage, à chaque changement de places et toutes les 6 h{}", if a.lat.is_some() { ", position arrondie à la case UMAP" } else { ", sans position (--lat/--lon absents)" });
@@ -1245,7 +1245,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         return Err(format!("--ice-server « {bad} » : stun:hôte:port ou turn:hôte:port attendu").into());
     }
     // Écluses : ce que `serve` sait du plan et des portes réglées en ligne de commande, plus le mode choisi à chaud.
-    let facts = astroportd::locks::Facts { origin: a.swarm_key.is_none(), kubo: a.kubo.is_some(), pool_peers: a.pool_peers.len(), p2p: p2p_handle.is_some(), crawl: !a.no_crawl, register: !a.no_register };
+    let facts = astroportd::locks::Facts { origin, name: station_planes(&a.db).0, uplanet: uplanet_name.to_string(), kubo: a.kubo.is_some(), pool_peers: a.pool_peers.len(), p2p: p2p_handle.is_some(), crawl: !a.no_crawl, register: !a.no_register };
     let locks = Arc::new(astroportd::locks::Locks::new(db.clone(), kinds_control.clone(), circle.clone(), facts, activity.clone()));
     // « Lecture de vos documents » : décisions du Capitaine (station, MULTIPASS, prêt aux amis) et accord de chaque membre.
     let reading = Arc::new(astroportd::delegation::Delegation::new(db.clone(), if a.no_index { Vec::new() } else { astro_index::Indexer::tasks(index_local.as_ref()) }, p2p_handle.is_some().then(|| (tunnel_policy.clone(), exposed_names.clone()))));

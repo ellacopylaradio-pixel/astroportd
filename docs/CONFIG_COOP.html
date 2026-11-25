@@ -239,6 +239,23 @@ PUT  /domain/zone/*
 </tr>
 </tbody>
 </table></div>
+<h2 id="plantnet">Reconnaissance des plantes (Pl@ntNet)</h2>
+<p>Chaque photo a sa <strong>fiche plante</strong> (bouton « 🌿 Fiche plante » de la visionneuse) : l'espèce, puis <em>Comestible ?</em>, <em>Préparation</em>, <em>Propriétés médicinales</em>, <em>Dangers</em> et des notes personnelles, préremplies depuis Wikipédia dans la langue du membre (extraits des sections qui en parlent, source citée, CC BY-SA) et toujours modifiables. La fiche est un fichier chiffré de son uCloud (<code>/_/Plantes/</code>), emporté par sa sauvegarde, et tout ce qu'elle contient entre dans sa recherche (« plante », le nom, « comestible », « médicinale »…). Les plantes très toxiques souvent confondues avec des plantes comestibles (colchique, ciguës, vératre, muguet, digitale…) reçoivent un avertissement d'une liste embarquée. Sans clé, le membre écrit lui-même le nom de la plante.</p>
+<p>Quand la clé est renseignée, la fiche propose en plus <strong>« Reconnaître la plante »</strong>. Rien ne part seul : c'est le membre qui la demande, photo par photo. La station envoie une copie réduite (petit côté 1 280 px) et ré-encodée de la photo, <strong>sans lieu ni date</strong> (aucun EXIF), à <code>my-api.plantnet.org</code> ; la clé ne quitte jamais la station.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Où le trouver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PLANTNET_API_KEY</code></td>
+<td>Compte sur <strong>my.plantnet.org</strong> › <em>Your API key</em>. L'offre gratuite compte 500 reconnaissances par jour et par clé (vérifié : la réponse de Pl@ntNet donne le reste du jour), pour <strong>toute</strong> la constellation ; au-delà, la station dit que le quota est épuisé. Les stations Astroport.ONE lisent la même clé.</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="legacy">Stations Astroport.ONE</h2>
 <p>astroportd publie et garde ces clés <strong>sans s'en servir</strong> : seules les stations Astroport.ONE (les scripts bash) de la constellation les lisent. Une constellation 100 % astroportd peut les laisser vides.</p>
 <div class="tw"><table>
@@ -269,11 +286,6 @@ PUT  /domain/zone/*
 <td><code>TIER_SLUG_CLOUD</code></td>
 <td>Paliers OpenCollective « cloud » de <code>oc2uplanet.sh</code>.</td>
 <td>Voir <a href="#tiers">Routage des paliers</a>.</td>
-</tr>
-<tr>
-<td><code>PLANTNET_API_KEY</code></td>
-<td>Reconnaissance des plantes.</td>
-<td>Compte sur <strong>my.plantnet.org</strong> › <em>Your API key</em>.</td>
 </tr>
 <tr>
 <td><code>MJ_APIKEY_PUBLIC</code>, <code>MJ_APIKEY_PRIVATE</code></td>

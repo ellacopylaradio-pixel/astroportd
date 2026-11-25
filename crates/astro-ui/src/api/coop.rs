@@ -40,6 +40,11 @@ pub trait CoopApi: Auth {
     fn coop_config_set(&self, _who: &Principal, _patch: std::collections::BTreeMap<String, Option<String>>) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("configuration coopérative non disponible sur cette station")) }
     }
+    /// Historique des virements du membre connecté (Mes Ẑen), le plus récent d'abord : `{ items, next, indexer }` ; `after` est
+    /// le curseur `next` de la page précédente.
+    fn member_history(&self, _who: &Principal, _after: Option<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("historique des virements non disponible sur cette station")) }
+    }
     /// Vision de la constellation, pour tout membre : `None` = portefeuilles, soldes, nom, charte et état de l'historique ;
     /// `Some((depuis, au plus))` = historique des virements de la coopérative pour la carte animée.
     fn cooperative_view(&self, _who: &Principal, _ledger: Option<(u64, usize)>) -> impl Future<Output = Result<Value, ApiError>> + Send {
@@ -140,6 +145,7 @@ pub(super) fn routes<B: CoopApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/me/zen/preview", post(member_zen_preview::<B>))
         .route("/api/v1/me/zen/send", post(member_zen_send::<B>))
         .route("/api/v1/me/zen/receive", get(member_zen_receive::<B>))
+        .route("/api/v1/me/zen/history", get(member_zen_history::<B>))
         .route("/api/v1/station/oc/donations", get(oc_donations::<B>))
         .route("/api/v1/station/oc/peek", get(oc_peek::<B>))
         .route("/api/v1/station/oc/sync", post(oc_sync::<B>))
@@ -354,6 +360,21 @@ async fn member_zen_receive<B: CoopApi>(State(st): State<Arc<UiState<B>>>, heade
     }
     let Some(svg) = crate::qr::svg(&url) else { return reply(Err(ApiError::unavailable("QR impossible pour cette adresse"))) };
     private(Json(json!({ "url": url, "qr_svg": svg, "hex": p.hex, "amount_zen": amount })).into_response())
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryQuery {
+    after: Option<String>,
+}
+
+/// « Mes Ẑen » : historique des virements du membre connecté. Le curseur vient de la page précédente : borné et sans
+/// caractère qui sortirait d'une variable GraphQL.
+async fn member_zen_history<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<HistoryQuery>) -> Response {
+    let after = q.after.filter(|a| !a.is_empty());
+    if after.as_ref().is_some_and(|a| a.len() > 256 || !a.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'=' | b'+' | b'/' | b'-' | b'_'))) {
+        return reply(Err(ApiError::bad_request("curseur invalide")));
+    }
+    no_store(reply(st.backend.member_history(&p, after).await))
 }
 
 async fn member_zen_preview<B: CoopApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(body): Json<Value>) -> Response {

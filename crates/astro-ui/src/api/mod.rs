@@ -822,6 +822,18 @@ mod tests {
         }
     }
 
+    /// Historique des virements : réservé au membre connecté ; un curseur hostile (trop long, ou qui sortirait de sa variable
+    /// GraphQL) est refusé avant d'atteindre la station.
+    #[tokio::test]
+    async fn the_transfer_history_is_for_the_member_and_rejects_a_hostile_cursor() {
+        let bus = ActivityBus::new();
+        assert_eq!(call(app(&bus), Method::GET, "/api/v1/me/zen/history", false, None).await.0, StatusCode::UNAUTHORIZED);
+        for bad in ["after=%22%7D%7D", "after=a%20b", &format!("after={}", "a".repeat(257))] {
+            assert_eq!(call(app(&bus), Method::GET, &format!("/api/v1/me/zen/history?{bad}"), true, None).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        assert_ne!(call(app(&bus), Method::GET, "/api/v1/me/zen/history?after=WyJuYXR1cmFsIiw0Ml0=", true, None).await.0, StatusCode::BAD_REQUEST, "un vrai curseur passe");
+    }
+
     #[tokio::test]
     async fn health_reports_each_subsystem_and_turns_503_when_one_is_down() {
         let bus = ActivityBus::new();

@@ -96,7 +96,8 @@ with sync_playwright() as pw:
         check('Capitaine a désactivé' in card.inner_text() and 'Parlez-lui-en' in card.inner_text() and 'reste dans votre recherche' in card.inner_text() and card.locator('button').all_inner_texts() == ['Effacer ce qui a été calculé'], f'{tag} : compte désactivé, la raison et la suite ; seul l’effacement reste possible')
 
         # Capitaine : Membres.
-        page.goto(f'http://127.0.0.1:{port}/#/members'); page.wait_for_selector('#ix-on')
+        page.goto(f'http://127.0.0.1:{port}/#/members'); page.wait_for_selector('table.mb-list')
+        page.locator('details.fold summary', has_text='Analyse des documents').click(); page.wait_for_selector('#ix-on')  # réglages généraux repliés
         check(page.locator('#ix-on').is_checked() and page.locator('#ix-def').is_checked(), f'{tag} : station et défaut activés')
         bob, chloe = page.locator('#ix-m-' + 'bb' * 6), page.locator('#ix-m-' + 'cc' * 6)
         check(bob.is_checked() and not chloe.is_checked(), f'{tag} : Bob activé (par défaut), Chloé désactivée (réglée)')

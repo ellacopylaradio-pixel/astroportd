@@ -2,7 +2,7 @@
 // Dictionnaire es, écran m-billets.js.
 export default {
 "Fond et logo": "Fondo y logotipo",
-"Mon profil Nostr (Eugro à défaut)": "Mi perfil Nostr (Eugro por defecto)",
+"Mon Profil": "Mi perfil Nostr (Eugro por defecto)",
 "Le Capitaine ne vous a pas autorisé à créer des Ğ1Billets.": "El Capitán no le ha autorizado a crear Ğ1Billetes.",
 "3 mois": "3 meses",
 "Créer la planche": "Crear la plancha",

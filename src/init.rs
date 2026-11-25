@@ -273,6 +273,20 @@ fn shared_secret(swarm_key: &str) -> Option<String> {
     swarm_key.lines().map(str::trim).rfind(|l| !l.is_empty()).map(str::to_owned)
 }
 
+/// `UPLANETNAME` d'une station : secret partagé de sa `swarm.key` (dernière ligne non vide), ou 64 zéros sans fichier.
+pub fn uplanet_name_of(swarm_key: Option<&std::path::Path>) -> Result<String, String> {
+    match swarm_key {
+        Some(path) => shared_secret(&std::fs::read_to_string(path).map_err(|e| format!("{} : {e}", path.display()))?).ok_or_else(|| "swarm.key vide".to_owned()),
+        None => Ok(ORIGIN_UPLANETNAME.to_owned()),
+    }
+}
+
+/// ORIGIN ? On en juge au **secret**, jamais à la présence du fichier : une `swarm.key` à zéros (le réseau IPFS des
+/// stations ORIGIN d'Astroport.ONE) reste ORIGIN.
+pub fn is_origin(uplanet_name: &str) -> bool {
+    uplanet_name == ORIGIN_UPLANETNAME
+}
+
 /// `astroportd init`.
 pub fn init(a: InitArgs) -> Result<InitDone, Box<dyn std::error::Error>> {
     let ask = Asker::new(a.yes);
@@ -741,6 +755,23 @@ mod tests {
         assert_eq!(kubo_swarm_key_in(&dir), Some(dir.join("swarm.key")), "clé ẐEN");
         std::fs::write(dir.join("swarm.key"), "pas une clé").unwrap();
         assert_eq!(kubo_swarm_key_in(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `serve --swarm-key ~/.ipfs/swarm.key` sur une station ORIGIN (clé à zéros) : la station reste ORIGIN (écluses, Kubo,
+    /// SSH des tunnels). Seul le secret compte, pas la présence du fichier.
+    #[test]
+    fn a_zero_swarm_key_is_still_origin() {
+        let dir = std::env::temp_dir().join(format!("astroportd-origin-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("swarm.key");
+        assert!(is_origin(&uplanet_name_of(None).unwrap()), "pas de fichier : ORIGIN");
+        std::fs::write(&key, format!("/key/swarm/psk/1.0.0/\n/base16/\n{ORIGIN_UPLANETNAME}\n")).unwrap();
+        assert!(is_origin(&uplanet_name_of(Some(&key)).unwrap()), "clé à zéros : ORIGIN");
+        std::fs::write(&key, astro_p2p::generate_swarm_key().unwrap()).unwrap();
+        assert!(!is_origin(&uplanet_name_of(Some(&key)).unwrap()), "vraie clé : ẐEN");
+        std::fs::write(&key, "\n\n").unwrap();
+        assert!(uplanet_name_of(Some(&key)).is_err(), "clé vide refusée");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

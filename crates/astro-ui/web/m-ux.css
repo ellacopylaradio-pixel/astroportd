@@ -29,3 +29,20 @@
 .ms-caps { list-style: none; margin: .4rem 0; padding: 0; display: grid; gap: .4rem; }
 .ms-cap { display: flex; align-items: center; justify-content: space-between; gap: .4rem .8rem; flex-wrap: wrap; min-height: 48px; padding: .35rem .6rem; border: 1px solid var(--line); border-radius: var(--r); }
 .ms-who { display: flex; flex-direction: column; min-width: 0; }
+/* Essaim unifié (m-swarm.js) : bilan, stations cliquables, fiche. */
+.ms-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: .5rem; margin: .4rem 0 .8rem; }
+.ms-stat { display: flex; flex-direction: column; padding: .5rem .7rem; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel2); }
+.ms-stat strong { font-size: 1.3rem; }
+.ms-node { display: flex; flex-direction: column; align-items: stretch; gap: .3rem; min-height: 48px; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.ms-node:hover, .ms-node:focus-visible { border-color: var(--accent); }
+.ms-top { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; }
+.ms-top strong { overflow-wrap: anywhere; }
+.ms-capl { font-size: .9rem; }
+.ms-cap button { min-height: 48px; }
+.ms-sheet h3 { margin: .2rem 0 .4rem; font-size: 1rem; }
+.ms-capbox { margin-bottom: .8rem; }
+.ms-facts { display: grid; grid-template-columns: max-content 1fr; gap: .35rem .9rem; margin: 0; }
+.ms-facts dt { color: var(--muted); }
+.ms-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ms-id { font-size: .8rem; }
+@media (max-width: 480px) { .ms-facts { grid-template-columns: 1fr; } .ms-facts dt { margin-top: .3rem; } }

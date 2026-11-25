@@ -335,6 +335,11 @@ impl AccountService {
         serde_json::to_value(&event).map_err(internal)
     }
 
+    /// Publication des événements signés de la station (relai local puis relais de la constellation).
+    pub fn publisher(&self) -> PublishFn {
+        self.publish.clone()
+    }
+
     /// Signe **et publie** un événement du blog du compte : note (1), article (30023), brouillon (30024) ou suppression (5) de ses
     /// propres publications. Les autres kinds passent par [`Self::sign`] et le client. Un article doit avoir son identifiant (`d`).
     pub async fn publish_post(&self, hex: &str, ev: &Value) -> Result<Value, AccountError> {

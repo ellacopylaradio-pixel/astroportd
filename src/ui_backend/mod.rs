@@ -86,6 +86,7 @@ pub struct StationUi<B: BlobStore> {
     replicate_fn: Option<ReplicateFn>,
     coop: Option<(CoopGetFn, CoopSetFn)>,
     constellation: Option<ConstellationFn>,
+    member_history: Option<MemberHistoryFn>,
     charter: Option<CharterFn>,
     billet: Option<BilletFn>,
     /// Versement de Ẑen par le Capitaine (même forme d'appel que les billets).
@@ -137,6 +138,8 @@ pub type CoopGetFn = Arc<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<O
 /// Écriture de la configuration coopérative : `{ clé: valeur | null }` ; rend la vue mise à jour.
 pub type CoopSetFn = Arc<dyn Fn(std::collections::BTreeMap<String, Option<String>>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
 
+/// Historique des virements du portefeuille Ğ1 `wallet` d'un membre (« Mes Ẑen ») ; `after` : curseur de la page suivante.
+pub type MemberHistoryFn = Arc<dyn Fn(String, Option<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
 /// Vision de la constellation pour le compte `viewer` : `None` = portefeuilles et charte, `Some((depuis, au plus))` = historique des virements.
 pub type ConstellationFn = Arc<dyn Fn(String, Option<(u64, usize)>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
 
@@ -216,7 +219,7 @@ pub type SendFn = Arc<dyn Fn(String, Vec<String>, Vec<String>) -> std::pin::Pin<
 impl<B: BlobStore> StationUi<B> {
     /// Assemble l'interface.
     pub fn new(services: Arc<StationServices>, dav: Arc<DavState<B>>, memory: Option<Arc<BroMemory>>, ollama: Option<Arc<OllamaClient>>, faces_enabled: bool) -> Self {
-        Self { services, dav, memory, ollama, faces_enabled, thumbs_fn: None, pending_fn: None, friends_fn: None, backup: None, media_friends: None, replicate_fn: None, send_fn: None, coop: None, constellation: None, charter: None, billet: None, zen_credit: None, island: None, site: None, admin: None, account: None, contacts: None, invites: None, welcome: None, agents: None, cosurf: None, pull: None, organize: None, board: astro_facecloud::board::BoardCache::new(), registrar: None, stations: None, feedback: None, oc: None, setup: None, conf_path: None, planes_home: None, unit_exe: None, ai: None, reading: None, seer: None, book: None, chat: None, people: None, ice: (None, None, Vec::new()), presence: None }
+        Self { services, dav, memory, ollama, faces_enabled, thumbs_fn: None, pending_fn: None, friends_fn: None, backup: None, media_friends: None, replicate_fn: None, send_fn: None, coop: None, constellation: None, member_history: None, charter: None, billet: None, zen_credit: None, island: None, site: None, admin: None, account: None, contacts: None, invites: None, welcome: None, agents: None, cosurf: None, pull: None, organize: None, board: astro_facecloud::board::BoardCache::new(), registrar: None, stations: None, feedback: None, oc: None, setup: None, conf_path: None, planes_home: None, unit_exe: None, ai: None, reading: None, seer: None, book: None, chat: None, people: None, ice: (None, None, Vec::new()), presence: None }
     }
 
     /// Annuaire des clés d'une même personne dans plusieurs UPlanet.
@@ -342,6 +345,12 @@ impl<B: BlobStore> StationUi<B> {
         self
     }
 
+    /// Active l'historique des virements de chaque membre (Mes Ẑen), lu chez l'indexeur de la Ğ1.
+    pub fn with_member_history(mut self, f: MemberHistoryFn) -> Self {
+        self.member_history = Some(f);
+        self
+    }
+
     /// Active la vision de la constellation (portefeuilles, historique, charte) pour tous les membres.
     pub fn with_constellation(mut self, f: ConstellationFn, charter: CharterFn) -> Self {
         self.constellation = Some(f);
@@ -455,7 +464,7 @@ impl<B: BlobStore> StationUi<B> {
         astro_ui::api::Routes::new(activity, public_origin)
             .ucloud(Arc::new(UcloudBackend { services: self.services.clone(), dav: self.dav.clone(), friends_fn: self.friends_fn.clone(), backup: self.backup.clone(), media_friends: self.media_friends.clone(), replicate_fn: self.replicate_fn.clone(), site: self.site.clone(), pull: self.pull.clone(), organize: self.organize.clone(), send_fn: self.send_fn.clone(), seer: self.seer.clone() }))
             .faces(Arc::new(FacesBackend { services: self.services.clone(), dav: self.dav.clone(), faces_enabled: self.faces_enabled, thumbs_fn: self.thumbs_fn.clone(), pending_fn: self.pending_fn.clone(), contacts: self.contacts.clone(), board: self.board, book: self.book.clone() }))
-            .coop(Arc::new(CoopBackend { services: self.services.clone(), dav: self.dav.clone(), coop: self.coop.clone(), constellation: self.constellation.clone(), charter: self.charter.clone(), billet: self.billet.clone(), zen_credit: self.zen_credit.clone(), island: self.island.clone(), stations: self.stations.clone(), oc: self.oc.clone() }))
+            .coop(Arc::new(CoopBackend { services: self.services.clone(), dav: self.dav.clone(), coop: self.coop.clone(), constellation: self.constellation.clone(), member_history: self.member_history.clone(), charter: self.charter.clone(), billet: self.billet.clone(), zen_credit: self.zen_credit.clone(), island: self.island.clone(), stations: self.stations.clone(), oc: self.oc.clone() }))
             .social(Arc::new(SocialBackend { services: self.services.clone(), dav: self.dav.clone(), memory: self.memory.clone(), contacts: self.contacts.clone(), agents: self.agents.clone(), cosurf: self.cosurf.clone(), ai: self.ai.clone(), reading: self.reading.clone(), book: self.book.clone(), chat: self.chat.clone(), ice: self.ice.clone(), presence: self.presence.clone(), people: self.people.clone(), invites: self.invites.clone(), seer: self.seer.clone() }))
             .account(Arc::new(AccountBackend { services: self.services.clone(), dav: self.dav.clone(), billet: self.billet.clone(), site: self.site.clone(), account: self.account.clone(), registrar: self.registrar.clone(), feedback: self.feedback.clone(), ai: self.ai.clone() }))
             .onboarding(Arc::new(OnboardBackend { services: self.services.clone(), dav: self.dav.clone(), backup: self.backup.clone(), invites: self.invites.clone(), welcome: self.welcome.clone(), registrar: self.registrar.clone(), stations: self.stations.clone(), setup: self.setup.clone() }))

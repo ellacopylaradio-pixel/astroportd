@@ -496,6 +496,34 @@ pub async fn library<B: BlobStore>(dav: &DavState<B>, owner: &str) -> Result<Val
             Ok(rows.iter().filter_map(|s| serde_json::from_str(s).ok()).collect())
         })
         .await?;
+    // Les vidéos déposées sans fiche (WebDAV, téléphone) sont aussi de la médiathèque : titre tiré du nom du fichier, lecture directe.
+    let mut items = items;
+    let covered: HashSet<String> = items.iter().filter_map(|i| i["path"].as_str().map(str::to_owned)).collect();
+    let o = owner.to_owned();
+    let bare: Vec<Value> = dav
+        .db
+        .readers()
+        .read(move |c| {
+            let mut stmt = c.prepare_cached(&format!(
+                "SELECT e.path, e.mime, COALESCE(e.size, 0), COALESCE(e.taken_at, e.mtime) FROM ucloud_entries e \
+                 WHERE e.owner_hex = ?1 AND e.type = 'file' AND e.cid IS NOT NULL AND e.mime LIKE 'video/%' AND {} ORDER BY e.path LIMIT 2000",
+                crate::not_companion_sql!()
+            ))?;
+            let rows = stmt.query_map([&o], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<i64>>(3)?)))?.collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await?
+        .into_iter()
+        .filter(|(p, ..)| !covered.contains(p))
+        .map(|(path, mime, size, at)| {
+            let name = path.rsplit('/').next().unwrap_or_default();
+            let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+            let title = stem.replace(['_', '.'], " ").trim().to_owned();
+            json!({ "path": path, "type": "video", "title": if title.is_empty() { name.to_owned() } else { title }, "mime": mime, "size": size, "added": at,
+                    "level": "private", "bare": true, "art": { "still": path }, "genres": [], "keywords": [], "cast": [], "directors": [], "subtitles": [] })
+        })
+        .collect();
+    items.extend(bare);
     Ok(json!({ "items": items, "pending": pending }))
 }
 

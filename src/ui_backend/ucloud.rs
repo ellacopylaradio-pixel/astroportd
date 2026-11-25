@@ -178,8 +178,8 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
             .readers()
             .read(move |c| {
                 const COLS: &str = "path, mime, size, mtime, taken_at, COALESCE(taken_at, mtime) AS t, json_extract(data, '$.thumb')";
-                // Les affiches et pochettes de la médiathèque ne sont pas des photos du membre.
-                const KIND: &str = concat!("owner_hex = ?1 AND type = 'file' AND cid IS NOT NULL AND (mime LIKE 'image/%' OR mime LIKE 'video/%') AND ", crate::not_companion_sql!());
+                // Les affiches et pochettes de la médiathèque ne sont pas des photos du membre ; les vidéos n'y restent que si elles viennent d'un appareil photo (DCIM, Camera), les autres sont dans la Médiathèque.
+                const KIND: &str = concat!("owner_hex = ?1 AND type = 'file' AND cid IS NOT NULL AND (mime LIKE 'image/%' OR (mime LIKE 'video/%' AND (path LIKE '/DCIM/%' OR path LIKE '%/DCIM/%' OR path LIKE '%/Camera/%'))) AND ", crate::not_companion_sql!());
                 let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, Value)> {
                     let t: i64 = r.get(5)?;
                     Ok((t, json!({ "path": r.get::<_, String>(0)?, "mime": r.get::<_, Option<String>>(1)?, "size": r.get::<_, Option<i64>>(2)?, "mtime": r.get::<_, Option<i64>>(3)?, "taken_at": r.get::<_, Option<i64>>(4)?, "thumb": thumb_of(r.get::<_, Option<String>>(6)?) })))
@@ -368,6 +368,19 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
             }
         }
         Ok(json!({ "rotated": rotated, "failed": failed }))
+    }
+    async fn plant_fiche(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
+        crate::plant_fiche::view(&self.dav, &self.services.uplanet_name, &who.hex, &path).await.map_err(ApiError::bad_request)
+    }
+    async fn plant_list(&self, who: &Principal) -> Result<Value, ApiError> {
+        crate::plant_fiche::list(&self.dav, &self.services.uplanet_name, &who.hex).await.map_err(ApiError::internal)
+    }
+    async fn plant_edit(&self, who: &Principal, path: String, edit: Value, lang: String) -> Result<Value, ApiError> {
+        let edit: crate::plant_fiche::Edit = serde_json::from_value(edit).map_err(|e| ApiError::bad_request(format!("fiche illisible : {e}")))?;
+        crate::plant_fiche::edit(&self.dav, &who.hex, &path, edit, &lang).await.map_err(ApiError::bad_request)
+    }
+    async fn plant_identify(&self, who: &Principal, path: String, lang: String) -> Result<Value, ApiError> {
+        crate::plant_fiche::recognize(&self.dav, &self.services.uplanet_name, &who.hex, &path, &lang).await.map_err(ApiError::bad_request)
     }
     async fn public_move(&self, who: &Principal, paths: Vec<String>, publish: bool) -> Result<Value, ApiError> {
         let site = self.site.as_ref().ok_or_else(|| ApiError::unavailable("site public non activé sur cette station"))?;

@@ -136,7 +136,7 @@ export default async function media(root, K, q) {
   const meta = it => [it.year, dur(it.duration_s), ...(it.genres || [])].filter(Boolean).join(' · ');
   const shared = it => (it.level === 'circle' ? h('span', { class: 'pill ok' }, t('Partagé avec mes amis')) : '');
   const play = it => (it.type === 'music' ? listen(K, [it]) : watch(K, root, it));
-  const edit = it => h('button', { class: 'ghost', onclick: () => form(it) }, '✎ ' + t('Corriger la fiche'));
+  const edit = it => it.bare ? '' : h('button', { class: 'ghost', onclick: () => form(it) }, '✎ ' + t('Corriger la fiche'));
   const line = (label, v) => (v?.length ? h('p', {}, h('b', {}, t(label) + ' : '), [v].flat().join(', ')) : '');
 
   // « Partager avec mes amis » (un film, ou une série / un album comme liste) et la trace : qui l'a copié, de qui je le tiens,
@@ -169,7 +169,7 @@ export default async function media(root, K, q) {
   function detail(it) {
     open = () => body.replaceChildren(back(), h('article', { class: 'card mm-detail' }, thumb(art(it), it.type === 'music' ? '🎵' : '🎬'),
       h('div', {}, h('h2', {}, it.title, ' ', shared(it)), h('p', { class: 'muted' }, meta(it)), it.original_title && it.original_title !== it.title ? h('p', { class: 'muted' }, it.original_title) : '',
-        h('p', {}, h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')), ' ', edit(it)), shareBox([it]), safeLine(it),
+        h('p', {}, h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')), ' ', edit(it)), it.bare ? '' : shareBox([it]), safeLine(it),
         it.overview ? h('p', {}, it.overview) : '', line('Réalisation', it.directors), line('Avec', it.cast), line('Mots-clés', it.keywords))));
     draw();
   }

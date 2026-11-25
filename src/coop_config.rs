@@ -36,7 +36,7 @@ pub struct Section {
     /// Clés, dans l'ordre d'affichage (celui de `cooperative_config.sh`).
     pub keys: &'static [&'static str],
     /// Niveau de l'écran, par tâche : `essential` (mettre la station en service), `money` (recevoir les dons),
-    /// `rules` (règles communes : répartition, impôt, PAF suggérée), `services` (retours des utilisateurs), `legacy` (clés que
+    /// `rules` (règles communes : répartition, impôt, PAF suggérée), `services` (retours des utilisateurs, reconnaissance des plantes), `legacy` (clés que
     /// seules les stations Astroport.ONE lisent : astroportd les publie et les garde sans s'en servir).
     pub level: &'static str,
 }
@@ -56,7 +56,8 @@ pub const SECTIONS: &[Section] = &[
     Section { id: "fiscal", title: "Impôt sur les sociétés", keys: &["IS_RATE_REDUCED", "IS_RATE_NORMAL", "IS_THRESHOLD"], level: "rules" },
     Section { id: "shares", title: "PAF suggérée", keys: &["PAF"], level: "rules" },
     Section { id: "api", title: "Retours des utilisateurs (Git)", keys: &["GIT_HOST", "GIT_OWNER", "GIT_TOKEN"], level: "services" },
-    Section { id: "legacy", title: "Stations Astroport.ONE", keys: &["TVA_RATE", "ZENCARD_SATELLITE", "ZENCARD_CONSTELLATION", "NCARD", "ZCARD", "TIER_SLUG_CLOUD", "PLANTNET_API_KEY", "MJ_APIKEY_PUBLIC", "MJ_APIKEY_PRIVATE", "MJ_SENDER_EMAIL"], level: "legacy" },
+    Section { id: "plantnet", title: "Reconnaissance des plantes (Pl@ntNet)", keys: &["PLANTNET_API_KEY"], level: "services" },
+    Section { id: "legacy", title: "Stations Astroport.ONE", keys: &["TVA_RATE", "ZENCARD_SATELLITE", "ZENCARD_CONSTELLATION", "NCARD", "ZCARD", "TIER_SLUG_CLOUD", "MJ_APIKEY_PUBLIC", "MJ_APIKEY_PRIVATE", "MJ_SENDER_EMAIL"], level: "legacy" },
 ];
 
 /// Relai ORIGIN de la coopérative, où une station ẐEN ouverte (Village, Place publique) annonce aussi sa balise : la carte
