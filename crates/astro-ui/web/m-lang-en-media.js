@@ -70,4 +70,9 @@ export default {
 "+ votre sauvegarde": "+ your backup",
 "🟡 Gardé par votre sauvegarde, pas encore de copie vérifiée chez vos amis": "🟡 Kept by your backup, no checked copy with your friends yet",
 "⏳ Pas encore à l'abri : il part cette nuit chez vos gardiens": "⏳ Not safe yet: it goes to your guardians tonight",
+"Fiche créée : vous pouvez la corriger et la partager": "Sheet created: you can edit and share it",
+"Créez la fiche de cette vidéo pour la corriger et la partager avec vos amis.": "Create this video's sheet to edit it and share it with your friends.",
+"Aucune licence": "No licence",
+"CC0 (domaine public)": "CC0 (public domain)",
+"Licence": "Licence",
 };

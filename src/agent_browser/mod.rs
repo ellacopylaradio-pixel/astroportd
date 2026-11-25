@@ -49,6 +49,15 @@ pub struct BrowserProc {
 }
 
 impl BrowserProc {
+    /// Les dernières lignes que le navigateur a écrites en s'arrêtant (« Missing X server », bac à sable refusé…) : sans elles,
+    /// un navigateur qui ne démarre pas sur un serveur ne laisse aucune trace.
+    #[must_use]
+    pub fn log_tail(&self) -> String {
+        let raw = self.profile.as_ref().and_then(|p| std::fs::read_to_string(p.join("chromium.log")).ok()).unwrap_or_default();
+        let lines: Vec<&str> = raw.lines().filter(|l| !l.contains("dbus/bus.cc")).collect();
+        lines[lines.len().saturating_sub(4)..].join(" | ").chars().take(400).collect()
+    }
+
     /// Le multiplexeur du tube CDP.
     #[must_use]
     pub fn mux(&self) -> Arc<Mux> {
@@ -133,7 +142,12 @@ impl Launcher for Chromium {
             "--password-store=basic".into(),
         ];
         if spec.headless {
-            flags.push("--headless=new".into());
+            // Serveur sans écran : pas de GPU, mémoire partagée de /dev/shm souvent minuscule dans les petites machines.
+            flags.extend(["--headless=new".into(), "--disable-gpu".into(), "--disable-dev-shm-usage".into()]);
+        }
+        // Chromium refuse de démarrer en root sans cette option (station installée en root sur un serveur).
+        if rustix::process::geteuid().is_root() {
+            flags.push("--no-sandbox".into());
         }
         // Le tube CDP est sur les descripteurs 3 (lecture) et 4 (écriture). `sh` y branche l'entrée et la sortie standard puis
         // devient Chromium (`exec`) : aucun code non sûr, et les arguments restent positionnels (pas d'injection).
@@ -145,7 +159,7 @@ impl Launcher for Chromium {
             .arg(&spec.url)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::fs::File::create(spec.profile.join("chromium.log")).map_or_else(|_| std::process::Stdio::null(), std::process::Stdio::from))
             .process_group(0)
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| {

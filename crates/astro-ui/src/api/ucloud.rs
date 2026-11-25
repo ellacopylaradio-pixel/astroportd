@@ -105,6 +105,10 @@ pub trait UcloudApi: Auth {
     fn media_edit(&self, _who: &Principal, _path: String, _set: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("médiathèque non disponible sur cette station")) }
     }
+    /// Crée la fiche d'une vidéo déposée sans fiche (pour la corriger, la partager) ; rend `{ item }`.
+    fn media_make(&self, _who: &Principal, _path: String, _licence: Option<String>) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("médiathèque non disponible sur cette station")) }
+    }
     /// Médiathèque des amis : leurs films et morceaux partagés avec leur cercle, `{ items, friends }` ; `force` relit tout.
     fn media_friends(&self, _who: &Principal, _force: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("médiathèque des amis non disponible sur cette station")) }
@@ -194,6 +198,7 @@ pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/ucloud/media/play", post(media_play::<B>))
         .route("/api/v1/ucloud/media/fiche", get(media_fiche::<B>))
         .route("/api/v1/ucloud/media/edit", post(media_edit::<B>))
+        .route("/api/v1/ucloud/media/make", post(media_make::<B>))
         .route("/api/v1/ucloud/media/friends", get(media_friends::<B>))
         .route("/api/v1/ucloud/media/share", post(media_share::<B>))
         .route("/api/v1/ucloud/media/trace", get(media_trace::<B>))
@@ -367,6 +372,20 @@ async fn media_edit<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): 
         return reply(Err(ApiError::bad_request("correction trop volumineuse")));
     }
     reply(st.backend.media_edit(&p, b.path, b.set).await)
+}
+
+#[derive(Deserialize)]
+struct MakeBody {
+    path: String,
+    #[serde(default)]
+    licence: Option<String>,
+}
+
+async fn media_make<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<MakeBody>) -> Response {
+    if b.path.len() > 1024 {
+        return reply(Err(ApiError::bad_request("chemin trop long")));
+    }
+    reply(st.backend.media_make(&p, b.path, b.licence).await)
 }
 
 #[derive(Deserialize)]

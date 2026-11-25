@@ -1957,6 +1957,15 @@ async fn the_media_library_indexes_fiches_streams_with_range_and_lets_the_owner_
     assert!(shown.contains(&"/DCIM/Camera/clip.mp4") && !shown.contains(&"/Vidéos/Mariage_Léa.mp4"), "la vidéo d'appareil reste dans Photos, l'autre non : {shown:?}");
     let titles: Vec<(&str, &str)> = lib["items"].as_array().unwrap().iter().map(|i| (i["path"].as_str().unwrap(), i["title"].as_str().unwrap())).collect();
     assert!(titles.contains(&("/Vidéos/Mariage_Léa.mp4", "Mariage Léa")), "vidéo sans fiche dans la médiathèque : {titles:?}");
+    // Créer la fiche d'une vidéo à soi : elle devient un élément à fiche (corrigeable, partageable), une seule fois ; une image est refusée.
+    let (s, made) = b.post("/api/v1/ucloud/media/make", &alice, json!({ "path": "/Vidéos/Mariage_Léa.mp4", "licence": "CC-BY-SA-4.0" })).await;
+    assert_eq!((s, made["item"]["fiche"].as_str(), made["item"]["title"].as_str()), (StatusCode::OK, Some("/Vidéos/Mariage_Léa.media.json"), Some("Mariage Léa")), "{made}");
+    assert_eq!(b.post("/api/v1/ucloud/media/make", &alice, json!({ "path": "/Vidéos/Mariage_Léa.mp4" })).await.0, StatusCode::BAD_REQUEST, "une seule fiche par vidéo");
+    assert_eq!(b.post("/api/v1/ucloud/media/make", &alice, json!({ "path": "/DCIM/Camera/clip.mp4", "licence": "tous-droits-que-je-veux" })).await.0, StatusCode::BAD_REQUEST, "licence hors liste");
+    assert_eq!(b.post("/api/v1/ucloud/media/make", &alice, json!({ "path": "/Vidéos/Films/Vacances.jpg" })).await.0, StatusCode::BAD_REQUEST, "pas une vidéo");
+    let (_, lib2) = b.get("/api/v1/ucloud/media", &alice).await;
+    let mine = lib2["items"].as_array().unwrap().iter().filter(|i| i["path"] == "/Vidéos/Mariage_Léa.mp4").collect::<Vec<_>>();
+    assert!(mine.len() == 1 && mine[0]["fiche"] == "/Vidéos/Mariage_Léa.media.json", "une seule entrée, avec sa fiche : {mine:?}");
 
     // Lecture en flux : une adresse par fichier lisible (pas l'affiche), Range servi en clair sans autre authentification.
     let (s, play) = b.post("/api/v1/ucloud/media/play", &alice, json!({ "paths": ["/Vidéos/Films/Chihiro (2001).mp4", "/Vidéos/Films/Chihiro (2001).fr.vtt", "/Vidéos/Films/Chihiro (2001).poster.jpg"] })).await;

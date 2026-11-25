@@ -1,3 +1,10 @@
+## astroportd 2.1.1 — vidéos à soi partageables, navigateur des agents sur serveur, conception du partage en chaîne
+
+- **Créer la fiche d'une vidéo** déposée sans fiche (Médiathèque › Créer la fiche), avec le choix d'une licence (CC BY, BY-SA, BY-NC, BY-NC-SA, CC0) : la vidéo se corrige puis se partage avec les amis (étiquette de licence comprise).
+- **Navigateur des agents sur un serveur sans écran** : lancé avec les options d'un serveur (sans GPU, `/dev/shm` ménagé, sans bac à sable en root) ; ce qu'il écrit en s'arrêtant est désormais dit au journal (« agents : le navigateur s'est arrêté : … »), même chose pour Naviguer ensemble.
+- **Conception du partage en chaîne et de la cascade de Ẑen** : `docs/design/PARTAGE_CASCADE.md` (voie A retenue : le spectateur connaît sa lignée et paie chaque maillon directement ; rien n'est encore codé).
+- Guide régénéré (version 2.1.1).
+
 ## astroportd 2.1.0 — Membres refondus, plantes, vidéos dans la Médiathèque, sections pliables
 
 - **Membres, une liste qui se règle sur place** : quota, prix, Ğ1Billets, lecture et IA enregistrés aussitôt, aide « ? » sur chaque colonne, tri par activité, disque ou ancienneté, filtre « Inactifs +30 j ». Chaque ligne montre le logo, le bandeau et le site du membre (champs de son profil). Le Capitaine retire un compte inactif depuis plus d'un mois, confirmé en deux temps, et peut **supprimer complètement un MULTIPASS et ses données** (`src/member_purge.rs`, `POST /api/v1/station/accounts/{hex}/delete`) : solde rendu, profil vidé, fichiers (seuls les blobs que personne d'autre ne référence), clés.

@@ -112,6 +112,11 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
         let item = crate::media::edit(&self.dav, &who.hex, &path, &set).await.map_err(ApiError::bad_request)?;
         Ok(json!({ "item": item }))
     }
+    async fn media_make(&self, who: &Principal, path: String, licence: Option<String>) -> Result<Value, ApiError> {
+        let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        let item = crate::media::make_fiche(&self.dav, &who.hex, &path, licence.as_deref()).await.map_err(ApiError::bad_request)?;
+        Ok(json!({ "item": item }))
+    }
     async fn media_friends(&self, who: &Principal, force: bool) -> Result<Value, ApiError> {
         let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("médiathèque des amis non disponible sur cette station"))?;
         (f.list)(who.hex.clone(), force).await.map_err(ApiError::internal)

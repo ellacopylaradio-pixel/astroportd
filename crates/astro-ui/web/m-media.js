@@ -136,7 +136,17 @@ export default async function media(root, K, q) {
   const meta = it => [it.year, dur(it.duration_s), ...(it.genres || [])].filter(Boolean).join(' · ');
   const shared = it => (it.level === 'circle' ? h('span', { class: 'pill ok' }, t('Partagé avec mes amis')) : '');
   const play = it => (it.type === 'music' ? listen(K, [it]) : watch(K, root, it));
-  const edit = it => it.bare ? '' : h('button', { class: 'ghost', onclick: () => form(it) }, '✎ ' + t('Corriger la fiche'));
+  // Créer la fiche d'une vidéo à soi, avec la licence choisie (celle des étiquettes du partage) : sans fiche, pas de partage.
+  const LICENCES = [['', 'Aucune licence'], ['CC-BY-4.0', 'CC BY'], ['CC-BY-SA-4.0', 'CC BY-SA'], ['CC-BY-NC-4.0', 'CC BY-NC'], ['CC-BY-NC-SA-4.0', 'CC BY-NC-SA'], ['CC0-1.0', 'CC0 (domaine public)']];
+  const make = it => {
+    const lic = h('select', { 'aria-label': t('Licence') }, LICENCES.map(([v, l]) => h('option', { value: v }, t(l))));
+    return h('span', {}, lic, ' ', h('button', { class: 'ghost', onclick: async ev => {
+      ev.target.disabled = true;
+      try { const r = await api(A + '/make', { method: 'POST', body: { path: it.path, licence: lic.value || null } }); items = items.map(x => (x.path === it.path ? r.item : x)); toast(t('Fiche créée : vous pouvez la corriger et la partager'), 1); open = null; draw(); }
+      catch (e) { ev.target.disabled = false; toast(e.message, 0); }
+    } }, '✎ ' + t('Créer la fiche')));
+  };
+  const edit = it => it.bare ? make(it) : h('button', { class: 'ghost', onclick: () => form(it) }, '✎ ' + t('Corriger la fiche'));
   const line = (label, v) => (v?.length ? h('p', {}, h('b', {}, t(label) + ' : '), [v].flat().join(', ')) : '');
 
   // « Partager avec mes amis » (un film, ou une série / un album comme liste) et la trace : qui l'a copié, de qui je le tiens,
@@ -169,7 +179,7 @@ export default async function media(root, K, q) {
   function detail(it) {
     open = () => body.replaceChildren(back(), h('article', { class: 'card mm-detail' }, thumb(art(it), it.type === 'music' ? '🎵' : '🎬'),
       h('div', {}, h('h2', {}, it.title, ' ', shared(it)), h('p', { class: 'muted' }, meta(it)), it.original_title && it.original_title !== it.title ? h('p', { class: 'muted' }, it.original_title) : '',
-        h('p', {}, h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')), ' ', edit(it)), it.bare ? '' : shareBox([it]), safeLine(it),
+        h('p', {}, h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')), ' ', edit(it)), it.bare ? h('p', { class: 'muted' }, t('Créez la fiche de cette vidéo pour la corriger et la partager avec vos amis.')) : shareBox([it]), safeLine(it),
         it.overview ? h('p', {}, it.overview) : '', line('Réalisation', it.directors), line('Avec', it.cast), line('Mots-clés', it.keywords))));
     draw();
   }

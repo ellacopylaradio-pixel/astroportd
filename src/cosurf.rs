@@ -290,7 +290,13 @@ impl CoSurf {
         let (sessions, db, bus, sid, who) = (self.sessions.clone(), self.db.clone(), self.activity.clone(), id.clone(), owner.to_owned());
         tokio::spawn(async move {
             let reason = tokio::select! {
-                () = browser.exited() => "ended",
+                () = browser.exited() => {
+                    let why = browser.log_tail();
+                    if !why.is_empty() {
+                        eprintln!("cosurf : le navigateur s'est arrêté : {why}");
+                    }
+                    "ended"
+                }
                 () = tokio::time::sleep(Duration::from_secs(SESSION_SECS)) => "expired",
                 r = stop_rx => r.unwrap_or("ended"),
             };

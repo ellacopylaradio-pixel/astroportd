@@ -1079,7 +1079,13 @@ impl Supervisor {
         let (reason, ack) = loop {
             let wait = std::time::Duration::from_secs(deadline.saturating_sub(now()));
             tokio::select! {
-                () = browser.exited() => break ("ended", None),
+                () = browser.exited() => {
+                    let why = browser.log_tail();
+                    if !why.is_empty() {
+                        eprintln!("agents : le navigateur s'est arrêté : {why}");
+                    }
+                    break ("ended", None);
+                }
                 () = tokio::time::sleep(wait) => break ("expired", None),
                 c = rx.recv() => match c {
                     None => break ("ended", None),

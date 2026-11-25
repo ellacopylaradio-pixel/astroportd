@@ -70,4 +70,9 @@ export default {
 "+ votre sauvegarde": "+ tu copia de seguridad",
 "🟡 Gardé par votre sauvegarde, pas encore de copie vérifiée chez vos amis": "🟡 Guardado por tu copia de seguridad, aún sin copia comprobada en casa de tus amigos",
 "⏳ Pas encore à l'abri : il part cette nuit chez vos gardiens": "⏳ Aún no está a salvo: sale esta noche hacia tus guardianes",
+"Fiche créée : vous pouvez la corriger et la partager": "Ficha creada: puede corregirla y compartirla",
+"Créez la fiche de cette vidéo pour la corriger et la partager avec vos amis.": "Cree la ficha de este vídeo para corregirla y compartirla con sus amigos.",
+"Aucune licence": "Sin licencia",
+"CC0 (domaine public)": "CC0 (dominio público)",
+"Licence": "Licencia",
 };

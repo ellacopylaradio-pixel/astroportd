@@ -248,6 +248,7 @@ POST /api/v1/ucloud/have anon=401 member=422
 POST /api/v1/ucloud/import-meta anon=401 member=400
 POST /api/v1/ucloud/media/edit anon=401 member=422
 POST /api/v1/ucloud/media/friends/request anon=401 member=422
+POST /api/v1/ucloud/media/make anon=401 member=422
 POST /api/v1/ucloud/media/play anon=401 member=422
 POST /api/v1/ucloud/media/share anon=401 member=422
 POST /api/v1/ucloud/plant anon=401 member=422

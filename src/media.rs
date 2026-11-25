@@ -423,6 +423,48 @@ pub async fn edit<B: BlobStore>(dav: &Arc<DavState<B>>, owner: &str, fiche_path:
     summarize(&fiche, fiche_path).ok_or_else(|| "fiche réécrite mais illisible".to_owned())
 }
 
+/// Licences proposées pour une œuvre du membre (identifiants SPDX) ; sans choix, la fiche n'en porte pas.
+pub const LICENCES: [&str; 5] = ["CC-BY-4.0", "CC-BY-SA-4.0", "CC-BY-NC-4.0", "CC-BY-NC-SA-4.0", "CC0-1.0"];
+
+/// Crée la fiche d'une vidéo déposée sans elle (capture, production du membre) pour qu'elle se corrige et se partage : un
+/// `<nom>.media.json` posé à côté du fichier, type `video`, titre tiré du nom, source « mon œuvre ». Rend son résumé.
+pub async fn make_fiche<B: BlobStore>(dav: &Arc<DavState<B>>, owner: &str, path: &str, licence: Option<&str>) -> Result<Value, String> {
+    let licence = licence.map(str::trim).filter(|l| !l.is_empty());
+    if let Some(l) = licence.filter(|l| !LICENCES.contains(l)) {
+        return Err(format!("licence inconnue : {l}"));
+    }
+    let (o, p) = (owner.to_owned(), path.to_owned());
+    let row: Option<(Option<String>, i64)> = dav
+        .db
+        .readers()
+        .read(move |c| {
+            Ok(rusqlite::OptionalExtension::optional(c.query_row(
+                "SELECT mime, COALESCE(size, 0) FROM ucloud_entries WHERE owner_hex = ?1 AND path = ?2 AND type = 'file' AND cid IS NOT NULL",
+                params![o, p],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ))?)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    let (mime, size) = row.ok_or("fichier introuvable")?;
+    if !mime.as_deref().is_some_and(|m| m.starts_with("video/")) {
+        return Err("seule une vidéo reçoit cette fiche".into());
+    }
+    let name = path.rsplit('/').next().unwrap_or_default();
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    let fiche_path = format!("{}/{stem}.media.json", parent_of(path).trim_end_matches('/'));
+    if astro_dav::carddav::read_file(dav, owner, &fiche_path).await.is_some() {
+        return Err("ce fichier a déjà une fiche".into());
+    }
+    let title = stem.replace(['_', '.'], " ").trim().to_owned();
+    let fiche = json!({
+        "schema": "media/v1", "type": "video", "file": name, "title": if title.is_empty() { name.to_owned() } else { title }, "generated_at": now(),
+        "technical": { "mime": mime, "size": size }, "source": { "kind": "own", "rights": "own", "licence": licence }, "sharing": { "level": "private" },
+    });
+    write_fiche(dav, owner, &fiche_path, &fiche).await?;
+    summarize(&fiche, &fiche_path).ok_or_else(|| "fiche écrite mais illisible".to_owned())
+}
+
 /// Réécrit la fiche à sa place (même chiffrement, même quota) : seule la fiche change de CID, jamais le fichier décrit.
 pub(crate) async fn write_fiche<B: BlobStore>(dav: &Arc<DavState<B>>, owner: &str, fiche_path: &str, fiche: &Value) -> Result<(), String> {
     let body = serde_json::to_vec_pretty(fiche).map_err(|e| e.to_string())?;
