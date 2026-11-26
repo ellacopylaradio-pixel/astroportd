@@ -44,7 +44,7 @@ async function plantList(root, K) {
       }
       svg = el;
     }
-    const cards = pts.length ? h('div', { class: 'pl-cards' }, pts.map(p => h('a', { class: 'mm-card pl-card', href: '#/mediatheque?k=plant' },
+    const cards = pts.length ? h('div', { class: 'pl-cards' }, pts.map(p => h('a', { class: 'mm-card pl-card', href: '#/media?k=plant' },
       h('b', {}, p.title || p.scientific), h('small', { class: 'muted' }, [p.scientific, p.umap, p.author_label].filter(Boolean).join(' · ')),
       h('small', {}, [p.edible ? '🍽 ' + t('Comestible') : '', p.medicinal ? '💊 ' + t('Médicinale') : '', p.dangers ? '☠ ' + t('Toxique') : '', p.paid_by_me ? '✓' : ''].filter(Boolean).join(' · ')))))
       : h('p', { class: 'muted' }, t('Aucune plante partagée avec zone géographique pour l’instant.'));
@@ -116,7 +116,7 @@ export default async function plant(root, K, qs) {
         h('div', { class: 'pl-grid' }, FIELDS.flatMap(([id, label]) => field(id, label, f[id] || '', id === 'notes' || id === 'description' ? 3 : 5)))),
       h('p', { class: 'pl-save' }, h('button', { type: 'button', onclick: ev => run(ev.target, () => save(false), t('Fiche de la plante enregistrée')) }, t('Enregistrer la fiche')),
         ' ', h('a', { class: 'btn ghost', href: '#/plantes' }, t('Toutes mes plantes'))),
-      sp.scientific ? publishBox(sp) : null);
+      ...(sp.scientific ? [publishBox(sp)] : []));
   };
   const publishBox = sp => {
     const pf = v.parent_fiche || null;
@@ -139,7 +139,7 @@ export default async function plant(root, K, qs) {
         };
         await K.api('/api/v1/ucloud/media/remix', { method: 'POST', body });
         K.toast(t('Fiche plante publiée dans votre médiathèque'), 1);
-        done.replaceChildren(' ', h('a', { class: 'btn ghost', href: '#/mediatheque?k=plant' }, t('Ouvrir dans la médiathèque')));
+        done.replaceChildren(' ', h('a', { class: 'btn ghost', href: '#/media?k=plant' }, t('Ouvrir dans la médiathèque')));
       } catch (e) { K.toast(e.message, 0); }
       b.disabled = false;
     };

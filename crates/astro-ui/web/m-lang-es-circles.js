@@ -7,7 +7,6 @@ export default {
 "Personne pour l'instant.": "Nadie por ahora.",
 "Rangez vos proches du plus proche au plus lointain. C'est privé : personne, pas même eux, ne sait où vous les avez rangés.": "Ordene a sus allegados del más cercano al más lejano. Es privado: nadie, ni siquiera ellos, sabe dónde los ha puesto.",
 "Vous ne suivez encore personne.": "Aún no sigue a nadie.",
-"Famille": "Familia",
 "Ami": "Amigo",
 "Connaissance": "Conocido",
 "Ceux sur qui vous comptez en toutes circonstances.": "Aquellos con quienes cuenta pase lo que pase.",

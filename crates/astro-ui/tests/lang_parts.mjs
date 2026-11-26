@@ -30,7 +30,8 @@ for (const lg of langs) {
   const seen = new Set(Object.keys(common));
   keys[lg] = { common: new Set(Object.keys(common)) };
   for (const p of declared) {
-    const part = await load(`m-lang-${lg}-${p}.js`), src = readFileSync(join(web, `m-${p}.js`), 'utf8');
+    const part = await load(`m-lang-${lg}-${p}.js`);
+    const src = readdirSync(web).filter(f => f === `m-${p}.js` || (f.startsWith(`m-${p}-`) && f.endsWith('.js'))).map(f => readFileSync(join(web, f), 'utf8')).join('\n');
     keys[lg][p] = new Set(Object.keys(part));
     for (const k of Object.keys(part)) {
       assert.ok(!seen.has(k), `${lg} : « ${k} » est en double (part ${p})`);

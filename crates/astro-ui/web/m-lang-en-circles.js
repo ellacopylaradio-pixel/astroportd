@@ -7,7 +7,6 @@ export default {
 "Personne pour l'instant.": "Nobody yet.",
 "Rangez vos proches du plus proche au plus lointain. C'est privé : personne, pas même eux, ne sait où vous les avez rangés.": "Arrange your close ones from closest to most distant. It is private: nobody, not even them, knows where you placed them.",
 "Vous ne suivez encore personne.": "You don't follow anyone yet.",
-"Famille": "Family",
 "Ami": "Friend",
 "Connaissance": "Acquaintance",
 "Ceux sur qui vous comptez en toutes circonstances.": "Those you can count on, whatever happens.",
