@@ -5,24 +5,63 @@
 // cherchable depuis Fichiers. Rien ne part sans un geste du membre.
 const FIELDS = [['description', 'En bref'], ['edible', 'Comestible ?'], ['preparation', 'Préparation'], ['medicinal', 'Propriétés médicinales'], ['dangers', 'Dangers'], ['notes', 'Mes notes']];
 
-// Toutes mes plantes (#/plantes) : une carte par fiche, cherchable, qui mène à la fiche.
+// Toutes mes plantes (#/plantes) + Atlas botanique collaboratif du cercle (#6, mailles UMAP sans GPS fin).
 async function plantList(root, K) {
   const { h, t } = K;
   const css = h('link', { rel: 'stylesheet', href: '/ui/m-plant.css' }); document.head.append(css); K.cleanup(() => css.remove());
+  let items = [], atlas = null, mode = 'mine', filter = '';
   const find = h('input', { type: 'search', placeholder: t('Chercher une plante'), 'aria-label': t('Chercher une plante'), maxlength: 80, oninput: () => draw() });
-  const body = h('div', { class: 'pl-cards' }), note = h('p', { class: 'muted', role: 'status' });
-  root.replaceChildren(h('div', { class: 'bar' }, find), note, body);
-  let items = [];
+  const tabs = h('div', { class: 'bar' },
+    h('button', { class: 'ghost', 'data-m': 'mine', onclick: () => { mode = 'mine'; draw(); } }, '🌿 ' + t('Mes plantes')),
+    h('button', { class: 'ghost', 'data-m': 'atlas', onclick: async () => { mode = 'atlas'; if (!atlas) { try { atlas = (await K.api('/api/v1/ucloud/plants/atlas')).points || []; } catch (e) { note.textContent = e.message; atlas = []; } } draw(); } }, '🗺 ' + t('Atlas du cercle')));
+  const body = h('div', {}), note = h('p', { class: 'muted', role: 'status' });
+  root.replaceChildren(h('div', { class: 'bar' }, find), tabs, note, body);
+  const drawAtlas = () => {
+    const q = find.value.trim().toLowerCase();
+    const pts = (atlas || []).filter(p => {
+      if (filter === 'edible' && !p.edible) return false;
+      if (filter === 'medicinal' && !p.medicinal) return false;
+      if (filter === 'toxic' && !p.dangers) return false;
+      return !q || (p.title + ' ' + p.scientific + ' ' + (p.common || []).join(' ') + ' ' + p.umap).toLowerCase().includes(q);
+    });
+    note.textContent = t('{0} observation(s) sur la maille du cercle (arrondie à ~1 km, sans GPS fin)', pts.length);
+    const flt = h('div', { class: 'bar' }, [['', 'Toutes'], ['edible', 'Comestible'], ['medicinal', 'Médicinale'], ['toxic', 'Toxique']].map(([k, l]) =>
+      h('button', { class: 'ghost', 'aria-pressed': String(filter === k), onclick: () => { filter = k; draw(); } }, t(l))));
+    // Mini-carte SVG autonome (hors ligne) projetant les mailles UMAP du cercle.
+    let svg = '';
+    if (pts.length) {
+      const lats = pts.map(p => p.lat), lons = pts.map(p => p.lon);
+      const minLa = Math.min(...lats) - 0.05, maxLa = Math.max(...lats) + 0.05, minLo = Math.min(...lons) - 0.05, maxLo = Math.max(...lons) + 0.05;
+      const NS = 'http://www.w3.org/2000/svg', el = document.createElementNS(NS, 'svg');
+      el.setAttribute('viewBox', '0 0 320 140'); el.setAttribute('role', 'img'); el.setAttribute('aria-label', t('Atlas du cercle'));
+      el.style.cssText = 'width:100%;max-height:10rem;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);margin-block:.5rem';
+      for (const p of pts) {
+        const cx = 16 + ((p.lon - minLo) / (maxLo - minLo || 1)) * 288, cy = 124 - ((p.lat - minLa) / (maxLa - minLa || 1)) * 108;
+        const c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', cx.toFixed(1)); c.setAttribute('cy', cy.toFixed(1)); c.setAttribute('r', '5');
+        c.setAttribute('fill', p.dangers ? '#c0392b' : p.edible ? '#27ae60' : '#2980b9');
+        const ti = document.createElementNS(NS, 'title'); ti.textContent = `${p.title} (${p.umap})`; c.append(ti); el.append(c);
+      }
+      svg = el;
+    }
+    const cards = pts.length ? h('div', { class: 'pl-cards' }, pts.map(p => h('a', { class: 'mm-card pl-card', href: '#/mediatheque?k=plant' },
+      h('b', {}, p.title || p.scientific), h('small', { class: 'muted' }, [p.scientific, p.umap, p.author_label].filter(Boolean).join(' · ')),
+      h('small', {}, [p.edible ? '🍽 ' + t('Comestible') : '', p.medicinal ? '💊 ' + t('Médicinale') : '', p.dangers ? '☠ ' + t('Toxique') : '', p.paid_by_me ? '✓' : ''].filter(Boolean).join(' · ')))))
+      : h('p', { class: 'muted' }, t('Aucune plante partagée avec zone géographique pour l’instant.'));
+    body.replaceChildren(flt, svg, cards);
+  };
   const draw = () => {
+    tabs.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.m === mode)));
+    if (mode === 'atlas') return drawAtlas();
     const q = find.value.trim().toLowerCase(), shown = items.filter(i => !q || (i.name + ' ' + i.scientific).toLowerCase().includes(q));
     note.textContent = items.length ? t('{0} plante(s)', items.length) : '';
-    body.replaceChildren(...(shown.length ? shown.map(i => {
+    body.replaceChildren(h('div', { class: 'pl-cards' }, ...(shown.length ? shown.map(i => {
       const img = h('img', { alt: '', loading: 'lazy' });
       K.blob(i.photo, true).then(u => { img.src = u; }, () => img.remove());
       return h('a', { class: 'mm-card pl-card', href: '#/plante?path=' + encodeURIComponent(i.photo) }, img, h('b', {}, i.name || t('Plante sans nom')),
         h('small', { class: 'muted' }, i.scientific || ''),
         h('small', {}, [i.edible ? '🍽 ' + t('Comestible') : '', i.medicinal ? '💊 ' + t('Médicinale') : '', i.toxic ? '☠ ' + t('Toxique') : ''].filter(Boolean).join(' · ')));
-    }) : [h('p', { class: 'muted' }, items.length ? t('Aucune plante ne correspond.') : t('Aucune fiche pour l’instant : ouvrez une photo de plante dans la visionneuse et choisissez « Fiche plante ».'))]));
+    }) : [h('p', { class: 'muted' }, items.length ? t('Aucune plante ne correspond.') : t('Aucune fiche pour l’instant : ouvrez une photo de plante dans la visionneuse et choisissez « Fiche plante ».'))])));
   };
   try { items = (await K.api('/api/v1/ucloud/plants')).items || []; } catch (e) { note.textContent = e.message; }
   draw();
@@ -76,7 +115,42 @@ export default async function plant(root, K, qs) {
       h('section', { class: 'card wide' }, h('h3', {}, t('Ce qu’on en sait')), src,
         h('div', { class: 'pl-grid' }, FIELDS.flatMap(([id, label]) => field(id, label, f[id] || '', id === 'notes' || id === 'description' ? 3 : 5)))),
       h('p', { class: 'pl-save' }, h('button', { type: 'button', onclick: ev => run(ev.target, () => save(false), t('Fiche de la plante enregistrée')) }, t('Enregistrer la fiche')),
-        ' ', h('a', { class: 'btn ghost', href: '#/plantes' }, t('Toutes mes plantes'))));
+        ' ', h('a', { class: 'btn ghost', href: '#/plantes' }, t('Toutes mes plantes'))),
+      sp.scientific ? publishBox(sp) : null);
+  };
+  const publishBox = sp => {
+    const pf = v.parent_fiche || null;
+    const minPct = pf ? Math.ceil((pf.remix_min_bps || 0) / 100) : 0;
+    const lic = h('select', { 'aria-label': t('Licence') }, [['CC-BY-SA-4.0', 'CC BY-SA'], ['CC-BY-4.0', 'CC BY'], ['CC0-1.0', 'CC0']].map(([val, l]) => h('option', { value: val, selected: pf?.spdx === val }, l)));
+    const price = h('input', { type: 'number', min: '0', step: '0.1', value: '0', 'aria-label': t('Prix suggéré (Ẑen)') });
+    const shareIn = pf ? h('input', { type: 'number', min: String(minPct), max: '100', value: String(Math.max(40, minPct)), 'aria-label': t('Part du photographe (%)') }) : null;
+    const done = h('span', {});
+    const pub = async ev => {
+      const b = ev.target; b.disabled = true;
+      try {
+        await save(false);
+        const dz = Math.round(parseFloat(price.value || '0') * 10);
+        const body = {
+          title: sp.common?.[0] ? `${sp.scientific} — ${sp.common[0]}` : sp.scientific,
+          kind: 'plant', spdx: lic.value, allow_remix: true, remix_min_bps: 3000,
+          pricing: dz > 0 ? { mode: 'hat', suggested_deci_zen: dz } : { mode: 'free' },
+          plant_from_photo: path,
+          ...(pf ? { parent_fiche_path: pf.path, parent_share_bps: Math.round(parseFloat(shareIn.value || String(minPct)) * 100) } : { file_path: path }),
+        };
+        await K.api('/api/v1/ucloud/media/remix', { method: 'POST', body });
+        K.toast(t('Fiche plante publiée dans votre médiathèque'), 1);
+        done.replaceChildren(' ', h('a', { class: 'btn ghost', href: '#/mediatheque?k=plant' }, t('Ouvrir dans la médiathèque')));
+      } catch (e) { K.toast(e.message, 0); }
+      b.disabled = false;
+    };
+    return h('section', { class: 'card wide' }, h('h3', {}, t('Publier dans le commun')),
+      h('p', { class: 'muted' }, t('Vos notes personnelles et votre position GPS exacte ne sont jamais publiées.')),
+      pf ? h('p', { class: 'muted' }, t('Photo d’origine par {0} ({1}, minimum {2} %) : publiée sans dupliquer l’image.', pf.author_label || '…', pf.spdx, minPct)) : null,
+      h('div', { class: 'pl-grid' },
+        h('label', {}, t('Licence')), lic,
+        h('label', {}, t('Prix suggéré (Ẑen, 0 = libre)')), price,
+        ...(pf ? [h('label', {}, t('Part du photographe (%)')), shareIn] : [])),
+      h('p', {}, h('button', { type: 'button', class: 'ghost', onclick: pub }, '🌿 ' + t('Publier dans le commun')), done));
   };
   const save = wiki => {
     const sci = val('sci');

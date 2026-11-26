@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use astro_dav::{BlobStore, DavState};
+use astro_economy::cascade::{CommonsBlock, PlantData, RemixKind};
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -157,18 +158,45 @@ fn sibling(dir: &str, name: &Value) -> Option<String> {
     name.as_str().filter(|n| !n.is_empty() && !n.contains('/') && *n != "." && *n != "..").map(|n| format!("{dir}/{n}"))
 }
 
+/// Extrait et désérialise le bloc `commons` (DAG de création, licence, répartition) d'une fiche `media/v1`, s'il existe.
+pub fn extract_commons(fiche: &Value) -> Option<CommonsBlock> {
+    let v = fiche.get("commons").filter(|v| v.is_object())?;
+    serde_json::from_value(v.clone()).ok()
+}
+
+/// Extrait et désérialise le bloc botanique `plant` d'une fiche `media/v1`, s'il existe.
+pub fn extract_plant(fiche: &Value) -> Option<PlantData> {
+    let v = fiche.get("plant").filter(|v| v.is_object())?;
+    serde_json::from_value(v.clone()).ok()
+}
+
 /// Ce que l'écran affiche d'une fiche : un résumé borné (pas la fiche entière, qui porte jusqu'à 50 personnes). `None` : ce
 /// n'est pas une fiche `media/v1` lisible.
 pub fn summarize(fiche: &Value, fiche_path: &str) -> Option<Value> {
     if fiche["schema"] != "media/v1" {
         return None;
     }
-    let kind = fiche["type"].as_str().filter(|t| ["film", "episode", "video", "music"].contains(t))?;
+    let kind = fiche["type"].as_str().filter(|t| ["film", "episode", "video", "music", "photo", "plant", "document", "article"].contains(t))?;
     let dir = parent_of(fiche_path);
-    let path = sibling(dir, &fiche["file"])?;
+    let commons = extract_commons(fiche);
+    let is_recipe = commons.as_ref().is_some_and(|c| matches!(c.remix, Some(RemixKind::Recipe { .. })));
+    let path = match sibling(dir, &fiche["file"]) {
+        Some(p) => p,
+        None if (is_recipe || kind == "article") && fiche.get("file").is_none_or(Value::is_null) => fiche_path.to_owned(),
+        None => return None,
+    };
     let title = clip(&fiche["title"], 300)?;
     let art: serde_json::Map<String, Value> = ART.iter().filter_map(|role| sibling(dir, &fiche["artwork"][*role]).map(|p| ((*role).to_owned(), Value::String(p)))).collect();
-    let subtitles: Vec<Value> = fiche["subtitles"].as_array().into_iter().flatten().take(12).filter_map(|s| Some(json!({ "path": sibling(dir, &s["file"])?, "lang": clip(&s["lang"], 8) }))).collect();
+    let subtitles: Vec<Value> = fiche["subtitles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(12)
+        .filter_map(|s| {
+            let p = sibling(dir, &s["file"]).or_else(|| s["path"].as_str().filter(|x| x.starts_with('/') && !x.contains("..")).map(str::to_owned))?;
+            Some(json!({ "path": p, "lang": clip(&s["lang"], 8) }))
+        })
+        .collect();
     let names = |v: &Value, n: usize| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|x| clip(&x["name"], 80)).take(n).collect() };
     let directors: Vec<String> = fiche["people"]["crew"].as_array().into_iter().flatten().filter(|c| c["job"] == "Director").filter_map(|c| clip(&c["name"], 80)).take(3).collect();
     let t = &fiche["technical"];
@@ -186,6 +214,9 @@ pub fn summarize(fiche: &Value, fiche_path: &str) -> Option<Value> {
         "level": clip(&fiche["sharing"]["level"], 16).unwrap_or_else(|| "private".into()),
         "rights": clip(&fiche["source"]["rights"], 24), "added": fiche["generated_at"].as_i64(),
     });
+    if is_recipe {
+        out["recipe"] = json!(true);
+    }
     if t["video"].is_object() {
         out["video"] = json!({ "width": t["video"]["width"].as_i64(), "height": t["video"]["height"].as_i64() });
     }
@@ -198,19 +229,58 @@ pub fn summarize(fiche: &Value, fiche_path: &str) -> Option<Value> {
             "track": m["track"].as_i64(), "composer": clip(&m["composer"], 200), "mix_start_s": m["from_mix"]["start_s"].as_i64(),
         });
     }
+    if let Some(p) = extract_plant(fiche) {
+        out["plant"] = json!({
+            "scientific": p.scientific.chars().take(200).collect::<String>(),
+            "common": p.common.into_iter().take(8).map(|c| c.chars().take(120).collect::<String>()).collect::<Vec<_>>(),
+            "family": p.family.chars().take(120).collect::<String>(),
+            "umap": p.umap,
+            "observed_at": p.observed_at,
+            "edible": p.edible.chars().take(300).collect::<String>(),
+            "medicinal": p.medicinal.chars().take(300).collect::<String>(),
+            "dangers": p.dangers.chars().take(300).collect::<String>(),
+        });
+    }
+    if let Some(c) = commons {
+        let spdx = match &c.rights {
+            astro_economy::cascade::Rights::OpenCommon { spdx, .. } => Some(spdx.as_str()),
+            astro_economy::cascade::Rights::PrivateCopy => None,
+        };
+        out["commons"] = json!({
+            "author_pubkey": c.author_pubkey,
+            "content_sha": c.content_sha,
+            "spdx": spdx,
+            "signed": c.verify_signature(),
+            "generation": c.generation,
+            "sources": c.sources.len(),
+            "rights": c.rights,
+            "pricing": c.pricing,
+        });
+    }
     Some(out)
 }
 
-/// Texte cherchable d'une fiche résumée : titres, résumé, année, genres, mots-clés, personnes, série, musique.
+/// Texte cherchable d'une fiche résumée : titres, résumé, année, genres, mots-clés, personnes, série, musique, plante.
 pub fn search_body(item: &Value) -> String {
     let mut parts: Vec<String> = ["title", "original_title", "overview"].iter().filter_map(|k| item[*k].as_str().map(str::to_owned)).collect();
     parts.extend(item["year"].as_i64().map(|y| y.to_string()));
     for k in ["genres", "keywords", "cast", "directors"] {
         parts.extend(item[k].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)));
     }
-    for (o, k) in [("series", "name"), ("music", "artist"), ("music", "album"), ("music", "album_artist"), ("music", "composer")] {
-        parts.extend(item[o][k].as_str().map(str::to_owned));
+    for (o, k) in [
+        ("series", "name"),
+        ("music", "artist"),
+        ("music", "album"),
+        ("music", "album_artist"),
+        ("music", "composer"),
+        ("plant", "scientific"),
+        ("plant", "family"),
+        ("plant", "edible"),
+        ("plant", "dangers"),
+    ] {
+        parts.extend(item[o][k].as_str().filter(|s| !s.is_empty()).map(str::to_owned));
     }
+    parts.extend(item["plant"]["common"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)));
     parts.join(" · ")
 }
 
@@ -467,10 +537,16 @@ pub async fn make_fiche<B: BlobStore>(dav: &Arc<DavState<B>>, owner: &str, path:
 
 /// Réécrit la fiche à sa place (même chiffrement, même quota) : seule la fiche change de CID, jamais le fichier décrit.
 pub(crate) async fn write_fiche<B: BlobStore>(dav: &Arc<DavState<B>>, owner: &str, fiche_path: &str, fiche: &Value) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
     let body = serde_json::to_vec_pretty(fiche).map_err(|e| e.to_string())?;
+    let file_sha = hex::encode(Sha256::digest(&body));
     let (dir, name) = (parent_of(fiche_path), fiche_path.rsplit('/').next().unwrap_or_default());
     let dir = if dir.is_empty() { "/" } else { dir };
-    astro_dav::ingest::replace(dav, owner, dir, name, Some("application/json"), body.as_slice()).await.map(|_| ()).map_err(|e| e.to_string())
+    astro_dav::ingest::replace(dav, owner, dir, name, Some("application/json"), body.as_slice()).await.map(|_| ()).map_err(|e| e.to_string())?;
+    if let Some(work_sha) = fiche["commons"]["content_sha"].as_str() {
+        crate::cascade_share::record_fiche_work_sha(&dav.db, &file_sha, work_sha).await;
+    }
+    Ok(())
 }
 
 /// Médiathèque de `owner` : `{ items, pending }`. Les fiches nouvelles ou modifiées sont relues (au plus [`MAX_PARSE`] par
@@ -693,5 +769,72 @@ mod tests {
         let mut ep = json!({ "schema": "media/v1", "type": "episode", "file": "e.mp4", "title": "Pilote", "series": { "name": "S", "season": 1, "episode": 1, "networks": ["N"] } });
         apply_edit(&mut ep, &json!({ "series": { "name": "Série", "season": "2", "episode": 5 } })).unwrap();
         assert_eq!(ep["series"], json!({ "name": "Série", "season": 2, "episode": 5, "networks": ["N"] }));
+    }
+
+    #[test]
+    fn botanical_recipe_remix_fiche_summarizes_and_searches_without_duplicating_media() {
+        use astro_economy::cascade::{Bps, CompositionTrack, Credit, DeciZen, PayoutShare, PricingMode, Rights, SourceRef, SourceRole, SplitRule};
+
+        let alice_sk = [0xA1u8; 32];
+        let bob_sk = [0xB2u8; 32];
+        let alice_pk = astro_nostr_proto::pubkey_of(&alice_sk).unwrap();
+        let bob_pk = astro_nostr_proto::pubkey_of(&bob_sk).unwrap();
+        let alice_sha = hex::encode([0x11u8; 32]);
+        let bob_sha = hex::encode([0x22u8; 32]);
+
+        let mut commons = CommonsBlock {
+            v: 1,
+            author_pubkey: bob_pk.clone(),
+            content_sha: bob_sha,
+            rights: Rights::OpenCommon { spdx: "CC-BY-SA-4.0".into(), allow_remix: true, remix_min_bps: Bps(3_000) },
+            pricing: PricingMode::Fixed { price_deci_zen: DeciZen(25) },
+            split: SplitRule::default(),
+            credits: vec![Credit { pubkey: bob_pk.clone(), role: "identification-botanique".into(), bps: Bps(6_000), attest_sig: None }],
+            sources: vec![SourceRef {
+                sha_plain: alice_sha.clone(),
+                cid: "bafkreialice".into(),
+                author_pubkey: alice_pk.clone(),
+                event_id: None,
+                role: SourceRole::PrimaryMedia,
+                share_bps: Bps(4_000),
+            }],
+            generation: 1,
+            remix: Some(RemixKind::Recipe {
+                tracks: vec![CompositionTrack { source_sha: alice_sha, stream: "image".into(), start_ms: None, end_ms: None, offset_ms: 0, lang: None }],
+            }),
+            flattened_payouts: vec![PayoutShare { pubkey: alice_pk, bps: Bps(4_000) }, PayoutShare { pubkey: bob_pk, bps: Bps(6_000) }],
+            signature: None,
+        };
+        commons.sign(&bob_sk).unwrap();
+
+        let plant = PlantData {
+            scientific: "Urtica dioica".into(),
+            common: vec!["Grande ortie".into()],
+            family: "Urticaceae".into(),
+            umap: Some("_43.61_1.44".into()),
+            edible: "Jeunes pousses cuites.".into(),
+            ..Default::default()
+        };
+
+        let fiche = json!({
+            "schema": "media/v1",
+            "type": "plant",
+            "title": "Urtica dioica — Ortie dioïque",
+            "plant": plant,
+            "commons": commons,
+            "sharing": { "level": "circle" }
+        });
+        let s = summarize(&fiche, "/Plantes/urtica_dioica.media.json").unwrap();
+        assert_eq!(s["path"], "/Plantes/urtica_dioica.media.json", "recette sans fichier dupliqué : pointe sur la fiche");
+        assert_eq!(s["recipe"], json!(true));
+        assert_eq!(s["commons"]["signed"], json!(true));
+        assert_eq!(s["commons"]["generation"], json!(1));
+        assert_eq!(s["commons"]["sources"], json!(1));
+        assert_eq!(s["plant"]["scientific"], json!("Urtica dioica"));
+        let body = search_body(&s);
+        assert!(body.contains("Urtica dioica") && body.contains("Grande ortie") && body.contains("Urticaceae"), "{body}");
+
+        // Une fiche non-recette sans `file` reste refusée.
+        assert!(summarize(&json!({ "schema": "media/v1", "type": "plant", "title": "Sans fichier" }), "/Plantes/x.media.json").is_none());
     }
 }

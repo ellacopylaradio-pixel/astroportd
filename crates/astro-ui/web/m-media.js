@@ -3,6 +3,8 @@
 // signe : avance rapide sans charger le fichier entier), file d'écoute qui continue quand on change d'écran, fiches corrigées
 // et enrichies ici (titre, genres, mots-clés, distribution, album…), recherche sur tout ce qu'elles disent.
 
+import { makeCascadeUi } from './m-media-cascade.js';
+
 const A = '/api/v1/ucloud/media';
 const norm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 // Durée lisible : « 2 h 05 », « 42 min », « 4:05 » (un morceau).
@@ -71,19 +73,21 @@ async function watch(K, root, it) {
 export default async function media(root, K, q) {
   const { h, t, api, toast } = K;
   const css = h('link', { rel: 'stylesheet', href: '/ui/m-media.css' }); document.head.append(css); K.cleanup(() => css.remove());
-  const KINDS = [['', 'Tout'], ['film', 'Films'], ['episode', 'Séries'], ['video', 'Vidéos'], ['music', 'Musique'], ['friends', 'Chez mes amis']];
+  const KINDS = [['', 'Tout'], ['film', 'Films'], ['episode', 'Séries'], ['video', 'Vidéos'], ['music', 'Musique'], ['plant', 'Plantes'], ['friends', 'Chez mes amis'], ['earnings', 'Mes retombées']];
   let items = [], kind = q.get('k') || '', open = null, friends = null, polling = false, safety = {};
+  const LICENCES = [['', 'Aucune licence'], ['CC-BY-4.0', 'CC BY'], ['CC-BY-SA-4.0', 'CC BY-SA'], ['CC-BY-NC-4.0', 'CC BY-NC'], ['CC-BY-NC-SA-4.0', 'CC BY-NC-SA'], ['CC0-1.0', 'CC0 (domaine public)']];
+  const art = it => it.art?.poster || it.art?.cover || it.art?.still || it.art?.backdrop || (it.type === 'photo' ? it.path : null);
+  const cascade = makeCascadeUi(root, K, { licences: LICENCES, art, load: () => load(), detail: it => detail(it) });
   const find = h('input', { type: 'search', placeholder: t('Titre, artiste, genre, acteur, mot-clé…'), 'aria-label': t('Rechercher dans la médiathèque'), maxlength: 120, oninput: () => draw() });
   const kinds = h('div', { class: 'bar mm-kinds', role: 'group', 'aria-label': t('Type') }, KINDS.map(([k, l]) => h('button', { class: 'ghost', 'data-k': k, onclick: () => { kind = k; open = null; draw(); } }, t(l))));
   const body = h('div', { class: 'mm-body' }), note = h('p', { class: 'muted', role: 'status' });
-  root.replaceChildren(h('div', { class: 'bar' }, find), kinds, note, body);
+  root.replaceChildren(h('div', { class: 'bar' }, find, cascade.slateBtn), kinds, note, body);
 
   const thumb = (path, emoji) => {
     const img = h('img', { alt: '', loading: 'lazy' });
     if (path) K.blob(path, true).then(u => { img.src = u; }, () => img.replaceWith(h('span', { class: 'mm-ph', 'aria-hidden': 'true' }, emoji)));
     return path ? img : h('span', { class: 'mm-ph', 'aria-hidden': 'true' }, emoji);
   };
-  const art = it => it.art?.poster || it.art?.cover || it.art?.still || it.art?.backdrop;
   // Copies vérifiées chez des amis d'un fichier partagé : pastille discrète dans la liste, phrase dans la fiche.
   const sfOf = it => (it.level === 'circle' ? safety[it.path] : null);
   const dot = it => { const f = sfOf(it); return !f ? '' : f.safe ? '🟢 ' : f.copies || f.packed ? '🟡 ' : '⏳ '; };
@@ -99,12 +103,12 @@ export default async function media(root, K, q) {
   };
   const card = (title, sub, path, emoji, go) => h('button', { class: 'mm-card', onclick: go }, thumb(path, emoji), h('b', {}, title), h('small', { class: 'muted' }, sub || ''));
   const back = () => h('button', { class: 'ghost', onclick: () => { open = null; draw(); } }, '← ' + t('Médiathèque'));
-  const hay = it => norm([it.title, it.original_title, it.year, it.overview, it.genres, it.keywords, it.cast, it.directors, it.series?.name, it.music?.artist, it.music?.album, it.music?.album_artist, it.music?.composer].flat().join(' '));
+  const hay = it => norm([it.title, it.original_title, it.year, it.overview, it.genres, it.keywords, it.cast, it.directors, it.series?.name, it.music?.artist, it.music?.album, it.music?.album_artist, it.music?.composer, it.plant?.scientific, it.plant?.common, it.plant?.family, it.commons?.spdx].flat().join(' '));
+  const emojiOf = t0 => ({ music: '🎵', plant: '🌿', photo: '🖼', document: '📄', article: '✍' }[t0] || '🎬');
 
   async function load() {
     try {
-      // Mise à l'abri des fichiers partagés : une seule lecture pour toute la médiathèque.
-      const [r, sf] = await Promise.all([api(A), api(A + '/safety').catch(() => null)]);
+      const [r, sf] = await Promise.all([api(A), api(A + '/safety').catch(() => null), cascade.refreshSlate()]);
       items = r.items; safety = sf?.files || {};
       note.textContent = r.pending ? t('{0} fiche(s) en cours de lecture…', r.pending) : '';
       if (r.pending) setTimeout(() => root.isConnected && load(), 1500);
@@ -119,25 +123,25 @@ export default async function media(root, K, q) {
     kinds.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.k === kind)));
     if (open) return open();
     if (kind === 'friends') return drawFriends();
+    if (kind === 'earnings') return cascade.drawEarnings(body);
     const list = shown();
     if (!items.length) return body.replaceChildren(h('div', { class: 'card' }, h('h2', {}, t('Votre médiathèque est vide')),
       h('p', {}, t('Les films, séries, vidéos et morceaux ajoutés avec leur fiche (outil « media » de la station, ou « Ouvrir avec » depuis Firefox) apparaissent ici, prêts à être lus.'))));
     if (!list.length) return body.replaceChildren(h('p', { class: 'muted' }, t('Rien ne correspond à cette recherche.')));
-    const films = list.filter(i => i.type === 'film' || i.type === 'video').sort(byTitle), eps = list.filter(i => i.type === 'episode'), songs = list.filter(i => i.type === 'music');
+    const films = list.filter(i => i.type === 'film' || i.type === 'video').sort(byTitle), eps = list.filter(i => i.type === 'episode'), songs = list.filter(i => i.type === 'music'), commons = list.filter(i => ['plant', 'photo', 'document', 'article'].includes(i.type)).sort(byTitle);
     const series = [...new Set(eps.map(i => i.series?.name || i.title))].sort();
     const albums = [...new Set(songs.map(albumKey))].sort();
     const grid = (title, cards) => cards.length ? h('section', {}, h('h2', {}, title, ' ', h('small', { class: 'muted' }, String(cards.length))), h('div', { class: 'mm-grid' }, cards)) : '';
     body.replaceChildren(
       grid(t('Films et vidéos'), films.map(it => card(it.title, dot(it) + [it.year, dur(it.duration_s)].filter(Boolean).join(' · '), art(it), '🎬', () => detail(it)))),
       grid(t('Séries'), series.map(n => { const e = eps.filter(i => (i.series?.name || i.title) === n); return card(n, t('{0} épisode(s)', e.length), e.map(art).find(Boolean), '📺', () => show(n, e)); })),
-      grid(t('Musique'), albums.map(k => { const s = songs.filter(i => albumKey(i) === k), [who, alb] = k.split('\n'); return card(alb || t('Morceaux'), who, s.map(art).find(Boolean), '🎵', () => album(k, s)); })));
+      grid(t('Musique'), albums.map(k => { const s = songs.filter(i => albumKey(i) === k), [who, alb] = k.split('\n'); return card(alb || t('Morceaux'), who, s.map(art).find(Boolean), '🎵', () => album(k, s)); })),
+      grid(t('Plantes et communs'), commons.map(it => card(it.title, [it.plant?.scientific, it.commons?.spdx].filter(Boolean).join(' · '), art(it), emojiOf(it.type), () => detail(it)))));
   }
 
-  const meta = it => [it.year, dur(it.duration_s), ...(it.genres || [])].filter(Boolean).join(' · ');
+  const meta = it => [it.year, dur(it.duration_s), ...(it.genres || []), it.plant?.scientific, it.commons?.spdx].filter(Boolean).join(' · ');
   const shared = it => (it.level === 'circle' ? h('span', { class: 'pill ok' }, t('Partagé avec mes amis')) : '');
   const play = it => (it.type === 'music' ? listen(K, [it]) : watch(K, root, it));
-  // Créer la fiche d'une vidéo à soi, avec la licence choisie (celle des étiquettes du partage) : sans fiche, pas de partage.
-  const LICENCES = [['', 'Aucune licence'], ['CC-BY-4.0', 'CC BY'], ['CC-BY-SA-4.0', 'CC BY-SA'], ['CC-BY-NC-4.0', 'CC BY-NC'], ['CC-BY-NC-SA-4.0', 'CC BY-NC-SA'], ['CC0-1.0', 'CC0 (domaine public)']];
   const make = it => {
     const lic = h('select', { 'aria-label': t('Licence') }, LICENCES.map(([v, l]) => h('option', { value: v }, t(l))));
     return h('span', {}, lic, ' ', h('button', { class: 'ghost', onclick: async ev => {
@@ -177,10 +181,16 @@ export default async function media(root, K, q) {
   }
 
   function detail(it) {
-    open = () => body.replaceChildren(back(), h('article', { class: 'card mm-detail' }, thumb(art(it), it.type === 'music' ? '🎵' : '🎬'),
-      h('div', {}, h('h2', {}, it.title, ' ', shared(it)), h('p', { class: 'muted' }, meta(it)), it.original_title && it.original_title !== it.title ? h('p', { class: 'muted' }, it.original_title) : '',
-        h('p', {}, h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')), ' ', edit(it)), it.bare ? h('p', { class: 'muted' }, t('Créez la fiche de cette vidéo pour la corriger et la partager avec vos amis.')) : shareBox([it]), safeLine(it),
-        it.overview ? h('p', {}, it.overview) : '', line('Réalisation', it.directors), line('Avec', it.cast), line('Mots-clés', it.keywords))));
+    const canPlay = it.path && !it.recipe && !['photo', 'plant', 'document', 'article'].includes(it.type);
+    const openDoc = it.type === 'document' && it.path ? h('button', { onclick: async () => { try { window.open(await K.blob(it.path, false), '_blank'); } catch (e) { toast(e.message, 0); } } }, '📄 ' + t('Ouvrir le document')) : '';
+    open = () => {
+      const visual = thumb(art(it), emojiOf(it.type));
+      body.replaceChildren(back(), h('article', { class: 'card mm-detail' }, visual,
+        h('div', {}, h('h2', {}, it.title, ' ', shared(it)), h('p', { class: 'muted' }, meta(it)), it.original_title && it.original_title !== it.title ? h('p', { class: 'muted' }, it.original_title) : '',
+          h('p', {}, canPlay ? h('button', { onclick: () => play(it) }, '▶ ' + t('Lire')) : openDoc, (canPlay || openDoc) ? ' ' : '', edit(it)), it.bare ? h('p', { class: 'muted' }, t('Créez la fiche de cette vidéo pour la corriger et la partager avec vos amis.')) : [shareBox([it]), cascade.commonsBox(it, visual)], safeLine(it),
+          it.overview ? h('p', {}, it.overview) : '', line('Réalisation', it.directors), line('Avec', it.cast), line('Mots-clés', it.keywords),
+          it.plant ? [line('Famille', it.plant.family), line('Comestible', it.plant.edible), line('Dangers', it.plant.dangers)] : '')));
+    };
     draw();
   }
 

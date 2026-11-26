@@ -204,7 +204,8 @@ impl<B: BlobStore> MediaShare<B> {
     async fn target(&self, owner: &str, fiche_path: &str) -> Result<Target, String> {
         let fiche = crate::media::read_fiche(&self.dav, owner, fiche_path).await?;
         let summary = crate::media::summarize(&fiche, fiche_path).ok_or("fiche incomplète")?;
-        let file = summary["path"].as_str().unwrap_or_default().to_owned();
+        let is_recipe = summary["recipe"].as_bool() == Some(true) || summary["path"].is_null();
+        let file = if is_recipe { fiche_path.to_owned() } else { summary["path"].as_str().unwrap_or_default().to_owned() };
         let cover_path = summary["art"]["cover"].as_str().map(str::to_owned);
         let (o, f) = (owner.to_owned(), file.clone());
         let (row, cover): (Option<(String, Option<String>)>, Option<String>) = self
@@ -222,7 +223,11 @@ impl<B: BlobStore> MediaShare<B> {
             .await
             .map_err(|e| e.to_string())?;
         let (cid, sha) = row.ok_or("le fichier décrit par la fiche est introuvable")?;
-        let x = sha.filter(|s| s.len() == 64).or_else(|| s(&fiche["technical"]["sha256"]).map(str::to_owned)).ok_or("empreinte du fichier inconnue")?;
+        let x = if is_recipe {
+            crate::media::extract_commons(&fiche).map(|c| c.content_sha).or(sha).filter(|s| s.len() == 64).ok_or("empreinte de la recette inconnue")?
+        } else {
+            sha.filter(|s| s.len() == 64).or_else(|| s(&fiche["technical"]["sha256"]).map(str::to_owned)).ok_or("empreinte du fichier inconnue")?
+        };
         Ok(Target { fiche_path: fiche_path.to_owned(), fiche, cid, x, cover })
     }
 
@@ -291,7 +296,7 @@ impl<B: BlobStore> MediaShare<B> {
         Ok(json!({ "shared": on, "events": ids.len(), "list": list.map(|l| l.d()) }))
     }
 
-    /// Trace d'un partage : `{ shared, from, copies: [{label, at}], reshared: [label] }`.
+    /// Trace d'un partage : `{ shared, from, copies: [{label, at}], reshared: [label], chain, official }`.
     pub async fn trace(&self, owner: &str, fiche_path: &str) -> Result<Value, String> {
         let t = self.target(owner, fiche_path).await?;
         let shared = !self.my_events(owner, &t.x).await.is_empty();
@@ -318,10 +323,94 @@ impl<B: BlobStore> MediaShare<B> {
             })
             .await
             .map_err(|e| e.to_string())?;
+        let chain = crate::cascade_share::load_chain(&self.dav.db, owner, &t.x).await.map(|c| {
+            json!({
+                "depth": c.depth(),
+                "origin_pubkey": c.origin_pubkey,
+                "hops": c.hops.iter().map(|h| json!({ "rank": h.rank, "from_pubkey": h.from_pubkey, "to_pubkey": h.to_pubkey, "at": h.at })).collect::<Vec<_>>(),
+            })
+        });
+        let official = crate::cascade_share::official_stats(&self.dav.db, owner, &t.x, now()).await.ok();
         Ok(json!({
             "shared": shared, "from": from, "reshared": reshared,
             "copies": copies.into_iter().map(|(label, at)| json!({ "label": label, "at": at })).collect::<Vec<_>>(),
+            "chain": chain,
+            "official": official,
         }))
+    }
+
+    /// Résout l'empreinte d'œuvre (`work_sha`) d'une fiche : fichier média ou `commons.content_sha` pour un remix recette.
+    async fn work_sha_of(&self, owner: &str, fiche_path: &str) -> Result<(Value, String), String> {
+        let fiche = crate::media::read_fiche(&self.dav, owner, fiche_path).await?;
+        if let Some(c) = crate::media::extract_commons(&fiche) {
+            return Ok((fiche, c.content_sha));
+        }
+        let t = self.target(owner, fiche_path).await?;
+        Ok((t.fiche, t.x))
+    }
+
+    /// Chaîne N¹, liste officielle (filtrée WoT), bloc `commons`, audit DAG local, statut de paiement et libellés lisibles.
+    pub async fn chain_info(&self, owner: &str, fiche_path: &str) -> Result<Value, String> {
+        let (fiche, work_sha) = self.work_sha_of(owner, fiche_path).await?;
+        let commons = crate::media::extract_commons(&fiche);
+        let chain = crate::cascade_share::load_chain(&self.dav.db, owner, &work_sha).await;
+        let official = crate::cascade_share::official_stats(&self.dav.db, owner, &work_sha, now()).await?;
+        let paid_by_me = crate::cascade_share::paid_by_me(&self.dav.db, owner, &work_sha).await;
+        let can_attest = commons.as_ref().is_some_and(|c| c.credits.iter().any(|cr| cr.pubkey == owner && cr.attest_sig.is_none()));
+        let dag_verified = match &commons {
+            Some(c) => crate::cascade_share::verify_local_dag(&self.dav, owner, c).await,
+            None => None,
+        };
+        let source_photo_path = match &commons {
+            Some(c) => crate::cascade_share::source_photo_path_of(&self.dav.db, owner, c).await,
+            None => None,
+        };
+        let mut pks = Vec::new();
+        if let Some(c) = &commons {
+            pks.push(c.author_pubkey.clone());
+            pks.extend(c.credits.iter().map(|cr| cr.pubkey.clone()));
+            pks.extend(c.flattened_payouts.iter().map(|p| p.pubkey.clone()));
+        }
+        if let Some(ch) = &chain {
+            pks.push(ch.origin_pubkey.clone());
+            for h in &ch.hops {
+                pks.push(h.from_pubkey.clone());
+                pks.push(h.to_pubkey.clone());
+            }
+        }
+        let labels = crate::cascade_share::resolve_labels(&self.dav.db, &pks).await;
+        Ok(json!({
+            "fiche_path": fiche_path,
+            "work_sha": work_sha,
+            "commons": commons,
+            "chain": chain,
+            "official": official,
+            "can_attest": can_attest,
+            "paid_by_me": paid_by_me,
+            "dag_verified": dag_verified,
+            "source_photo_path": source_photo_path,
+            "labels": labels,
+        }))
+    }
+
+    /// Inscrit (`register = true`) ou retire (`false`) `owner` sur la liste officielle de l'œuvre décrite par `fiche_path`.
+    pub async fn register_official(&self, owner: &str, fiche_path: &str, register: bool) -> Result<Value, String> {
+        let (_, work_sha) = self.work_sha_of(owner, fiche_path).await?;
+        if register {
+            crate::cascade_share::register_official(&self.dav.db, &self.keys, &self.publish, owner, &work_sha).await
+        } else {
+            crate::cascade_share::unregister_official(&self.keys, &self.publish, owner, &work_sha).await
+        }
+    }
+
+    /// Publie une fiche commune ou un remix « recette » signé dans l'uCloud de `owner` (Lot 4).
+    pub async fn publish_remix(&self, owner: &str, req: crate::cascade_share::PublishRemixRequest) -> Result<Value, String> {
+        crate::cascade_share::publish_commons_or_remix(&self.dav, &self.keys, owner, req).await
+    }
+
+    /// Contresigne les lignes du générique appartenant à `owner` sur la fiche `fiche_path` (Lot 4).
+    pub async fn attest_credit(&self, owner: &str, fiche_path: &str) -> Result<Value, String> {
+        crate::cascade_share::attest_credit_on_fiche(&self.dav, &self.keys, owner, fiche_path).await
     }
 }
 

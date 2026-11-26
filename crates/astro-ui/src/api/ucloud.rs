@@ -127,9 +127,54 @@ pub trait UcloudApi: Auth {
     fn media_share(&self, _who: &Principal, _paths: Vec<String>, _on: bool, _list: Option<(String, String)>) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station")) }
     }
-    /// Trace du partage d'une fiche : `{ shared, from, copies, reshared }`.
+    /// Trace du partage d'une fiche : `{ shared, from, copies, reshared, chain, official }`.
     fn media_trace(&self, _who: &Principal, _path: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
         async { Err(ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station")) }
+    }
+    /// Détail de la chaîne N¹, de la liste officielle (filtrée WoT) et du bloc `commons` d'une fiche.
+    fn media_chain(&self, _who: &Principal, _path: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("chaîne de partage non disponible sur cette station")) }
+    }
+    /// Inscrit (`register = true`) ou retire (`false`) le compte de la liste officielle (`kind 30005` / NIP-09).
+    fn media_chain_register(&self, _who: &Principal, _path: String, _register: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("liste officielle non disponible sur cette station")) }
+    }
+    /// Publie une œuvre commune ou un remix « recette » signé (y compris une fiche botanique).
+    fn media_remix(&self, _who: &Principal, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("publication vers le commun non disponible sur cette station")) }
+    }
+    /// Contresigne les lignes de générique appartenant au compte connecté sur une fiche.
+    fn media_credit_attest(&self, _who: &Principal, _path: String) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("contresignature non disponible sur cette station")) }
+    }
+    /// Aperçu d'un paiement en cascade Voie A (table des bénéficiaires, solde après, frontière de plan).
+    fn media_pay_preview(&self, _who: &Principal, _path: String, _amount_deci_zen: u64) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("paiement en cascade non activé sur cette station")) }
+    }
+    /// Exécution confirmée d'un paiement en cascade Voie A (`confirm = true`, `credit_id` rejouable, `note` et `anonymous` facultatifs).
+    #[allow(clippy::too_many_arguments)]
+    fn media_pay(&self, _who: &Principal, _path: String, _amount_deci_zen: u64, _credit_id: String, _confirm: bool, _note: Option<String>, _anonymous: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("paiement en cascade non activé sur cette station")) }
+    }
+    /// Tableau de bord « Mes retombées » (#1 : reçus création/relais, top œuvres, derniers mercis, total donné).
+    fn media_earnings(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("retombées non disponibles sur cette station")) }
+    }
+    /// Liste les œuvres empilées dans l'ardoise locale du membre (#3).
+    fn media_slate_list(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("ardoise non disponible sur cette station")) }
+    }
+    /// Ajoute, met à jour ou retire une œuvre de l'ardoise locale (#3).
+    fn media_slate_update(&self, _who: &Principal, _body: Value) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("ardoise non disponible sur cette station")) }
+    }
+    /// Aperçu fusionné ou règlement groupé de toute l'ardoise en un seul lot atomique (#3).
+    fn media_slate_settle(&self, _who: &Principal, _preview: bool, _credit_id: Option<String>, _confirm: bool) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("ardoise non disponible sur cette station")) }
+    }
+    /// Atlas botanique collaboratif du cercle (maille UMAP `0,01°`, sans GPS fin) (#6).
+    fn plants_atlas(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
+        async { Err(ApiError::unavailable("atlas botanique non disponible sur cette station")) }
     }
     /// Mise à l'abri des fichiers partagés, en une lecture : `{ files: { <chemin>: { copies, at, verified_at, packed, safe } } }`.
     fn media_safety(&self, _who: &Principal) -> impl Future<Output = Result<Value, ApiError>> + Send {
@@ -181,6 +226,7 @@ pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/ucloud/plant", get(plant_fiche::<B>).post(plant_identify::<B>))
         .route("/api/v1/ucloud/plant/fiche", post(plant_edit::<B>))
         .route("/api/v1/ucloud/plants", get(plant_list::<B>))
+        .route("/api/v1/ucloud/plants/atlas", get(plants_atlas::<B>))
         .route("/api/v1/ucloud/list", get(ucloud_list::<B>))
         .route("/api/v1/ucloud/photos", get(ucloud_photos::<B>))
         .route("/api/v1/ucloud/have", post(library_have::<B>))
@@ -202,6 +248,15 @@ pub(super) fn routes<B: UcloudApi>() -> Router<Arc<UiState<B>>> {
         .route("/api/v1/ucloud/media/friends", get(media_friends::<B>))
         .route("/api/v1/ucloud/media/share", post(media_share::<B>))
         .route("/api/v1/ucloud/media/trace", get(media_trace::<B>))
+        .route("/api/v1/ucloud/media/chain", get(media_chain::<B>))
+        .route("/api/v1/ucloud/media/chain/register", post(media_chain_register::<B>))
+        .route("/api/v1/ucloud/media/credit/attest", post(media_credit_attest::<B>))
+        .route("/api/v1/ucloud/media/remix", post(media_remix::<B>))
+        .route("/api/v1/ucloud/media/pay/preview", post(media_pay_preview::<B>))
+        .route("/api/v1/ucloud/media/pay", post(media_pay::<B>))
+        .route("/api/v1/ucloud/media/earnings", get(media_earnings::<B>))
+        .route("/api/v1/ucloud/media/slate", get(media_slate_list::<B>).post(media_slate_update::<B>))
+        .route("/api/v1/ucloud/media/slate/settle", post(media_slate_settle::<B>))
         .route("/api/v1/ucloud/media/safety", get(media_safety::<B>))
         .route("/api/v1/ucloud/media/friends/request", post(media_friend_request::<B>))
         .route("/api/v1/ucloud/media/friends/match", get(media_friend_match::<B>))
@@ -298,6 +353,101 @@ async fn media_safety<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p)
 
 async fn media_trace<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<FicheQuery>) -> Response {
     reply(st.backend.media_trace(&p, q.path).await)
+}
+
+async fn media_chain<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Query(q): Query<FicheQuery>) -> Response {
+    reply(st.backend.media_chain(&p, q.path).await)
+}
+
+#[derive(Deserialize)]
+struct MediaChainRegisterBody {
+    path: String,
+    register: bool,
+}
+
+async fn media_chain_register<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<MediaChainRegisterBody>) -> Response {
+    if b.path.len() > 1024 {
+        return reply(Err(ApiError::bad_request("chemin invalide")));
+    }
+    reply(st.backend.media_chain_register(&p, b.path, b.register).await)
+}
+
+async fn media_remix<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.media_remix(&p, b).await)
+}
+
+#[derive(Deserialize)]
+struct MediaPathBody {
+    path: String,
+}
+
+async fn media_credit_attest<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<MediaPathBody>) -> Response {
+    if b.path.len() > 1024 {
+        return reply(Err(ApiError::bad_request("chemin invalide")));
+    }
+    reply(st.backend.media_credit_attest(&p, b.path).await)
+}
+
+#[derive(Deserialize)]
+struct MediaPayPreviewBody {
+    path: String,
+    amount_deci_zen: u64,
+}
+
+async fn media_pay_preview<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<MediaPayPreviewBody>) -> Response {
+    if b.path.len() > 1024 {
+        return reply(Err(ApiError::bad_request("chemin invalide")));
+    }
+    reply(st.backend.media_pay_preview(&p, b.path, b.amount_deci_zen).await)
+}
+
+#[derive(Deserialize)]
+struct MediaPayBody {
+    path: String,
+    amount_deci_zen: u64,
+    credit_id: String,
+    confirm: bool,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    anonymous: bool,
+}
+
+async fn media_pay<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<MediaPayBody>) -> Response {
+    if b.path.len() > 1024 {
+        return reply(Err(ApiError::bad_request("chemin invalide")));
+    }
+    reply(st.backend.media_pay(&p, b.path, b.amount_deci_zen, b.credit_id, b.confirm, b.note, b.anonymous).await)
+}
+
+async fn media_earnings<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.media_earnings(&p).await)
+}
+
+async fn media_slate_list<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.media_slate_list(&p).await)
+}
+
+async fn media_slate_update<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<Value>) -> Response {
+    reply(st.backend.media_slate_update(&p, b).await)
+}
+
+#[derive(Deserialize)]
+struct MediaSlateSettleBody {
+    #[serde(default)]
+    preview: bool,
+    #[serde(default)]
+    credit_id: Option<String>,
+    #[serde(default)]
+    confirm: bool,
+}
+
+async fn media_slate_settle<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed, Json(b): Json<MediaSlateSettleBody>) -> Response {
+    reply(st.backend.media_slate_settle(&p, b.preview, b.credit_id, b.confirm).await)
+}
+
+async fn plants_atlas<B: UcloudApi>(State(st): State<Arc<UiState<B>>>, Authed(p): Authed) -> Response {
+    reply(st.backend.plants_atlas(&p).await)
 }
 
 /// Œuvre cherchée chez les amis (`GET /api/v1/ucloud/media/friends/match`) : un film (`tmdb`), une vidéo ou un morceau

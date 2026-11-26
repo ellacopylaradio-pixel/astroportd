@@ -21,6 +21,12 @@ body.mm-on #toasts { bottom: 5.5rem; }
 .mm-share label { display: inline-flex; align-items: center; gap: .4rem; min-height: 44px; font-weight: 600; }
 .mm-share input { width: 1.3rem; height: 1.3rem; }
 .mm-share p { margin: .2rem 0; }
+.mm-chain { margin-block: .8rem; padding-top: .6rem; border-top: 1px solid var(--line); }
+.mm-chain p { margin: .25rem 0; }
+.mm-pay { width: min(92vw, 34rem); border: 1px solid var(--line); border-radius: var(--rc); background: var(--panel); color: var(--ink); padding: 1rem; }
+.mm-pay table { width: 100%; border-collapse: collapse; margin-block: .6rem; font-size: .92rem; }
+.mm-pay th, .mm-pay td { text-align: left; padding: .3rem .4rem; border-top: 1px solid var(--line); }
+.mm-pay td:last-child, .mm-pay th:last-child { text-align: right; }
 .mm-form input, .mm-form textarea { width: 100%; box-sizing: border-box; }
 .mm-player { position: fixed; inset: auto 0 0 0; z-index: 8; display: flex; align-items: center; gap: .5rem; padding: .4rem .8rem calc(.4rem + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px var(--sh); }
 .mm-player img { width: 3rem; height: 3rem; object-fit: cover; border-radius: var(--r); }

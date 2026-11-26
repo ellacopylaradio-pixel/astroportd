@@ -1,162 +1,120 @@
-# Partage N¹ en chaîne et cascade de Ẑen
+# Partage N¹ en chaîne, DAG de remix et cascade de Ẑen
 
-> État : **conception validée, voie A retenue (§10) ; rien n'est codé.** Le lot 1 (jeton et compteur, sans monnaie) est le prochain.
-> Point de départ : aujourd'hui un partage (« Partager avec mes amis », `src/media_share.rs`, kind 21/22) ne laisse qu'une
-> **trace** (qui a copié, de qui je le tiens, qui le repartage, `GET /api/v1/ucloud/media/trace`). Il n'y a ni compteur,
-> ni prix, ni versement.
+> État : **révision économique validée, Voie A retenue ; Lot 1 (structures Rust + Serde, signatures de saut, aplatissement du DAG, calcul exact Voie A, prise en charge `photo`/`plant`/recette dans `media.rs` et `plant_fiche.rs`) implémenté** dans `crates/astro-economy/src/cascade.rs`. Les virements réels (Lot 3) et la liste publique (Lot 2) ne sont pas encore branchés sur le réseau.
+>
+> Point de départ : un partage de la médiathèque (« Partager avec mes amis », `src/media_share.rs`, kind 21/22) ne laissait qu'une **trace** (qui a copié, de qui je le tiens, qui le repartage, `GET /api/v1/ucloud/media/trace`).
 
-## 1. Ce qu'on veut
+## 1. Ce qu'on veut (et révision économique)
 
-Une œuvre (film, morceau, capture, production du membre) circule de proche en proche dans les cercles N¹ :
-A la partage à B, B la repartage à C et D, C à E… Le graphe est un **arbre** (plusieurs branches), pas une ligne.
+Une œuvre (film, morceau, photo, fiche botanique, capture, production du membre) circule de proche en proche dans les cercles N¹ : A la partage à B, B la repartage à C et D, C à E… Le graphe de diffusion est un **arbre** (plusieurs branches), et le graphe de création (remixes, enrichissements) est un **DAG** (graphe orienté acyclique).
 
-- **Le compteur** de la chaîne augmente d'un à chaque saut.
-- **Celui qui regarde paie**, et son paiement alimente **sa propre branche**, de lui jusqu'à la source.
-- Le montant est le **nombre de maillons de sa branche** : de quoi donner **1 Ẑen à chaque partageur** de la branche ;
-  tout **supplément** va à la **source** (l'auteur).
-- Le versement se fait **en cascade de MULTIPASS en MULTIPASS**, en retirant 1 Ẑen à chaque relais :
-  le spectateur envoie `n` Ẑen à son relais direct, qui en garde 1 et renvoie `n-1` au maillon précédent, etc.
-- Chaque maillon **ne connaît que le précédent** (comme un oignon, à la TOR) : personne ne voit la chaîne entière.
-- Un partageur peut **choisir de s'inscrire** sur la **liste officielle** (publique, partagée) de la chaîne.
+Suite à la revue économique, la règle initiale « 1 saut = 1 Ẑen » (qui rendait une œuvre d'autant plus chère qu'elle voyageait loin et inversait le rapport créateur / passeurs) est **abandonnée**. Les règles retenues sont :
+
+1. **Prix global indépendant de la profondeur `n`** : l'œuvre est gratuite (`Free`), à prix libre / chapeau (`Hat`, défaut recommandé en cercle N¹), ou à prix global fixe (`Fixed`).
+2. **Division en points de base (`Bps`, `10_000 = 100 %`)** : un paiement est réparti selon une règle fixe `SplitRule` (par défaut **80 % Création** `8_000 bps` / **20 % Diffusion** `2_000 bps`).
+3. **Voie A (lot unique de virements définitifs)** : la station du spectateur dispose de la fiche signée de l'œuvre (table aplatie du DAG) et du jeton de sa branche N¹ (`ShareChain`). Elle émet **un seul lot** de virements définitifs vers chaque bénéficiaire unique (créateurs + parents du DAG + relais de la branche). Aucun séquestre, aucun verrou temporel, aucun relais bloquant.
+4. **Contrainte monétaire stricte (`1 Ẑen = 0,10 Ğ1`)** : la plus petite unité transférable sur Duniter v2s est `0,01 Ğ1` = `Amount(1)` (`astro_core::Amount`), soit **`0,10 Ẑen`** (**10 centimes de Ẑen**). L'unité atomique de calcul est donc le **`DeciZen(u64)`** (`1 DeciZen = 0,10 Ẑen = 0,01 Ğ1 = Amount(1)`). Aucun flottant ; tous les calculs se font en entiers non signés (`u64`, produit intermédiaire `u128`), et **tout reste de division euclidienne (poussière) va toujours à l'auteur principal (`author_pubkey`)**, assurant une conservation exacte (`∑ virements == montant total`).
+5. **Séparation stricte copie privée / commun** : une œuvre en copie privée (`Rights::PrivateCopy`, CPI L. 122-5) n'est **jamais** monétisable ni remixable dans le DAG économique. Seule une fiche portant `Rights::OpenCommon` (licence SPDX explicite) et **signée** par son auteur peut recevoir des Ẑen.
 
 ## 2. Ce qui existe déjà et qu'on réutilise
 
 | Besoin | Brique existante |
 |---|---|
-| Message privé de proche en proche | NIP-59 (`friends_media::send`, étiquettes `op`, `x`, `e`) |
+| Message privé de proche en proche | NIP-59 (`sharing.rs`, `friends_media::send`, étiquettes `op`, `x`, `e`) |
 | Identifier l'œuvre sans rechiffrer | CID/empreinte (`x`) : même blob d'un bout à l'autre |
+| Unité monétaire entière Ğ1 | `astro_core::Amount` (centimes de Ğ1 = `DeciZen`) |
 | Virement entre MULTIPASS, sans découvert, sans double dépense | registre `kind 30852` (`astro-economy::ledger`, `prev`/`d` uniques) |
-| Écrire une chaîne vérifiable | événements signés chaînés par `prev` (même schéma que le registre) |
+| Signatures BIP-340 reconstructibles hors relai | `astro_nostr_proto::UnsignedEvent` / `Event::verify` (même modèle que `astro_economy::meet`) |
 | Relier les clés d'une même personne entre plans | `kind 31903 d="plane-link"` (double signature) |
-| Liste publique remplaçable | kind 30005 (NIP-51), déjà utilisé pour séries et albums |
+| Liste publique remplaçable | `kind 30005` (NIP-51), déjà utilisé pour séries et albums |
+| Fiches plantes privées et recherche | `src/plant_fiche.rs` (`/_/Plantes/`), `src/media.rs` (`media_index`, `search_text`) |
 
-## 3. Le jeton de chaîne
+## 3. Le DAG de création, le Remix et les Communs
 
-Chaque copie transmise de A à B porte un **jeton de saut** signé, que B garde avec la copie :
+Une création n'est plus isolée. Une fiche `<nom>.media.json` (`media/v1`) peut embarquer un bloc optionnel `commons` (`CommonsBlock`), rétrocompatible avec les fiches existantes :
+
+- **Générique pondéré (`credits`)** : une œuvre audiovisuelle ou documentaire est souvent collective (réalisation, image, son, montage, matériel ou lieu en bien commun). Chaque entrée porte `{ pubkey, role, bps, attest_sig? }`.
+- **Parents du DAG (`sources`)** : une œuvre dérivée cite 1 à N œuvres parentes (`SourceRef` : `sha_plain`, `cid`, `author_pubkey`, `event_id?`, `role`, `share_bps`).
+  - Invariant : `∑ credits.bps + ∑ sources.share_bps == 10_000`.
+  - Chaque parent doit autoriser le remix (`allow_remix: true`) et fixer un plancher amont `remix_min_bps`. L'enfant doit allouer `share_bps >= parent.remix_min_bps`.
+  - La profondeur créative est bornée (`generation = max(parents) + 1 <= MAX_DAG_DEPTH`, 8). Les cycles sont impossibles par SHA-256.
+- **Deux formes de remix (`RemixKind`)** :
+  - `Rendered` : nouveau média encodé (montage, mashup, étalonnage) avec son propre fichier et CID.
+  - `Recipe` : composition **non destructive** (`tracks: Vec<CompositionTrack>`) qui associe des CID existants sans dupliquer les octets (nouvelle bande son, doublage, sous-titres, ou fiche documentaire rattachée à une photo). Dans `src/media.rs`, une fiche `Recipe` n'exige pas de fichier média propre (`file` optionnel).
+- **Aplatissement déterministe (`flatten_dag`)** : à la publication, les parts des parents sont résolues récursivement en une table aplatie `flattened_payouts` (`sum == 10_000 bps`), en fusionnant les diamants par `pubkey` (un seul virement par bénéficiaire) et en attribuant tout reste d'arrondi de `bps` à `author_pubkey`. Toute station qui possède les fiches parentes peut revérifier cette table (`verify_flattened_dag`) avant de payer.
+- **Signature d'auteur (`CommonsBlock::sign` / `verify_signature`)** : signature Schnorr BIP-340 (kind éphémère `27_856`, jamais publié) sur la sérialisation canonique du bloc hors `signature`. Sans signature valide, l'œuvre reste en Lots 1–2 (compteur et filiation seuls, jamais d'argent).
+
+### Cas d'usage phare : la base commune botanique
+
+1. **Alice** photographie une plante et publie la **Fiche A** (`type: "photo"`, `file: "ortie.jpg"`, licence `CC-BY-SA-4.0`, `allow_remix: true`, `remix_min_bps: 4000`).
+2. **Bob** identifie la plante (via sa fiche privée `src/plant_fiche.rs`, convertie sans ses notes personnelles ni son GPS fin — seule la maille UMAP `0,01°` est retenue via `Fiche::to_commons_plant_data`) et publie la **Fiche B** (`type: "plant"`, bloc `plant: PlantData`, `remix: Recipe`, `sources: [Alice, 4000 bps]`, `credits: [Bob, 6000 bps]`). Zéro duplication de la photo dans le bassin commun.
+3. **Bob** partage la Fiche B à **Charlie** (saut 1), qui la partage à **David** (saut 2).
+4. **David** verse `25 DeciZen` (**2,50 Ẑen** = `0,25 Ğ1`) :
+   - Diffusion (20 %) = `5 DeciZen` → **Charlie** (relais unique hors auteur principal Bob) ;
+   - Création (80 %) = `20 DeciZen` → **Alice** `8 DeciZen` (40 %), **Bob** `12 DeciZen` (60 %).
+   - Si 3 relais se partagent `5 DeciZen`, chacun reçoit `1 DeciZen` (`0,10 Ẑen`), et le reste (`2 DeciZen`) remonte à **Bob** (auteur principal). Somme conservée : `8 + 14 + 1 + 1 + 1 = 25 DeciZen`.
+
+## 4. Le jeton de chaîne N¹ (`ShareChain`, Lot 1)
+
+Chaque copie transmise de proche en proche porte un `ShareChain` chiffré pour le destinataire (NIP-59) :
 
 ```
-hop = { x: <empreinte de l'œuvre>, n: <rang, 1 = source>, prev: <clé du maillon précédent>, sig: signature du précédent }
+ShareChain = {
+  v: 1,
+  work_sha: <SHA-256 du contenu clair>,
+  work_cid: <CID du blob>,
+  fiche_cid: <CID de la fiche .media.json>,
+  origin_pubkey: <clé Nostr de la source>,
+  hops: [
+    { rank: 1, from_pubkey: A, to_pubkey: B, at, sig },
+    { rank: 2, from_pubkey: B, to_pubkey: C, at, sig },
+    ...
+  ]
+}
 ```
 
-- À chaque repartage, le partageur fabrique le jeton suivant : `n+1`, `prev` = **sa** clé, signé par lui. Le destinataire
-  ne reçoit donc que le jeton de **celui qui lui envoie** : il connaît **un seul** voisin (le précédent), jamais les autres.
-- Le jeton est chiffré pour le destinataire (NIP-59) : un tiers qui voit passer l'événement 21/22 ne voit pas la chaîne.
-- Le rang `n` est vérifiable : on ne peut pas le faire baisser sans que la signature du précédent ne tombe, ni le monter
-  sans l'accord d'un vrai partageur.
+- Chaque saut est signé par `from_pubkey` (kind éphémère `27_857`) en incluant `work_sha`, `rank`, `from_pubkey`, `to_pubkey`, `at` et la signature du saut précédent (`"genesis"` pour le rang 1).
+- `ShareChain::verify` contrôle : longueurs (`hops.len() <= MAX_CHAIN_HOPS`), formats hex64, enchaînement strict `hops[0].from_pubkey == origin_pubkey` et `hops[i].from_pubkey == hops[i-1].to_pubkey`, interdiction des auto-sauts (`from != to`), rangs consécutifs `1..=k` et validité de toutes les signatures BIP-340.
+- Le destinataire voit sa **lignée** (de la source à lui), jamais les autres branches de l'arbre.
+- Un partageur malveillant peut toujours ré-encoder le fichier et repartir comme source (manque assumé) ; en revanche, il ne peut ni raccourcir ni rallonger une chaîne signée, ni toucher le paiement d'une œuvre dont la fiche est signée par un autre auteur (`chain.origin_pubkey == commons.author_pubkey`).
 
-**Ce que ça garantit** : un compteur qui ne grandit que d'un par saut, sans graphe central.
-**Ce que ça ne garantit pas** : qu'un partageur ne se cache pas (il peut copier le fichier et le renvoyer *comme source*,
-rang 1). C'est un manque assumé : la chaîne prouve ce qui a circulé *par elle*.
+## 5. Paiement Voie A (`compute_payout_batch_with_eligible`, Lot 3)
 
-## 4. Le paiement en cascade
+1. La station du spectateur vérifie `commons.verify_signature()`, `chain.verify()`, `chain.work_sha == commons.content_sha` et `chain.origin_pubkey == commons.author_pubkey`.
+2. Elle vérifie que `PricingMode` autorise le montant (ex. `>= price_deci_zen` pour `Fixed`, `>= min_deci_zen` pour `Hat`).
+3. **Filtrage WoT des relais (anti-Sybil intra-diffusion)** : seuls les relais uniques de `chain.hops` (hors `author_pubkey`) appartenant à la toile des rencontres prouvées (`astro_economy::wot::Wot`) sont éligibles à la tranche Diffusion. Un relais hors WoT est listé dans `filtered_relays` et reçoit `0` ; s'il ne reste aucun relais éligible, 100 % rejoint la tranche Création.
+4. Avant paiement (hors mode île), l'aperçu vérifie que chaque bénéficiaire est joignable sur le plan et atteint le dépôt existentiel Ğ1 (`1,00 Ğ1 = 100` centimes).
+5. Calcul entier (`DeciZen(u64)`, produits intermédiaires `u128`) :
+   - Relais uniques de la branche (hors `author_pubkey`, dédoublonnés pour déjouer les boucles `B → C → B`). S'il n'y a aucun relais tiers, toute la somme va à la Création.
+   - `diffusion_pool = total * diffusion_bps / 10_000` ; `creation_pool = total - diffusion_pool`.
+   - Chaque bénéficiaire de `flattened_payouts` reçoit `creation_pool * bps / 10_000`.
+   - Chaque relais unique reçoit `diffusion_pool / nb_relays`.
+   - Les lignes sont fusionnées par `pubkey` (un créateur qui serait aussi relais ne reçoit qu'un seul virement).
+   - `remainder = total - ∑ parts` est ajouté à `author_pubkey`.
+4. Un maillon absent est payé directement sur sa clé et retrouve son dû à son retour (ou via `plane-link` après déménagement).
+5. **Frontière des plans** : un virement ne traverse pas un plan privé (`bridge::check_passage`). La station du spectateur l'indique avant paiement si un bénéficiaire n'est pas joignable dans ce plan.
 
-Le spectateur S, à la **première lecture** d'une copie de rang `n`, propose de payer `n` Ẑen (jamais sans geste de sa part :
-même confirmation en deux temps que *Payer*).
+## 6. La liste officielle (facultative, Lot 2)
 
-1. S verse `n` Ẑen à son relais direct R₁ (virement ordinaire du registre, `d` = empreinte + rang, donc **une seule fois par
-   œuvre et par spectateur**).
-2. R₁ garde 1 Ẑen et verse `n-1` à R₂ (le maillon qu'il connaît par **son** jeton `prev`), avec le même `d`.
-3. … jusqu'à la source, qui reçoit le reste : **1 Ẑen** pour son propre maillon **plus le supplément**.
+Un partageur peut **s'inscrire** en publiant un événement remplaçable `kind 30005`, `d = chaine:<work_sha>`, portant sa clé et le rang prouvé de son jeton.
 
-Si le prix demandé par la source dépasse `n` (œuvre payante), l'écart s'ajoute au **dernier** versement, à la source.
-
-**Qui fait ces virements ?** La station du relais, avec la clé du MULTIPASS qu'elle héberge, **dès qu'elle reçoit** le
-versement entrant : c'est une règle automatique, tracée au journal (`audit`), pas un geste manuel. Un relais ne peut ni
-garder plus de 1 Ẑen, ni renvoyer moins de `n-1` : la règle est dans le code de la station, et le registre refuse tout ce qui
-n'est pas un virement valide.
-
-Montants en **centimes entiers** (règle du dépôt) ; le Ẑen entier de la règle est donc 100 centimes, sans arrondi.
-
-## 5. Quand un relais s'arrête
-
-Trois cas, et une règle : **l'argent ne reste jamais bloqué chez un maillon qui ne répond plus.**
-
-1. **Relais hors ligne un moment** : son versement entrant attend dans le registre (le virement est déjà fait vers lui) ; sa
-   station fait suivre au retour. Le versement suivant porte un délai (`expire`) ; passé ce délai, voir 2.
-2. **Relais disparu ou qui refuse de relayer** : au bout du délai, le versement **saute** le maillon : le *spectateur* (ou
-   le dernier relais qui a transmis) renvoie `n-k` directement au maillon suivant **connu par son jeton**. Le maillon perdu
-   garde ce qu'il avait déjà reçu ; il perd la suite. Aucun Ẑen n'est détruit.
-3. **MULTIPASS qui déménage vers un autre Astroport** : sa clé ne change pas, seul son hébergeur change ; le virement vise
-   la **clé**, pas la station, donc la cascade continue. Le lien `plane-link` (même personne, deux plans) permet à la
-   station de destination de reprendre les jetons en attente. Un MULTIPASS **supprimé** (`member_purge`) est traité comme
-   le cas 2.
-
-À décider (§9) : qui avance le délai quand personne ne réclame.
-
-## 6. La liste officielle (facultative)
-
-Un partageur peut **s'inscrire** : il publie un événement `kind 30005` remplaçable, `d = chaîne:<empreinte>`, qui contient
-sa clé et le rang de son jeton (pas celui des autres). La liste de l'œuvre est la **réunion** de ces inscriptions.
-
-- Inscrit ou non, il reçoit son Ẑen : l'inscription ne change **pas** le paiement, elle donne la **visibilité** (« cette
-  œuvre a été relayée par 12 membres ») et un classement des œuvres qui circulent.
-- Le compteur affiché de l'œuvre = le plus grand rang inscrit (preuve : sa signature en chaîne), pas la somme.
-- Retirer son inscription = supprimer l'événement (NIP-09) ; les versements passés restent.
+- L'inscription est indépendante du paiement (elle ne change pas les parts, elle rend la circulation visible).
+- Le compteur public se lit filtré par la toile des rencontres prouvées (`astro_economy::wot`) pour neutraliser les faux comptes qui gonfleraient la profondeur sans gain financier.
+- Retirer son inscription = suppression NIP-09 (`kind 5`).
 
 ## 7. Vie privée
 
-- Le spectateur ne connaît que **son** relais direct ; chaque relais ne connaît que **le précédent** et le suivant à qui il
-  a envoyé.
-- Les virements du registre sont visibles de ceux qui lisent le registre : un observateur peut **rapprocher** des virements
-  de même `d` et reconstituer la chaîne. La protection TOR ne tient donc que contre les **maillons**, pas contre un
-  lecteur du registre. À dire au membre sans détour (« ce que voient les autres »).
-- Le paiement est facultatif et expliqué avant (jamais prélevé en silence).
+- Le spectateur ne connaît que sa propre lignée, jamais l'arbre entier.
+- Les virements du registre `kind 30852` sont lisibles par ceux qui lisent le registre : un observateur peut rapprocher les virements d'un même lot. Cela est dit clairement au membre avant confirmation.
+- Le paiement est toujours déclenché par un geste explicite en deux temps (comme *Payer*), jamais prélevé en silence.
+- Pour les fiches botaniques publiées vers le commun (`PlantData`), les notes personnelles sont retirées et la position est arrondie à la maille UMAP (`0,01°`).
 
 ## 8. Découpage en lots
 
-| Lot | Contenu | Argent ? |
-|---|---|---|
-| 1 | jeton de saut dans l'événement de partage ; compteur affiché dans la trace ; aucune monnaie | non |
-| 2 | inscription à la liste officielle (kind 30005) | non |
-| 3 | paiement du spectateur et cascade automatique entre stations amies, tests sur le registre en mémoire | oui |
-| 4 | délai, saut du maillon absent, reprise après déménagement | oui |
-
-Les lots 1 et 2 sont sans risque et donnent déjà le compteur demandé. Le lot 3 ne part qu'avec des **tests de propriété**
-sur le registre (somme conservée, aucun solde négatif, un seul paiement par `d`).
-
-## 9. Questions ouvertes
-
-1. **Le délai** (§5) : durée, et qui réclame quand tout le monde dort ? Proposition : la station du *spectateur* relance.
-2. **Fraude au rang** : un partageur peut-il se présenter comme source pour toucher le supplément ? Atténuation : le
-   supplément ne va qu'au maillon dont le jeton remonte à la **clé de l'auteur** de la fiche (`file`/`sha` signés).
-3. **Œuvres du membre sans fiche de licence** : la licence (CC…) devient-elle obligatoire pour entrer dans la chaîne payante ?
-4. **Plans différents** : un virement entre deux plans privés est interdit (`bridge::check_passage`). La cascade s'arrête donc
-   à la frontière d'un plan ; à confirmer que c'est voulu.
-5. **Abus** : un spectateur qui crée 50 faux comptes pour s'inscrire en chaîne et se payer ? L'anti-Sybil général du projet
-   (`project_g1n2_troczen_extension`) n'est pas résolu ; la cascade n'en dépend que si le lot 3 est ouvert à tous.
-
-## 10. Revue externe (relecture du §1 à §9) : ce qu'on retient, ce qu'on corrige
-
-**Retenu, parce que c'est juste**
-
-- **Ancrer le supplément dans la fiche d'œuvre.** Le supplément ne va qu'au maillon dont la chaîne remonte à la clé qui a
-  **signé la fiche** (celle du fichier `.media.json`, `sha` compris). Sans fiche signée par l'auteur : compteur et liste
-  officielle seulement (lots 1 et 2), **jamais d'argent** (lot 3). C'est la réponse à la question 2 et à la question 3 du §9.
-- **Frontière des plans** (question 4) : la cascade s'arrête au bord du plan, c'est voulu. La station du spectateur le **dit**
-  avant de payer (« l'auteur ne peut pas être payé depuis ce plan ») plutôt que de laisser le versement échouer.
-- **Faux comptes** (question 5) : si le spectateur est aussi les faux relais, il se paie lui-même, donc il ne gagne rien ; il
-  perd au contraire le prix de l'œuvre et le Ẑen du premier vrai relais. Le seul gain possible est le **compteur gonflé** de
-  la liste officielle, pas de l'argent. Le compteur public se lira donc avec un filtre de confiance (toile des rencontres
-  prouvées, `astro_economy::wot`) et non comme un chiffre brut.
-- **Le rang affiché** vient de la plus longue chaîne **valide** vue par la station, pas d'une déclaration.
-
-**Corrigé, parce que ça ne tient pas tel quel**
-
-- **« Annuler son virement » est impossible.** Le registre (kind 30852) ne connaît ni séquestre, ni échéance, ni annulation :
-  un virement fait est fait, `prev` chaîné, jamais défait. Toute règle de saut qui repose sur « S annule » ou « virement à
-  verrou temporel » demande de **créer** ces mécanismes dans le registre : c'est un chantier à part, à ne pas supposer.
-- **Le saut d'un maillon absent oblige à connaître la clé du suivant.** Donc, entre la vie privée « à la TOR » (§3) et la
-  résilience (§5), il faut choisir. Deux voies :
-  - **Voie A, chaîne connue du spectateur** : le jeton porte toutes les clés de la branche (chiffré pour le spectateur,
-    NIP-59, invisible du reste du monde). Le spectateur verse **directement** 1 Ẑen à chaque maillon et le supplément à la
-    source, en **un lot** de virements. Plus de cascade, plus de délai, plus de relais bloqué, pas de séquestre à inventer.
-    On perd : « chaque maillon ne connaît que le précédent » (le spectateur voit la branche, pas les autres branches).
-  - **Voie B, cascade à l'aveugle** (§4) : on garde l'oignon, et on accepte qu'un relais absent **bloque** le versement
-    jusqu'à son retour, ou qu'il faille inventer le séquestre ci-dessus.
-- **Ma recommandation : voie A pour le lot 3**, et l'oignon réservé à ce qu'il protège réellement (qui a *partagé* avec qui),
-  pas à ce qui sert à *payer*. Les lots 1 et 2 restent identiques dans les deux voies : le jeton y porte déjà la chaîne
-  signée maillon par maillon (chaque ajout signe le maillon précédent), seule sa lecture par le spectateur change.
-
-**Décision prise : voie A.** Le registre ne garde que des virements définitifs, sans séquestre ni verrou temporel ; le spectateur
-connaît sa lignée (de lui à l'auteur), jamais l'arbre entier ; un maillon absent est payé sur sa clé et retrouve son dû à son retour
-(ou par `plane-link` s'il a déménagé).
+| Lot | Contenu | Argent ? | Statut |
+|---|---|---|---|
+| **1** | Structures Rust/Serde (`DeciZen`, `Bps`, `SplitRule`, `Rights`, `PricingMode`, `Credit`, `SourceRef`, `RemixKind`, `CommonsBlock`, `PlantData`, `Hop`, `ShareChain`), signatures BIP-340, aplatissement et vérification du DAG (`flatten_dag`), calcul exact Voie A (`compute_payout_batch`), prise en charge `photo`/`plant`/recette dans `src/media.rs` et passerelle `src/plant_fiche.rs`, tests unitaires et hostiles | non (moteur prêt) | **fait** (`astro_economy::cascade`) |
+| **1b** | Transport du `ShareChain` dans les enveloppes NIP-59 (`sharing.rs`, `share_inbox.rs`) et stockage local (`kv` scope `share_chain`), exposition dans `MediaShare::trace` et `GET /api/v1/ucloud/media/chain` | non | **fait** (`src/cascade_share.rs`, `src/sharing.rs`, `src/share_inbox.rs`) |
+| **2** | Inscription et retrait sur la liste officielle (`kind 30005`, `d = chaine:<work_sha>` / NIP-09) avec vérification de la chaîne prouvée et filtrage par `astro_economy::wot` (`POST /api/v1/ucloud/media/chain/register`) | non | **fait** (`src/cascade_share.rs`, `src/media_share.rs`) |
+| **3** | Émission effective du `PayoutBatch` (Voie A) via `ZenCredit` (`cascade_preview` / `cascade_pay`, suivi d'état rejouable dans `kv`, mode île, contrôle frontière de plan, `POST /api/v1/ucloud/media/pay/preview` et `POST /api/v1/ucloud/media/pay`) et tests de bout en bout | oui | **fait** (`src/zen_credit.rs`, `src/ui_backend/ucloud.rs`) |
+| **4** | Publication vers le commun / remix « recette » non destructif (`publish_commons_or_remix`, dont passerelle botanique depuis `plant_fiche.rs`, `POST /api/v1/ucloud/media/remix`) et contresignature BIP-340 de générique (`Credit::attest`, `CREDIT_SIG_KIND = 27_858`) | oui | **fait** (`src/cascade_share.rs`, `crates/astro-economy/src/cascade.rs`) |

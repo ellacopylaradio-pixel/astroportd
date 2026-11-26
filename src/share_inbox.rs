@@ -196,6 +196,21 @@ impl<B: BlobStore> ShareInbox<B> {
             return;
         };
         let (sender, rumor) = (opened.sender, opened.rumor);
+        // #2 Gratitude chiffrée « Merci » (NIP-59) : enregistrée dans les retombées du destinataire sans exiger le double suivi.
+        if sender != owner {
+            if let Some(receipt) = crate::cascade_features::parse_thank_you(&rumor, &sender, owner) {
+                if crate::cascade_features::record_received(&self.db, &receipt).await {
+                    let who = if receipt.anonymous { "Un proche".to_owned() } else { self.label(&sender).await };
+                    let zen = format!("{:.2}", receipt.deci_zen as f64 / 10.0).replace('.', ",");
+                    let extra = receipt.note.as_deref().map(|n| format!(" — « {n} »")).unwrap_or_default();
+                    let what = if receipt.title.is_empty() { "votre œuvre".to_owned() } else { format!("« {} »", safe(&receipt.title)) };
+                    self.tell(owner, format!("💚 {who} a soutenu {what} (+{zen} Ẑ){extra}")).await;
+                }
+                self.claim(&wrap.id, now).await;
+                stats.received += 1;
+                return;
+            }
+        }
         // Hors sujet (discussion, commande…) : lue une fois, jamais rouverte.
         if rumor.kind != kind::FILE || sender == owner {
             self.claim(&wrap.id, now).await;
@@ -244,6 +259,27 @@ impl<B: BlobStore> ShareInbox<B> {
         }
         match astro_dav::adopt::adopt_shared_file_into(&self.db, owner, &sender, &label, &file, "friend-share", dir).await {
             Ok(path) => {
+                // Si une fiche `.media.json` (ex. remix recette) arrive, indexe son `commons.content_sha` pour aligner le ShareChain.
+                let mut work_sha_hint = None;
+                if file.name.ends_with(".media.json") && file.size <= 512 * 1024 {
+                    if let (Ok(key), Ok((mut reader, _))) = (astro_crypto::UencKey::from_hex(&file.key_hex), self.blobs.open(&file.cid).await) {
+                        let mut plain = Vec::new();
+                        if astro_crypto::uenc::decrypt_stream(&key, &mut reader, &mut plain).await.is_ok() {
+                            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&plain) {
+                                if let Some(c) = crate::media::extract_commons(&v).filter(astro_economy::cascade::CommonsBlock::verify_signature) {
+                                    crate::cascade_share::record_fiche_work_sha(&self.db, &file.sha_plain, &c.content_sha).await;
+                                    work_sha_hint = Some(c.content_sha);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Lot 1b : enregistre la lignée N¹ si l'expéditeur l'a jointe et qu'elle est cryptographiquement valide.
+                if let Some(raw_chain) = rumor.tags.iter().find(|t| t.first().map(String::as_str) == Some(crate::cascade_share::SHARE_CHAIN_TAG)).and_then(|t| t.get(1)) {
+                    if let Some(chain) = crate::cascade_share::verify_incoming_chain_with_work(raw_chain, &file.sha_plain, work_sha_hint.as_deref(), &sender, owner) {
+                        crate::cascade_share::save_chain(&self.db, owner, &chain).await;
+                    }
+                }
                 self.claim(&wrap.id, now).await;
                 if let Some(p) = &self.publisher {
                     p.notify(owner);
@@ -466,5 +502,34 @@ mod tests {
     fn backoff_grows_from_a_minute_to_six_hours() {
         assert_eq!((backoff(1), backoff(2), backoff(5)), (120, 240, 1920));
         assert_eq!(backoff(11), 6 * 3600);
+    }
+
+    #[tokio::test]
+    async fn valid_share_chain_is_stored_and_forged_chain_is_ignored_without_blocking_file() {
+        let r = rig("chain").await;
+        let cid_ok = put_blob(&r.blobs, b"avec-chaine").await;
+        let sha_ok = "11".repeat(32);
+        let root = astro_economy::cascade::ShareChain::new_root(&sha_ok, &cid_ok, None, hex(&BOB)).unwrap();
+        let chain_ok = root.extend(&BOB, &hex(&ALICE), 1_800_000_000).unwrap();
+        let mut tags_ok = file_tags_for(&cid_ok, "bon.jpg");
+        tags_ok.iter_mut().find(|t| t[0] == "ox").unwrap()[1] = sha_ok.clone();
+        tags_ok.push(vec![crate::cascade_share::SHARE_CHAIN_TAG.into(), serde_json::to_string(&chain_ok).unwrap()]);
+        deliver(&r.db, &BOB, tags_ok, 1_800_000_000).await;
+
+        let cid_bad = put_blob(&r.blobs, b"chaine-fausse").await;
+        let sha_bad = "22".repeat(32);
+        let mut forged = astro_economy::cascade::ShareChain::new_root(&sha_bad, &cid_bad, None, hex(&BOB)).unwrap().extend(&BOB, &hex(&ALICE), 1_800_000_001).unwrap();
+        forged.hops[0].sig = "00".repeat(64);
+        let mut tags_bad = file_tags_for(&cid_bad, "faux.jpg");
+        tags_bad.iter_mut().find(|t| t[0] == "ox").unwrap()[1] = sha_bad.clone();
+        tags_bad.push(vec![crate::cascade_share::SHARE_CHAIN_TAG.into(), serde_json::to_string(&forged).unwrap()]);
+        deliver(&r.db, &BOB, tags_bad, 1_800_000_001).await;
+
+        let stats = r.inbox.poll_once(1_800_000_100).await;
+        assert_eq!(stats.received, 2, "les deux fichiers sont adoptés");
+        let got_ok = crate::cascade_share::load_chain(&r.db, &hex(&ALICE), &sha_ok).await.unwrap();
+        assert_eq!(got_ok.depth(), 1);
+        assert!(crate::cascade_share::load_chain(&r.db, &hex(&ALICE), &sha_bad).await.is_none(), "chaîne falsifiée ignorée");
+        let _ = std::fs::remove_dir_all(&r.dir);
     }
 }

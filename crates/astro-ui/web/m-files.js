@@ -210,7 +210,15 @@ export default function files(root, toolbox, ctx) {
       const box = li.querySelector('.fm-act');
       if (box) { box.remove(); more.setAttribute('aria-expanded', 'false'); return; }
       more.setAttribute('aria-expanded', 'true');
-      li.append(h('div', { class: 'fm-act' }, h('button', { class: 'ghost', onclick: () => rename(li) }, t('Renommer')), h('button', { class: 'ghost', onclick: () => chooser([p]) }, t('Déplacer…')),
+      const pubBtn = li.dataset.dir ? '' : h('button', { class: 'ghost', onclick: async ev => {
+        ev.target.disabled = true;
+        const n = lastName(p), ext = (n.split('.').pop() || '').toLowerCase();
+        const kind = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) ? 'photo' : ['mp3', 'flac', 'ogg', 'wav', 'm4a'].includes(ext) ? 'music' : ['mp4', 'webm', 'mkv', 'mov'].includes(ext) ? 'video' : 'document';
+        const title = n.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || n;
+        try { await K.api('/api/v1/ucloud/media/remix', { method: 'POST', body: { title, kind, spdx: 'CC-BY-SA-4.0', allow_remix: true, remix_min_bps: 4000, pricing: { mode: 'hat', suggested_deci_zen: 10 }, file_path: p } }); toast(t('Publié dans votre médiathèque (CC-BY-SA)'), 1); }
+        catch (e) { toast(e.message, 0); ev.target.disabled = false; }
+      } }, '✦ ' + t('Publier en commun'));
+      li.append(h('div', { class: 'fm-act' }, h('button', { class: 'ghost', onclick: () => rename(li) }, t('Renommer')), h('button', { class: 'ghost', onclick: () => chooser([p]) }, t('Déplacer…')), pubBtn,
         K.sure(t('Supprimer'), () => delAll([p]), t('Définitif : la suppression ne peut pas être annulée.'))));
     } }, '⋯');
     li.append(more);

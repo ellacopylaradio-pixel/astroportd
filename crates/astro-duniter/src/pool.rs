@@ -194,6 +194,23 @@ impl<K: Connector> Chain for RpcPool<K> {
         Err(last)
     }
 
+    async fn transfer_batch(&self, from: &Ed25519Signer, transfers: &[(Account, Amount)], mode: TransferMode, memo: Option<&str>) -> Result<TxOutcome, ChainError> {
+        let lock = sender_lock(&from.account());
+        let _turn = lock.lock().await;
+        let mut last = ChainError::Connection("aucun nœud".into());
+        for _ in 0..self.urls().len().max(1) {
+            let (url, chain) = self.acquire().await?;
+            match chain.transfer_batch(from, transfers, mode, memo).await {
+                Err(ChainError::Connection(e)) => {
+                    self.mark_down(&url);
+                    last = ChainError::Connection(e);
+                }
+                other => return other,
+            }
+        }
+        Err(last)
+    }
+
     async fn watch_transfers(&self, out: mpsc::Sender<TransferEvent>) -> Result<(), ChainError> {
         loop {
             if out.is_closed() {

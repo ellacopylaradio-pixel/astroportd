@@ -416,7 +416,19 @@ impl<O: Outbox + 'static> FriendsMedia<O> {
         if !published {
             return Err("ce fichier n'est pas partagé avec le cercle de son propriétaire".into());
         }
-        let path = path.ok_or("le fichier n'est plus dans l'uCloud de son propriétaire")?;
+        let path = match path {
+            Some(p) => p,
+            None => {
+                let fiche_sha = crate::cascade_share::lookup_fiche_sha_by_work(&self.db, x).await.ok_or("le fichier n'est plus dans l'uCloud de son propriétaire")?;
+                let a = author.to_owned();
+                self.db
+                    .readers()
+                    .read(move |c| Ok(c.query_row("SELECT path FROM ucloud_entries WHERE owner_hex = ?1 AND sha_plain = ?2 AND type = 'file' AND cid IS NOT NULL ORDER BY path LIMIT 1", params![a, fiche_sha], |r| r.get::<_, String>(0)).optional()?))
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or("le fichier n'est plus dans l'uCloud de son propriétaire")?
+            }
+        };
         if served.is_some_and(|t| t > at - AGAIN_SECS) {
             return Ok(0);
         }

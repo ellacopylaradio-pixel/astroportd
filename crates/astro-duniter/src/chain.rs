@@ -105,6 +105,25 @@ pub trait Chain: Send + Sync + 'static {
     /// une soumission acceptée n'est pas un paiement (un premier virement sous le dépôt existentiel échoue en silence).
     fn transfer(&self, from: &Ed25519Signer, to: &Account, amount: Amount, mode: TransferMode, memo: Option<&str>) -> impl Future<Output = Result<TxOutcome, ChainError>> + Send;
 
+    /// Lot de virements atomique (`utility.batch_all` sur `SubxtChain`) : tout passe dans un seul bloc ou rien ne part.
+    /// Par défaut (tests/mocks), exécute les virements séquentiellement.
+    fn transfer_batch(&self, from: &Ed25519Signer, transfers: &[(Account, Amount)], mode: TransferMode, memo: Option<&str>) -> impl Future<Output = Result<TxOutcome, ChainError>> + Send {
+        async move {
+            if transfers.is_empty() {
+                return Err(ChainError::Invalid("lot de virements vide".into()));
+            }
+            let mut total = 0u64;
+            let mut last_hash = [0u8; 32];
+            for (idx, (to, amount)) in transfers.iter().enumerate() {
+                let tag = memo.map(|m| format!("{m}:{idx}"));
+                let out = self.transfer(from, to, *amount, mode, tag.as_deref()).await?;
+                total = total.saturating_add(out.transferred.0);
+                last_hash = out.block_hash;
+            }
+            Ok(TxOutcome { block_hash: last_hash, transferred: Amount(total) })
+        }
+    }
+
     /// Diffuse les `Balances::Transfer` des blocs au fil de l'eau jusqu'à erreur ou fermeture du canal.
     fn watch_transfers(&self, out: mpsc::Sender<TransferEvent>) -> impl Future<Output = Result<(), ChainError>> + Send;
 
@@ -175,6 +194,36 @@ impl Chain for SubxtChain {
             .find(|t| t.from == from.account().account_id() && t.to == to.account_id())
             .ok_or_else(|| ChainError::Rejected("aucun événement Balances::Transfer : le virement n'a pas eu lieu".into()))?;
         Ok(TxOutcome { block_hash, transferred: amount_of(transfer.amount)? })
+    }
+
+    async fn transfer_batch(&self, from: &Ed25519Signer, transfers: &[(Account, Amount)], mode: TransferMode, memo: Option<&str>) -> Result<TxOutcome, ChainError> {
+        if transfers.is_empty() {
+            return Err(ChainError::Invalid("lot de virements vide".into()));
+        }
+        if transfers.len() == 1 {
+            let (to, amount) = transfers[0];
+            return self.transfer(from, &to, amount, mode, memo).await;
+        }
+        let dests: Vec<(MultiAddress<subxt::utils::AccountId32, ()>, Amount)> = transfers.iter().map(|(to, amt)| (MultiAddress::Id(to.account_id()), *amt)).collect();
+        let params = subxt::config::DefaultExtrinsicParamsBuilder::<PolkadotConfig>::new().build();
+        let signed = self.client.tx().create_signed(&crate::offline::atomic_batch(&dests, mode, memo), from, params).await.map_err(connection)?;
+        let progress = signed.submit_and_watch().await.map_err(|e| classify_submit(&e.to_string()))?;
+        let in_block = tokio::time::timeout(Duration::from_secs(120), wait_in_block(progress)).await.map_err(|_| ChainError::UnknownOutcome("délai d'inclusion dépassé".into()))??;
+        let block_hash = in_block.block_hash().0;
+        let events = in_block.wait_for_success().await.map_err(|e| ChainError::Rejected(e.to_string()))?;
+        let from_id = from.account().account_id();
+        let mut paid = 0u64;
+        let mut matched = 0usize;
+        for ev in events.find::<runtime::balances::events::Transfer>().filter_map(Result::ok) {
+            if ev.from == from_id {
+                paid = paid.saturating_add(ev.amount);
+                matched += 1;
+            }
+        }
+        if matched < transfers.len() {
+            return Err(ChainError::Rejected(format!("lot incomplet : {matched}/{} virements constatés", transfers.len())));
+        }
+        Ok(TxOutcome { block_hash, transferred: amount_of(paid)? })
     }
 
     async fn watch_transfers(&self, out: mpsc::Sender<TransferEvent>) -> Result<(), ChainError> {

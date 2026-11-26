@@ -115,7 +115,7 @@ impl<O: Outbox> Sharing<O> {
     }
 
     /// Message fichier (NIP-17, kind 15) emballé en NIP-59 pour `friend`, avec l'indication de la station qui détient le blob.
-    fn wrap_for(&self, secret: &[u8; 32], owner: &str, friend: &str, file: &SharedFile, library: Option<&str>) -> Result<astro_nostr_proto::Event, String> {
+    fn wrap_for(&self, secret: &[u8; 32], owner: &str, friend: &str, file: &SharedFile, library: Option<&str>, chain_json: Option<String>) -> Result<astro_nostr_proto::Event, String> {
         let mut tags = vec![
             vec!["p".to_owned(), friend.to_owned()],
             vec!["file-type".into(), file.mime.clone()],
@@ -133,6 +133,10 @@ impl<O: Outbox> Sharing<O> {
         if let Some(dir) = library {
             tags.push(vec!["dir".into(), dir.to_owned()]);
         }
+        // Chaîne de partage N¹ (Lot 1b) : chiffrée dans l'enveloppe NIP-59, jamais exposée en clair.
+        if let Some(chain) = chain_json {
+            tags.push(vec![crate::cascade_share::SHARE_CHAIN_TAG.into(), chain]);
+        }
         let rumor = Rumor { pubkey: owner.to_owned(), created_at: u64::try_from(now()).unwrap_or(0), kind: kind::FILE, tags, content: format!("ipfs://{}", file.cid) };
         gift_wrap(secret, friend, &rumor, rumor.created_at).map_err(|_| "emballage NIP-59 impossible".to_owned())
     }
@@ -142,8 +146,12 @@ impl<O: Outbox> Sharing<O> {
     pub async fn deliver_remote(&self, owner: &str, friend: &str, files: &[SharedFile]) -> (usize, Option<String>) {
         let Some(secret) = self.keys.secret(owner) else { return (0, Some("clé du compte indisponible : envoi impossible".into())) };
         let (mut sent, mut first) = (0usize, None);
+        let ts = now();
         for file in files {
-            let result = match self.wrap_for(&secret, owner, friend, file, None) {
+            let chain_json = crate::cascade_share::extend_for_send(&self.db, owner, &secret, friend, file, None, ts)
+                .await
+                .and_then(|c| serde_json::to_string(&c).ok());
+            let result = match self.wrap_for(&secret, owner, friend, file, None, chain_json) {
                 Ok(wrap) => self.outbox.send(friend, wrap).await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
@@ -197,12 +205,22 @@ impl<O: Outbox> Sharing<O> {
                 continue;
             };
             let (mut sent, mut errors) = (0usize, Vec::new());
+            let ts = now();
             for (path, file) in &files {
                 let dir = library.then(|| astro_dav::vfs::parent_of(path).to_owned());
+                let fiche_cid = crate::cascade_share::sibling_fiche_cid(&self.db, owner, path).await;
+                let next_chain = crate::cascade_share::extend_for_send(&self.db, owner, &secret, &f.hex, file, fiche_cid, ts).await;
                 let result = if f.hosted {
-                    astro_dav::adopt::adopt_shared_file_into(&self.db, &f.hex, owner, &my_label, file, "friend-share", dir.as_deref()).await.map(|_| ()).map_err(|e| e.to_string())
+                    let adopted = astro_dav::adopt::adopt_shared_file_into(&self.db, &f.hex, owner, &my_label, file, "friend-share", dir.as_deref()).await.map(|_| ()).map_err(|e| e.to_string());
+                    if adopted.is_ok() {
+                        if let Some(chain) = &next_chain {
+                            crate::cascade_share::save_chain(&self.db, &f.hex, chain).await;
+                        }
+                    }
+                    adopted
                 } else {
-                    match self.wrap_for(&secret, owner, &f.hex, file, dir.as_deref()) {
+                    let chain_json = next_chain.as_ref().and_then(|c| serde_json::to_string(c).ok());
+                    match self.wrap_for(&secret, owner, &f.hex, file, dir.as_deref(), chain_json) {
                         Ok(wrap) => self.outbox.send(&f.hex, wrap).await.map_err(|e| e.to_string()),
                         Err(e) => Err(e),
                     }
@@ -315,9 +333,12 @@ mod tests {
         assert_eq!((by(&hex(&BOB))["via"].as_str(), by(&hex(&BOB))["sent"].as_u64()), (Some("local"), Some(2)));
         assert_eq!((by(&hex(&CAROL))["via"].as_str(), by(&hex(&CAROL))["sent"].as_u64()), (Some("maillage"), Some(2)));
         assert!(by(&hex(&DAVE))["error"].as_str().unwrap().contains("réciproque"), "refus dit avec sa raison");
-        // Bob : rangé chez lui, même blob ; Carol : deux enveloppes qu'elle seule peut ouvrir, avec l'indication de station.
+        // Bob : rangé chez lui, même blob et lignée N¹ enregistrée ; Carol : deux enveloppes qu'elle seule peut ouvrir, avec station + share-chain.
         let n: i64 = db.readers().read(|c| Ok(c.query_row("SELECT COUNT(*) FROM ucloud_entries WHERE owner_hex = ?1 AND path LIKE '/Partages/De_alice/%'", [hex(&BOB)], |r| r.get(0))?)).await.unwrap();
         assert_eq!(n, 2);
+        let bob_chain = crate::cascade_share::load_chain(&db, &hex(&BOB), &"ee".repeat(32)).await.unwrap();
+        assert_eq!(bob_chain.depth(), 1);
+        assert_eq!(bob_chain.origin_pubkey, hex(&ALICE));
         let sent = outbox.0.lock().unwrap().clone();
         assert_eq!(sent.len(), 2);
         assert!(sent.iter().all(|(to, _)| to == &hex(&CAROL)));
@@ -325,6 +346,8 @@ mod tests {
         assert_eq!(opened.sender, hex(&ALICE));
         let tag = |n: &str| opened.rumor.tags.iter().find(|t| t[0] == n).map(|t| t[1].clone());
         assert_eq!((tag("station").as_deref(), tag("decryption-key").as_deref(), opened.rumor.kind), (Some("12D3KooWSender"), Some("ab".repeat(32).as_str()), kind::FILE));
+        let carol_chain = crate::cascade_share::verify_incoming_chain(&tag(crate::cascade_share::SHARE_CHAIN_TAG).unwrap(), &"ee".repeat(32), &hex(&ALICE), &hex(&CAROL)).unwrap();
+        assert_eq!(carol_chain.depth(), 1);
         assert!(nip59::unwrap(&BOB, &sent[0].1).is_err(), "personne d'autre ne l'ouvre");
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -6,6 +6,8 @@
 pub mod beacon;
 pub mod captain_alerts;
 pub mod captains;
+pub mod cascade_features;
+pub mod cascade_share;
 pub mod control;
 pub mod cosurf;
 pub mod account;

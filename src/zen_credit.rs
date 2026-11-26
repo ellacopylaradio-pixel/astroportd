@@ -123,6 +123,9 @@ struct Quote {
     activation: bool,
 }
 
+/// Envoi d'un « Merci » NIP-59 à un bénéficiaire distant `(destinataire_hex, enveloppe NIP-59)`.
+pub type ThankYouFn = Arc<dyn Fn(String, astro_nostr_proto::Event) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 /// Le service de mouvements.
 pub struct ZenCredit<C: Chain> {
     db: Arc<Db>,
@@ -135,6 +138,11 @@ pub struct ZenCredit<C: Chain> {
     primal: Option<PrimalFn>,
     /// Île « Ğ1 en différé » : quand elle est ouverte, l'envoi d'un membre à un proche devient une promesse (même écran).
     deferred: Option<Arc<dyn crate::island::Deferred>>,
+    /// Envoi d'un « Merci » NIP-59 aux bénéficiaires hébergés sur une autre station (#2).
+    thank_you: Option<ThankYouFn>,
+    /// Clés locales + publication sur le relai pour signer les mercis NIP-59 et les reçus `kind 30852` (#2, #7).
+    keys: Option<Arc<dyn astro_crypto::KeySource>>,
+    publish: Option<crate::register::PublishFn>,
 }
 
 type R<T> = Result<T, BilletError>;
@@ -155,7 +163,7 @@ fn island_error(e: crate::island::IslandFail) -> BilletError {
 impl<C: Chain> ZenCredit<C> {
     /// `accounts_dir` : dossier des comptes (`~/.zen/game/nostr`), où se trouve le `.secret.dunikey` de chaque MULTIPASS.
     pub fn new(db: Arc<Db>, chain: Arc<C>, wallets: Arc<Wallets>, accounts_dir: PathBuf, activity: ActivityBus) -> Self {
-        Self { db, chain, wallets, accounts_dir, activity, gate: tokio::sync::Mutex::new(()), retry_delay: Duration::from_secs(15), primal: None, deferred: None }
+        Self { db, chain, wallets, accounts_dir, activity, gate: tokio::sync::Mutex::new(()), retry_delay: Duration::from_secs(15), primal: None, deferred: None, thank_you: None, keys: None, publish: None }
     }
 
     /// Contrôle primal : sans lui, un membre ne peut payer qu'un MULTIPASS hébergé ici.
@@ -167,6 +175,14 @@ impl<C: Chain> ZenCredit<C> {
     /// Île : pendant une coupure de Duniter, « Envoyer des Ẑen » à un proche fait une promesse réglée au retour de la chaîne.
     pub fn with_deferred(mut self, d: Arc<dyn crate::island::Deferred>) -> Self {
         self.deferred = Some(d);
+        self
+    }
+
+    /// Gratitude NIP-59 (#2) et reçus Nostr `kind 30852` (#7) après règlement d'une cascade ou d'une ardoise.
+    pub fn with_cascade_hooks(mut self, keys: Arc<dyn astro_crypto::KeySource>, publish: crate::register::PublishFn, thank_you: ThankYouFn) -> Self {
+        self.keys = Some(keys);
+        self.publish = Some(publish);
+        self.thank_you = Some(thank_you);
         self
     }
 
@@ -213,6 +229,12 @@ impl<C: Chain> ZenCredit<C> {
             let mut list = vec![json!({ "to": "cash", "label": "cash" })];
             list.extend(rows.into_iter().map(|(h, e)| json!({ "to": h, "label": e })));
             return Ok(json!({ "recipients": list, "max_zen": MAX_ZEN_PER_CREDIT }));
+        }
+        if matches!(op, "cascade_preview" | "cascade_pay") {
+            return self.handle_cascade(op, body, &me).await;
+        }
+        if matches!(op, "slate_preview" | "slate_pay") {
+            return self.handle_slate_settle(op, body, &me).await;
         }
         let zc = Self::zen_cents_of(body)?;
         let target = body.get("to").and_then(Value::as_str).unwrap_or("");
@@ -268,6 +290,477 @@ impl<C: Chain> ZenCredit<C> {
             }
             _ => Err(BilletError::Invalid("zen_credit_bad_op", "opération inconnue".into())),
         }
+    }
+
+    /// Paiement en cascade Voie A (`cascade_preview` et `cascade_pay`, Lot 3).
+    ///
+    /// Filtre les relais éligibles à la tranche Diffusion par la toile de confiance (`wot_members`, anti-Sybil
+    /// intra-diffusion), calcule la table finale par `compute_payout_batch_with_eligible`, contrôle chaque portefeuille
+    /// (frontière de plan + dépôt existentiel Ğ1), puis émet le lot de virements définitifs avec suivi d'état rejouable
+    /// dans `kv` (ou promesses en mode île).
+    async fn handle_cascade(&self, op: &str, body: &Value, me: &Party) -> R<Value> {
+        use astro_economy::cascade::{CommonsBlock, DeciZen, ShareChain, compute_payout_batch_with_eligible};
+        let amount = body.get("amount_deci_zen").and_then(Value::as_u64).ok_or_else(|| BilletError::Invalid("cascade_bad_amount", "montant en déci-Ẑen attendu".into()))?;
+        let max_deci = MAX_ZEN_PER_CREDIT * 10;
+        if amount == 0 || amount > max_deci {
+            return Err(BilletError::Invalid("cascade_bad_amount", format!("de 0,10 à {MAX_ZEN_PER_CREDIT} ẑ par paiement")));
+        }
+        let commons: CommonsBlock = serde_json::from_value(body.get("commons").cloned().unwrap_or(Value::Null))
+            .map_err(|e| BilletError::Invalid("cascade_bad_commons", format!("bloc commons invalide : {e}")))?;
+        let chain: ShareChain = serde_json::from_value(body.get("chain").cloned().unwrap_or(Value::Null))
+            .map_err(|e| BilletError::Invalid("cascade_bad_chain", format!("chaîne de partage invalide : {e}")))?;
+        let wot = crate::cascade_share::wot_members(&self.db, now()).await.map_err(|e| BilletError::Unavailable("cascade_wot", e))?;
+        let batch = compute_payout_batch_with_eligible(DeciZen(amount), &commons, &chain, Some(&wot)).map_err(|e| BilletError::Refused("cascade_invalid", e.to_string()))?;
+
+        // Mode île éventuel (réseau Ğ1 coupé : promesses différées, sans contrôle primal en ligne).
+        let island = match &self.deferred {
+            Some(d) => d.quote(&me.hex).await.map_err(island_error)?,
+            None => None,
+        };
+        let check_primal = island.is_none();
+        let ed = self.chain.existential_deposit().0;
+
+        let mut resolved: Vec<(Party, u64)> = Vec::new();
+        let mut unreachable: Vec<Value> = Vec::new();
+        let mut self_skipped_deci_zen: u64 = 0;
+        for line in &batch.lines {
+            if line.to_pubkey == me.hex {
+                self_skipped_deci_zen = self_skipped_deci_zen.saturating_add(line.amount.0);
+                continue;
+            }
+            match self.member_party(&line.to_pubkey, check_primal).await {
+                Ok(party) => {
+                    // Hors mode île : vérifie que le compte bénéficiaire atteindra au moins le dépôt existentiel (1 Ğ1).
+                    if island.is_none() {
+                        match self.chain.balance(&party.account).await {
+                            Ok(bal) if bal.total.0.saturating_add(line.amount.0) < ed => {
+                                unreachable.push(json!({ "to_pubkey": line.to_pubkey, "reason": "portefeuille bénéficiaire non activé (dépôt existentiel 1 Ğ1 non atteint)" }));
+                                continue;
+                            }
+                            Ok(_) => {}
+                            Err(e) => return Err(BilletError::Unavailable("zen_credit_chain", format!("chaîne Ğ1 injoignable : {e}"))),
+                        }
+                    }
+                    resolved.push((party, line.amount.0));
+                }
+                Err(err) => unreachable.push(json!({ "to_pubkey": line.to_pubkey, "reason": err.to_string() })),
+            }
+        }
+        let g1_total: u64 = resolved.iter().map(|(_, a)| *a).sum();
+        let zen_cents = g1_total * ZEN_CENTS_PER_G1_CENT;
+
+        let (payer_g1, available_g1) = if let Some(isl) = &island {
+            let avail = isl["available_g1_cents"].as_u64().unwrap_or(0);
+            (avail, avail)
+        } else {
+            let bal = self.chain.balance(&me.account).await.map_err(|e| BilletError::Unavailable("zen_credit_chain", format!("chaîne Ğ1 injoignable : {e}")))?;
+            (bal.total.0, bal.transferable.0.saturating_sub(RESERVE_G1_CENTS))
+        };
+        let enough = g1_total <= available_g1;
+        let payable = unreachable.is_empty() && enough && !resolved.is_empty();
+
+        if op == "cascade_preview" {
+            let pks: Vec<String> = resolved.iter().map(|(p, _)| p.hex.clone()).chain(batch.filtered_relays.iter().cloned()).collect();
+            let labels = crate::cascade_share::resolve_labels(&self.db, &pks).await;
+            let after = payer_g1.saturating_sub(g1_total);
+            return Ok(json!({
+                "payable": payable,
+                "enough_funds": enough,
+                "island": island,
+                "work_sha": batch.work_sha,
+                "amount_deci_zen": amount,
+                "net_deci_zen": g1_total,
+                "self_skipped_deci_zen": self_skipped_deci_zen,
+                "amount_zen_cents": zen_cents,
+                "g1_cents": g1_total,
+                "payer_g1_cents": payer_g1,
+                "payer_after_g1_cents": after,
+                "payer_after_zen_cents": zen_of_g1(after),
+                "lines": resolved.iter().map(|(p, a)| json!({
+                    "to_pubkey": p.hex,
+                    "label": labels.get(&p.hex).cloned().unwrap_or_else(|| p.email.clone()),
+                    "email": p.email,
+                    "address": p.account.ss58(),
+                    "deci_zen": a,
+                    "zen_cents": a * ZEN_CENTS_PER_G1_CENT,
+                    "g1_cents": a,
+                })).collect::<Vec<_>>(),
+                "filtered_relays": batch.filtered_relays.iter().map(|pk| json!({
+                    "pubkey": pk,
+                    "label": labels.get(pk).cloned().unwrap_or_else(|| pk[..8].to_owned()),
+                })).collect::<Vec<_>>(),
+                "unreachable": unreachable,
+            }));
+        }
+
+        // Exécution : confirmation obligatoire + identifiant rejouable.
+        if body.get("confirm").and_then(Value::as_bool) != Some(true) {
+            return Err(BilletError::Invalid("zen_credit_unconfirmed", "versement non confirmé".into()));
+        }
+        let id = body
+            .get("credit_id")
+            .and_then(Value::as_str)
+            .filter(|s| (8..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+            .ok_or_else(|| BilletError::Invalid("zen_credit_bad_id", "identifiant de versement invalide".into()))?;
+        if !unreachable.is_empty() {
+            return Err(BilletError::Refused("cascade_unreachable_beneficiary", "l'un des bénéficiaires n'est pas joignable depuis ce plan".into()));
+        }
+        if resolved.is_empty() {
+            return Err(BilletError::Refused("cascade_nothing_to_pay", "aucun bénéficiaire tiers à rémunérer".into()));
+        }
+
+        let _guard = self.gate.try_lock().map_err(|_| BilletError::Limited("zen_credit_busy", "un versement est déjà en cours : réessayez dans un instant".into()))?;
+        let key = format!("{}:{id}", me.hex.chars().take(16).collect::<String>());
+        let base = format!("cascade|{}|{g1_total}", &batch.work_sha[..16]);
+        let mut done_steps = 0usize;
+        if let Some(state) = self.state(&key).await {
+            let v: Vec<&str> = state.splitn(5, '|').collect();
+            match v.as_slice() {
+                ["done", ..] => return Ok(json!({ "ok": true, "already": true, "work_sha": batch.work_sha })),
+                ["run", ..] => return Err(BilletError::Refused("zen_credit_unknown_outcome", "l'issue d'un virement est inconnue : vérifiez les soldes avant de recommencer".into())),
+                ["ok", k, w, g, i] => {
+                    if format!("{k}|{w}|{g}") != base {
+                        return Err(BilletError::Refused("zen_credit_id_reused", "cet identifiant de versement appartient à une autre demande".into()));
+                    }
+                    done_steps = i.parse().unwrap_or(0);
+                }
+                _ => {}
+            }
+        }
+        if done_steps == 0 && !enough {
+            return Err(BilletError::Refused("zen_credit_poor", "votre portefeuille n'a pas assez de Ẑen disponibles".into()));
+        }
+
+        let mut block_hash_hex: Option<String> = None;
+        if let (Some(_), Some(d)) = (&island, &self.deferred) {
+            for (idx, (party, g1)) in resolved.iter().enumerate().skip(done_steps) {
+                self.set_state(&key, &format!("run|{base}|{idx}")).await;
+                let sub_id = format!("{id}-{idx}");
+                match d.promise(&me.hex, &party.hex, &party.account.ss58(), *g1, &sub_id).await {
+                    Ok(_) => self.set_state(&key, &format!("ok|{base}|{}", idx + 1)).await,
+                    Err(e) => {
+                        if idx == 0 {
+                            self.clear_state(&key).await;
+                        } else {
+                            self.set_state(&key, &format!("ok|{base}|{idx}")).await;
+                        }
+                        return Err(island_error(e));
+                    }
+                }
+            }
+        } else {
+            let signer = self.signer_of_email(&me.email)?;
+            self.set_state(&key, &format!("run|{base}|0")).await;
+            let batch_args: Vec<(Account, Amount)> = resolved.iter().map(|(p, g1)| (p.account, Amount(*g1))).collect();
+            let memo = format!("UPLANET:CASCADE:{}", &batch.work_sha[..8]);
+            match self.transfer_batch_retry(&signer, &batch_args, &memo).await {
+                Ok(out) => block_hash_hex = Some(hex::encode(out.block_hash)),
+                Err(e) => return Err(self.step_failed(&key, &base, 0, &e, &batch.work_sha[..8], zen_cents).await),
+            }
+        }
+        self.set_state(&key, &format!("done|{base}|{}", resolved.len())).await;
+        self.audit(json!({ "id": id, "actor": me.hex, "kind": "cascade", "work_sha": batch.work_sha, "zen_cents": zen_cents, "g1_cents": g1_total, "transfers": resolved.len(), "resumed": done_steps > 0, "island": island.is_some() })).await;
+
+        // #1 & #2 : enregistrement des reçus locaux + envoi des mercis NIP-59 aux bénéficiaires distants.
+        let note = crate::cascade_features::clean_note(body.get("note").and_then(Value::as_str));
+        let anonymous = body.get("anonymous").and_then(Value::as_bool).unwrap_or(false);
+        let title = body.get("title").and_then(Value::as_str).unwrap_or("").to_owned();
+        let creation_set: std::collections::BTreeSet<&str> = if commons.flattened_payouts.is_empty() {
+            commons.credits.iter().map(|c| c.pubkey.as_str()).collect()
+        } else {
+            commons.flattened_payouts.iter().map(|p| p.pubkey.as_str()).collect()
+        };
+        let relay_set: std::collections::BTreeSet<&str> = chain.unique_relays(&commons.author_pubkey).into_iter().collect();
+        let ts = now();
+        for (party, g1) in &resolved {
+            let role = match (creation_set.contains(party.hex.as_str()), relay_set.contains(party.hex.as_str())) {
+                (true, true) => "mixed",
+                (false, true) => "relay",
+                _ => "creation",
+            };
+            let tx_ref = format!("{id}:{}:{}", &batch.work_sha[..8], &party.hex[..8]);
+            self.dispatch_thank_you(&me.hex, &party.hex, &batch.work_sha, &title, role, *g1, note.as_deref(), anonymous, &tx_ref, ts).await;
+        }
+        // #7 : reçu Nostr kind 30852 facultatif (si clés + publisher câblés).
+        let receipt_id = self.publish_cascade_receipt(&me.hex, &batch.work_sha, id, g1_total, resolved.len(), block_hash_hex.as_deref(), ts).await;
+
+        Ok(json!({
+            "ok": true,
+            "already": false,
+            "island": island.is_some(),
+            "work_sha": batch.work_sha,
+            "amount_deci_zen": amount,
+            "amount_zen_cents": zen_cents,
+            "g1_cents": g1_total,
+            "transfers": resolved.len(),
+            "block_hash": block_hash_hex,
+            "receipt_event_id": receipt_id,
+        }))
+    }
+
+    /// Règlement groupé d'une ardoise (`slate_preview` / `slate_pay`, #3 + #7).
+    ///
+    /// Calcule chaque œuvre avec filtrage WoT des relais, **fusionne tous les bénéficiaires en une seule table de
+    /// virements** (un bénéficiaire présent sur plusieurs œuvres ne reçoit qu'un seul virement), exécute le lot en
+    /// atomique (`utility.batch_all`) ou en promesses île, puis envoie les reçus/mercis par œuvre.
+    async fn handle_slate_settle(&self, op: &str, body: &Value, me: &Party) -> R<Value> {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use astro_economy::cascade::{CommonsBlock, DeciZen, ShareChain, compute_payout_batch_with_eligible};
+
+        let items = body
+            .get("items")
+            .and_then(Value::as_array)
+            .filter(|a| !a.is_empty() && a.len() <= crate::cascade_features::MAX_SLATE_ITEMS)
+            .ok_or_else(|| BilletError::Invalid("slate_empty", "ardoise vide ou trop grande".into()))?;
+
+        struct WorkReceipts {
+            work_sha: String,
+            title: String,
+            note: Option<String>,
+            anonymous: bool,
+            lines: Vec<(String, &'static str, u64)>,
+        }
+        let wot = crate::cascade_share::wot_members(&self.db, now()).await.map_err(|e| BilletError::Unavailable("cascade_wot", e))?;
+        let mut merged: BTreeMap<String, u64> = BTreeMap::new();
+        let mut filtered_count = 0usize;
+        let mut per_work_receipts: Vec<WorkReceipts> = Vec::new();
+        let mut works_shas: Vec<String> = Vec::new();
+
+        for item in items {
+            let amount = item.get("amount_deci_zen").and_then(Value::as_u64).ok_or_else(|| BilletError::Invalid("cascade_bad_amount", "montant invalide dans l'ardoise".into()))?;
+            if amount == 0 || amount > MAX_ZEN_PER_CREDIT * 10 {
+                return Err(BilletError::Invalid("cascade_bad_amount", "montant hors bornes dans l'ardoise".into()));
+            }
+            let commons: CommonsBlock = serde_json::from_value(item.get("commons").cloned().unwrap_or(Value::Null))
+                .map_err(|e| BilletError::Invalid("cascade_bad_commons", format!("bloc commons invalide : {e}")))?;
+            let chain: ShareChain = serde_json::from_value(item.get("chain").cloned().unwrap_or(Value::Null))
+                .map_err(|e| BilletError::Invalid("cascade_bad_chain", format!("chaîne invalide : {e}")))?;
+            let batch = compute_payout_batch_with_eligible(DeciZen(amount), &commons, &chain, Some(&wot)).map_err(|e| BilletError::Refused("cascade_invalid", e.to_string()))?;
+            filtered_count += batch.filtered_relays.len();
+            let title = item.get("title").and_then(Value::as_str).unwrap_or("").to_owned();
+            let note = crate::cascade_features::clean_note(item.get("note").and_then(Value::as_str));
+            let anonymous = item.get("anonymous").and_then(Value::as_bool).unwrap_or(false);
+            let creation_set: BTreeSet<&str> = if commons.flattened_payouts.is_empty() {
+                commons.credits.iter().map(|c| c.pubkey.as_str()).collect()
+            } else {
+                commons.flattened_payouts.iter().map(|p| p.pubkey.as_str()).collect()
+            };
+            let relay_set: BTreeSet<&str> = chain.unique_relays(&commons.author_pubkey).into_iter().collect();
+            let mut work_lines = Vec::new();
+            for line in &batch.lines {
+                if line.to_pubkey == me.hex {
+                    continue;
+                }
+                *merged.entry(line.to_pubkey.clone()).or_insert(0) += line.amount.0;
+                let role = match (creation_set.contains(line.to_pubkey.as_str()), relay_set.contains(line.to_pubkey.as_str())) {
+                    (true, true) => "mixed",
+                    (false, true) => "relay",
+                    _ => "creation",
+                };
+                work_lines.push((line.to_pubkey.clone(), role, line.amount.0));
+            }
+            works_shas.push(batch.work_sha.clone());
+            per_work_receipts.push(WorkReceipts { work_sha: batch.work_sha, title, note, anonymous, lines: work_lines });
+        }
+
+        let island = match &self.deferred {
+            Some(d) => d.quote(&me.hex).await.map_err(island_error)?,
+            None => None,
+        };
+        let check_primal = island.is_none();
+        let ed = self.chain.existential_deposit().0;
+
+        let mut resolved: Vec<(Party, u64)> = Vec::new();
+        let mut unreachable: Vec<Value> = Vec::new();
+        for (pk, g1) in merged {
+            match self.member_party(&pk, check_primal).await {
+                Ok(party) => {
+                    if island.is_none() {
+                        match self.chain.balance(&party.account).await {
+                            Ok(bal) if bal.total.0.saturating_add(g1) < ed => {
+                                unreachable.push(json!({ "to_pubkey": pk, "reason": "portefeuille bénéficiaire non activé (dépôt existentiel 1 Ğ1 non atteint)" }));
+                                continue;
+                            }
+                            Ok(_) => {}
+                            Err(e) => return Err(BilletError::Unavailable("zen_credit_chain", format!("chaîne Ğ1 injoignable : {e}"))),
+                        }
+                    }
+                    resolved.push((party, g1));
+                }
+                Err(err) => unreachable.push(json!({ "to_pubkey": pk, "reason": err.to_string() })),
+            }
+        }
+        let g1_total: u64 = resolved.iter().map(|(_, a)| *a).sum();
+        if g1_total > MAX_ZEN_PER_CREDIT * 10 {
+            return Err(BilletError::Invalid("cascade_bad_amount", format!("ardoise au-delà du plafond de {MAX_ZEN_PER_CREDIT} ẑ")));
+        }
+        let zen_cents = g1_total * ZEN_CENTS_PER_G1_CENT;
+        let (payer_g1, available_g1) = if let Some(isl) = &island {
+            let avail = isl["available_g1_cents"].as_u64().unwrap_or(0);
+            (avail, avail)
+        } else {
+            let bal = self.chain.balance(&me.account).await.map_err(|e| BilletError::Unavailable("zen_credit_chain", format!("chaîne Ğ1 injoignable : {e}")))?;
+            (bal.total.0, bal.transferable.0.saturating_sub(RESERVE_G1_CENTS))
+        };
+        let enough = g1_total <= available_g1;
+        let payable = unreachable.is_empty() && enough && !resolved.is_empty();
+
+        if op == "slate_preview" {
+            let pks: Vec<String> = resolved.iter().map(|(p, _)| p.hex.clone()).collect();
+            let labels = crate::cascade_share::resolve_labels(&self.db, &pks).await;
+            let after = payer_g1.saturating_sub(g1_total);
+            return Ok(json!({
+                "payable": payable,
+                "enough_funds": enough,
+                "island": island,
+                "items_count": items.len(),
+                "net_deci_zen": g1_total,
+                "amount_zen_cents": zen_cents,
+                "g1_cents": g1_total,
+                "payer_g1_cents": payer_g1,
+                "payer_after_g1_cents": after,
+                "payer_after_zen_cents": zen_of_g1(after),
+                "filtered_relays_count": filtered_count,
+                "lines": resolved.iter().map(|(p, a)| json!({
+                    "to_pubkey": p.hex,
+                    "label": labels.get(&p.hex).cloned().unwrap_or_else(|| p.email.clone()),
+                    "deci_zen": a, "zen_cents": a * ZEN_CENTS_PER_G1_CENT, "g1_cents": a,
+                })).collect::<Vec<_>>(),
+                "unreachable": unreachable,
+            }));
+        }
+
+        if body.get("confirm").and_then(Value::as_bool) != Some(true) {
+            return Err(BilletError::Invalid("zen_credit_unconfirmed", "règlement non confirmé".into()));
+        }
+        let id = body
+            .get("credit_id")
+            .and_then(Value::as_str)
+            .filter(|s| (8..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+            .ok_or_else(|| BilletError::Invalid("zen_credit_bad_id", "identifiant de versement invalide".into()))?;
+        if !unreachable.is_empty() {
+            return Err(BilletError::Refused("cascade_unreachable_beneficiary", "l'un des bénéficiaires n'est pas joignable depuis ce plan".into()));
+        }
+        if resolved.is_empty() {
+            return Err(BilletError::Refused("cascade_nothing_to_pay", "aucun bénéficiaire tiers à rémunérer".into()));
+        }
+
+        let _guard = self.gate.try_lock().map_err(|_| BilletError::Limited("zen_credit_busy", "un versement est déjà en cours : réessayez dans un instant".into()))?;
+        let key = format!("{}:{id}", me.hex.chars().take(16).collect::<String>());
+        let base = format!("slate|{}|{g1_total}", items.len());
+        if let Some(state) = self.state(&key).await {
+            match state.split('|').next() {
+                Some("done") => return Ok(json!({ "ok": true, "already": true, "items_count": items.len() })),
+                Some("run") => return Err(BilletError::Refused("zen_credit_unknown_outcome", "l'issue du lot est inconnue : vérifiez les soldes avant de recommencer".into())),
+                _ => {}
+            }
+        }
+        if !enough {
+            return Err(BilletError::Refused("zen_credit_poor", "votre portefeuille n'a pas assez de Ẑen disponibles".into()));
+        }
+
+        let mut block_hash_hex: Option<String> = None;
+        if let (Some(_), Some(d)) = (&island, &self.deferred) {
+            for (idx, (party, g1)) in resolved.iter().enumerate() {
+                self.set_state(&key, &format!("run|{base}|{idx}")).await;
+                d.promise(&me.hex, &party.hex, &party.account.ss58(), *g1, &format!("{id}-{idx}")).await.map_err(island_error)?;
+                self.set_state(&key, &format!("ok|{base}|{}", idx + 1)).await;
+            }
+        } else {
+            let signer = self.signer_of_email(&me.email)?;
+            self.set_state(&key, &format!("run|{base}|0")).await;
+            let batch_args: Vec<(Account, Amount)> = resolved.iter().map(|(p, g1)| (p.account, Amount(*g1))).collect();
+            let memo = format!("UPLANET:SLATE:{}", &id[..id.len().min(16)]);
+            match self.transfer_batch_retry(&signer, &batch_args, &memo).await {
+                Ok(out) => block_hash_hex = Some(hex::encode(out.block_hash)),
+                Err(e) => return Err(self.step_failed(&key, &base, 0, &e, "slate", zen_cents).await),
+            }
+        }
+        self.set_state(&key, &format!("done|{base}|{}", resolved.len())).await;
+        self.audit(json!({ "id": id, "actor": me.hex, "kind": "cascade_slate", "works": works_shas, "items_count": items.len(), "zen_cents": zen_cents, "g1_cents": g1_total, "transfers": resolved.len(), "island": island.is_some() })).await;
+
+        let ts = now();
+        for w in per_work_receipts {
+            let work_total: u64 = w.lines.iter().map(|(_, _, a)| *a).sum();
+            for (to_pk, role, amt) in &w.lines {
+                let tx_ref = format!("{id}:{}:{}", &w.work_sha[..8], &to_pk[..8]);
+                self.dispatch_thank_you(&me.hex, to_pk, &w.work_sha, &w.title, role, *amt, w.note.as_deref(), w.anonymous, &tx_ref, ts).await;
+            }
+            let _ = self.publish_cascade_receipt(&me.hex, &w.work_sha, id, work_total, w.lines.len(), block_hash_hex.as_deref(), ts).await;
+        }
+
+        Ok(json!({
+            "ok": true,
+            "already": false,
+            "island": island.is_some(),
+            "items_count": items.len(),
+            "g1_cents": g1_total,
+            "amount_zen_cents": zen_cents,
+            "transfers": resolved.len(),
+            "block_hash": block_hash_hex,
+        }))
+    }
+
+    async fn transfer_batch_retry(&self, from: &Ed25519Signer, transfers: &[(Account, Amount)], memo: &str) -> Result<astro_duniter::TxOutcome, ChainError> {
+        match self.chain.transfer_batch(from, transfers, TransferMode::KeepAlive, Some(memo)).await {
+            Err(ChainError::Connection(_)) => {
+                tokio::time::sleep(self.retry_delay).await;
+                self.chain.transfer_batch(from, transfers, TransferMode::KeepAlive, Some(memo)).await
+            }
+            other => other,
+        }
+    }
+
+    /// Enregistre le reçu localement si `to_hex` est hébergé sur cette station, ou lui envoie un « Merci » NIP-59 (#2).
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_thank_you(&self, from_hex: &str, to_hex: &str, work_sha: &str, title: &str, role: &str, deci_zen: u64, note: Option<&str>, anonymous: bool, tx_ref: &str, at: i64) {
+        let to_q = to_hex.to_owned();
+        let hosted: bool = self
+            .read(move |c| Ok(c.query_row("SELECT hosted FROM identities WHERE hex = ?1", [&to_q], |r| r.get::<_, i64>(0)).optional()?.unwrap_or(0) != 0))
+            .await
+            .unwrap_or(false);
+        if hosted {
+            let receipt = crate::cascade_features::ThankYouReceipt {
+                tx_ref: tx_ref.to_owned(),
+                to: to_hex.to_owned(),
+                from: (!anonymous).then(|| from_hex.to_owned()),
+                work_sha: work_sha.to_owned(),
+                title: title.to_owned(),
+                role: role.to_owned(),
+                deci_zen,
+                note: note.map(str::to_owned),
+                anonymous,
+                at,
+            };
+            if crate::cascade_features::record_received(&self.db, &receipt).await {
+                let who = if anonymous {
+                    "Un proche".to_owned()
+                } else {
+                    crate::cascade_share::resolve_labels(&self.db, &[from_hex.to_owned()]).await.remove(from_hex).unwrap_or_else(|| "Un proche".into())
+                };
+                let zen = format!("{:.2}", deci_zen as f64 / 10.0).replace('.', ",");
+                let extra = note.map(|n| format!(" — « {n} »")).unwrap_or_default();
+                let what = if title.is_empty() { "votre œuvre".to_owned() } else { format!("« {title} »") };
+                self.activity.publish_to(Audience::Owner(to_hex.to_owned()), "economy", "cascade_received", format!("💚 {who} a soutenu {what} (+{zen} Ẑ){extra}"), None);
+            }
+        } else if let (Some(keys), Some(send)) = (&self.keys, &self.thank_you) {
+            if let Some(secret) = astro_crypto::KeySource::secret(keys.as_ref(), from_hex) {
+                if let Ok(wrap) = crate::cascade_features::wrap_thank_you(&secret, from_hex, to_hex, work_sha, title, role, deci_zen, note, anonymous, tx_ref, at) {
+                    send(to_hex.to_owned(), wrap).await;
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn publish_cascade_receipt(&self, from_hex: &str, work_sha: &str, credit_id: &str, total_deci_zen: u64, transfers: usize, block_hash: Option<&str>, at: i64) -> Option<String> {
+        let (Some(keys), Some(publish)) = (&self.keys, &self.publish) else { return None };
+        let secret = keys.secret(from_hex)?;
+        let ev = crate::cascade_features::build_receipt_event(&secret, work_sha, credit_id, total_deci_zen, transfers, block_hash, at).ok()?;
+        let id = ev.id.clone();
+        publish(ev).await.ok()?;
+        Some(id)
     }
 
     /// Crédite un don (OpenCollective) : `kind` et `email` du donateur, `zen_cents` à verser. `id` rend l'appel rejouable.
@@ -953,6 +1446,122 @@ pub(crate) mod tests {
         assert_eq!((last.0, last.1, last.2), (r.master, r.coop.rnd, 500));
         assert!(last.3.contains(":RnD:OC-DON:donateur@exemple.org"));
         assert!(matches!(r.svc.credit_donation("oc-aaaa0003", Kind::Usage, "inconnu@exemple.org", 1_000).await, Err(BilletError::Refused("zen_credit_unknown_recipient", _))));
+        let _ = std::fs::remove_dir_all(r.dir);
+    }
+
+    #[tokio::test]
+    async fn lot3_cascade_voie_a_pays_dag_and_chain_atomically_and_is_idempotent() {
+        use std::collections::BTreeMap;
+
+        use astro_economy::cascade::{Bps, CommonsBlock, Credit, DeciZen, PricingMode, Rights, ShareChain, SourceRef, SourceRole, SplitRule, flatten_dag};
+        use astro_nostr_proto::pubkey_of;
+
+        let r = rig("cascade", 10_000).await;
+        // Alice (photo), Bob (botaniste), Charlie (relais), David (= MEMBER, spectateur)
+        let (alice_sk, bob_sk, charlie_sk) = ([0xA1u8; 32], [0xB2u8; 32], [0xC3u8; 32]);
+        let (alice_pk, bob_pk, charlie_pk) = (pubkey_of(&alice_sk).unwrap(), pubkey_of(&bob_sk).unwrap(), pubkey_of(&charlie_sk).unwrap());
+        let (alice_acc, bob_acc, charlie_acc) = (Ed25519Signer::from_seed([0x71; 32]).account(), Ed25519Signer::from_seed([0x72; 32]).account(), Ed25519Signer::from_seed([0x73; 32]).account());
+        for (pk, email, role, seed) in [(&alice_pk, "alice@exemple.org", "multipass", 0x71u8), (&bob_pk, "bob@exemple.org", "multipass", 0x72), (&charlie_pk, "charlie@exemple.org", "captain", 0x73)] {
+            std::fs::create_dir_all(r.dir.join("nostr").join(email)).unwrap();
+            std::fs::write(r.dir.join("nostr").join(email).join(".secret.dunikey"), astro_lifecycle::dunikey::render(&[seed; 32])).unwrap();
+            r.db.writer().execute("INSERT INTO identities(hex, role, email, hosted) VALUES (?1, ?2, ?3, 1)", vec![pk.clone().into(), role.to_owned().into(), email.to_owned().into()]).await.unwrap();
+        }
+        {
+            let mut b = r.chain.balances.lock().unwrap();
+            b.insert(alice_acc, 100);
+            b.insert(bob_acc, 100);
+            b.insert(charlie_acc, 100);
+        }
+
+        // Fiche A (Alice, remix_min_bps = 4000) -> Fiche B (Bob, 60 % Bob / 40 % Alice, 80/20 création/diffusion)
+        let sha_a = "aa".repeat(32);
+        let mut blk_a = CommonsBlock {
+            v: 1,
+            author_pubkey: alice_pk.clone(),
+            content_sha: sha_a.clone(),
+            rights: Rights::OpenCommon { spdx: "CC-BY-SA-4.0".into(), allow_remix: true, remix_min_bps: Bps(4_000) },
+            pricing: PricingMode::Free,
+            split: SplitRule::default(),
+            credits: vec![Credit { pubkey: alice_pk.clone(), role: "photo".into(), bps: Bps(10_000), attest_sig: None }],
+            sources: vec![],
+            generation: 0,
+            remix: None,
+            flattened_payouts: vec![astro_economy::cascade::PayoutShare { pubkey: alice_pk.clone(), bps: Bps(10_000) }],
+            signature: None,
+        };
+        blk_a.sign(&alice_sk).unwrap();
+
+        let sha_b = "bb".repeat(32);
+        let src = vec![SourceRef { sha_plain: sha_a.clone(), cid: "bafkreia".into(), author_pubkey: alice_pk.clone(), event_id: None, role: SourceRole::PrimaryMedia, share_bps: Bps(4_000) }];
+        let creds_b = vec![Credit { pubkey: bob_pk.clone(), role: "botanique".into(), bps: Bps(6_000), attest_sig: None }];
+        let (generation, flat) = flatten_dag(&bob_pk, &sha_b, &creds_b, &src, &BTreeMap::from([(sha_a, blk_a)])).unwrap();
+        let mut blk_b = CommonsBlock {
+            v: 1,
+            author_pubkey: bob_pk.clone(),
+            content_sha: sha_b.clone(),
+            rights: Rights::OpenCommon { spdx: "CC-BY-SA-4.0".into(), allow_remix: true, remix_min_bps: Bps(3_000) },
+            pricing: PricingMode::Fixed { price_deci_zen: DeciZen(25) },
+            split: SplitRule::default(),
+            credits: creds_b,
+            sources: src,
+            generation,
+            remix: None,
+            flattened_payouts: flat,
+            signature: None,
+        };
+        blk_b.sign(&bob_sk).unwrap();
+
+        // Chaîne avec un Sybil hors WoT : Bob -> Charlie (WoT) -> Sybil (hors WoT) -> David (MEMBER)
+        let sybil_sk = [0x98u8; 32];
+        let sybil_pk = pubkey_of(&sybil_sk).unwrap();
+        let chain = ShareChain::new_root(&sha_b, "bafkreib", None, bob_pk.clone())
+            .unwrap()
+            .extend(&bob_sk, &charlie_pk, 1_790_000_001)
+            .unwrap()
+            .extend(&charlie_sk, &sybil_pk, 1_790_000_002)
+            .unwrap()
+            .extend(&sybil_sk, MEMBER, 1_790_000_003)
+            .unwrap();
+
+        // 1. Aperçu : 25 déci-Ẑen -> 8 Alice + 12 Bob + 5 Charlie = 25 g1_cents ; le Sybil est listé dans filtered_relays
+        let ask = member_body(json!({
+            "amount_deci_zen": 25,
+            "commons": blk_b,
+            "chain": chain,
+            "credit_id": "cascade-0001",
+            "confirm": true,
+        }));
+        let prev = r.svc.handle_member("cascade_preview", &ask).await.unwrap();
+        assert_eq!(prev["payable"], true);
+        assert_eq!(prev["g1_cents"], 25);
+        assert_eq!(prev["lines"].as_array().unwrap().len(), 3);
+        assert_eq!(prev["filtered_relays"].as_array().unwrap().len(), 1);
+
+        // 2. Paiement effectif Voie A
+        let paid = r.svc.handle_member("cascade_pay", &ask).await.unwrap();
+        assert_eq!((paid["ok"].as_bool(), paid["already"].as_bool(), paid["transfers"].as_u64()), (Some(true), Some(false), Some(3)));
+        let bal = r.chain.balances.lock().unwrap().clone();
+        assert_eq!((bal[&alice_acc], bal[&bob_acc], bal[&charlie_acc], bal[&r.member]), (108, 112, 105, 1_075));
+
+        // 3. Rejeu avec le même credit_id -> déjà fait, aucun virement supplémentaire
+        let again = r.svc.handle_member("cascade_pay", &ask).await.unwrap();
+        assert_eq!(again["already"], true);
+        assert_eq!(r.chain.sent.lock().unwrap().len(), 3);
+
+        // 4. Contrôle dépôt existentiel : bénéficiaire avec 0 centime (< 100 ED) bloqué à l'aperçu avant tout virement
+        r.chain.balances.lock().unwrap().insert(alice_acc, 0);
+        let ask_ed = member_body(json!({
+            "amount_deci_zen": 25,
+            "commons": blk_b,
+            "chain": chain,
+            "credit_id": "cascade-0002",
+            "confirm": true,
+        }));
+        let prev_ed = r.svc.handle_member("cascade_preview", &ask_ed).await.unwrap();
+        assert_eq!(prev_ed["payable"], false);
+        assert_eq!(prev_ed["unreachable"].as_array().unwrap().len(), 1);
+        assert!(matches!(r.svc.handle_member("cascade_pay", &ask_ed).await, Err(BilletError::Refused("cascade_unreachable_beneficiary", _))));
+        assert_eq!(r.chain.sent.lock().unwrap().len(), 3, "aucun virement partiel émis");
         let _ = std::fs::remove_dir_all(r.dir);
     }
 }

@@ -4,12 +4,14 @@
 //! - [`island`] : ISLAND-1 « Ğ1 en différé » : promesses de Ğ1 plafonnées au dernier solde connu plus les DU, réglées au retour de la chaîne ;
 //! - [`split`] : ventilation d'un surplus en `IMPOT` / prime du Capitaine / `CASH` / `RnD` / `ASSETS` ;
 //! - [`love`] : clôture hebdomadaire et bascule en *Bénévolat Actif* quand la trésorerie ne couvre plus les charges ;
-//! - [`store`] : traduction en requêtes SQL (garde d'idempotence `done`, `love_ledger`, `journal`).
+//! - [`store`] : traduction en requêtes SQL (garde d'idempotence `done`, `love_ledger`, `journal`) ;
+//! - [`cascade`] : partage N¹ en chaîne, DAG de remix/communs et calcul de répartition exact Voie A en déci-Ẑen.
 //!
 //! Tous les montants sont des centimes entiers ([`Amount`]), jamais des flottants.
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod cascade;
 pub mod island;
 pub mod meet;
 pub mod wot;

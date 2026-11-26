@@ -192,6 +192,14 @@ pub struct MediaFriendsFns {
     pub share: MediaShareFn,
     /// Trace du partage `(compte, fiche)`.
     pub trace: Arc<dyn Fn(String, String) -> ValueFuture + Send + Sync>,
+    /// Chaîne N¹, liste officielle et bloc `commons` `(compte, fiche)`.
+    pub chain_info: Arc<dyn Fn(String, String) -> ValueFuture + Send + Sync>,
+    /// Inscription / retrait sur la liste officielle `(compte, fiche, inscrire)`.
+    pub register_official: Arc<dyn Fn(String, String, bool) -> ValueFuture + Send + Sync>,
+    /// Publication vers le commun / remix recette `(compte, corps JSON)`.
+    pub publish_remix: Arc<dyn Fn(String, Value) -> ValueFuture + Send + Sync>,
+    /// Contresignature d'un co-auteur sur le générique `(compte, fiche)`.
+    pub attest_credit: Arc<dyn Fn(String, String) -> ValueFuture + Send + Sync>,
 }
 
 /// Sauvegarde privée : état, réglage `(compte, actif, ami)` et réponse de l'hébergeur `(hébergeur, propriétaire, accepte, volume, plafond)`.
@@ -462,7 +470,7 @@ impl<B: BlobStore> StationUi<B> {
     /// `StationUi` n'est plus qu'un plan de câblage consommé au démarrage.
     pub fn into_router(self, activity: astro_core::ActivityBus, public_origin: Option<String>) -> axum::Router {
         astro_ui::api::Routes::new(activity, public_origin)
-            .ucloud(Arc::new(UcloudBackend { services: self.services.clone(), dav: self.dav.clone(), friends_fn: self.friends_fn.clone(), backup: self.backup.clone(), media_friends: self.media_friends.clone(), replicate_fn: self.replicate_fn.clone(), site: self.site.clone(), pull: self.pull.clone(), organize: self.organize.clone(), send_fn: self.send_fn.clone(), seer: self.seer.clone() }))
+            .ucloud(Arc::new(UcloudBackend { services: self.services.clone(), dav: self.dav.clone(), friends_fn: self.friends_fn.clone(), backup: self.backup.clone(), media_friends: self.media_friends.clone(), replicate_fn: self.replicate_fn.clone(), site: self.site.clone(), pull: self.pull.clone(), organize: self.organize.clone(), send_fn: self.send_fn.clone(), seer: self.seer.clone(), zen_credit: self.zen_credit.clone() }))
             .faces(Arc::new(FacesBackend { services: self.services.clone(), dav: self.dav.clone(), faces_enabled: self.faces_enabled, thumbs_fn: self.thumbs_fn.clone(), pending_fn: self.pending_fn.clone(), contacts: self.contacts.clone(), board: self.board, book: self.book.clone() }))
             .coop(Arc::new(CoopBackend { services: self.services.clone(), dav: self.dav.clone(), coop: self.coop.clone(), constellation: self.constellation.clone(), member_history: self.member_history.clone(), charter: self.charter.clone(), billet: self.billet.clone(), zen_credit: self.zen_credit.clone(), island: self.island.clone(), stations: self.stations.clone(), oc: self.oc.clone() }))
             .social(Arc::new(SocialBackend { services: self.services.clone(), dav: self.dav.clone(), memory: self.memory.clone(), contacts: self.contacts.clone(), agents: self.agents.clone(), cosurf: self.cosurf.clone(), ai: self.ai.clone(), reading: self.reading.clone(), book: self.book.clone(), chat: self.chat.clone(), ice: self.ice.clone(), presence: self.presence.clone(), people: self.people.clone(), invites: self.invites.clone(), seer: self.seer.clone() }))

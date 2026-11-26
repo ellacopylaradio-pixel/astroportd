@@ -17,6 +17,27 @@ pub fn memo_batch(dest: MultiAddress<AccountId32, ()>, amount: Amount, mode: Tra
     runtime::tx().utility().batch(vec![RuntimeCall::Balances(transfer), RuntimeCall::System(SystemCall::remark_with_event { remark: memo.as_bytes().to_vec() })])
 }
 
+/// Lot strictement atomique `utility.batch_all([virements..., system.remark_with_event(mémo)?])` :
+/// tout passe dans un seul bloc ou rien ne part (paiement en cascade Voie A / règlement d'ardoise).
+pub fn atomic_batch(transfers: &[(MultiAddress<AccountId32, ()>, Amount)], mode: TransferMode, memo: Option<&str>) -> impl subxt::tx::Payload {
+    use astro_g1_runtime::runtime;
+    use astro_g1_runtime::runtime::runtime_types::frame_system::pallet::Call as SystemCall;
+    use astro_g1_runtime::runtime::runtime_types::g1_runtime::RuntimeCall;
+    use astro_g1_runtime::runtime::runtime_types::pallet_balances::pallet::Call as BalancesCall;
+    let mut calls: Vec<RuntimeCall> = Vec::with_capacity(transfers.len() + usize::from(memo.is_some()));
+    for (dest, amount) in transfers {
+        let transfer = match mode {
+            TransferMode::AllowDeath => BalancesCall::transfer_allow_death { dest: dest.clone(), value: amount.0 },
+            TransferMode::KeepAlive => BalancesCall::transfer_keep_alive { dest: dest.clone(), value: amount.0 },
+        };
+        calls.push(RuntimeCall::Balances(transfer));
+    }
+    if let Some(m) = memo {
+        calls.push(RuntimeCall::System(SystemCall::remark_with_event { remark: m.as_bytes().to_vec() }));
+    }
+    runtime::tx().utility().batch_all(calls)
+}
+
 
 /// Paramètres de chaîne nécessaires à une signature hors ligne.
 #[derive(Debug, Clone, Copy)]
@@ -97,7 +118,7 @@ mod tests {
     #[test]
     fn metadata_is_the_g1_runtime_with_the_calls_we_use() {
         let m = metadata().unwrap();
-        for (pallet, call) in [("Balances", "transfer_allow_death"), ("Balances", "transfer_keep_alive"), ("Utility", "batch"), ("System", "remark_with_event")] {
+        for (pallet, call) in [("Balances", "transfer_allow_death"), ("Balances", "transfer_keep_alive"), ("Utility", "batch"), ("Utility", "batch_all"), ("System", "remark_with_event")] {
             assert!(m.pallet_by_name(pallet).and_then(|p| p.call_variant_by_name(call)).is_some(), "{pallet}::{call}");
         }
     }

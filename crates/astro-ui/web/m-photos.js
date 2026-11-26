@@ -32,7 +32,7 @@ export default c => {
   const actions = (it, isImg) => [
     ...(isImg ? [[-1, '↺', 'Tourner vers la gauche'], [1, '↻', 'Tourner vers la droite']].map(([q, g, l]) => h('button', { class: 'ghost', 'aria-label': t(l), title: t(l), onclick: () => turn([it.path], q) }, g)) : []),
     copyText(it),
-    ...(isImg ? [plant(it)] : []),
+    ...(isImg ? [plant(it), publishCommon(it)] : []),
     h('button', { class: 'ghost danger', onclick: () => remove([it.path]) }, t('Supprimer'))];
   // « Copier le texte » : seulement si la station a lu un texte dans ce fichier (OCR).
   function copyText(it) {
@@ -43,5 +43,14 @@ export default c => {
   }
   // « Fiche plante » : ouvre la fiche de la photo (reconnaissance, ce qu'on en sait, notes).
   const plant = it => h('a', { class: 'btn ghost', href: '#/plante?path=' + encodeURIComponent(it.path), onclick: () => viewer.close() }, '🌿 ' + t('Fiche plante'));
+  // « Publier en commun » : crée la fiche signée CC-BY-SA-4.0 (remix autorisé, part minimale 40 %) dans la médiathèque.
+  const publishCommon = it => h('button', { class: 'ghost', onclick: async ev => {
+    const b = ev.target; b.disabled = true;
+    const title = names(it.path).replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || names(it.path);
+    try {
+      await api('/api/v1/ucloud/media/remix', { method: 'POST', body: { title, kind: 'photo', spdx: 'CC-BY-SA-4.0', allow_remix: true, remix_min_bps: 4000, pricing: { mode: 'hat', suggested_deci_zen: 10 }, file_path: it.path } });
+      toast(t('Photo publiée dans la médiathèque (CC-BY-SA)'), 1);
+    } catch (e) { toast(e.message, 0); b.disabled = false; }
+  } }, '✦ ' + t('Publier en commun'));
   return { turn, remove, actions };
 };

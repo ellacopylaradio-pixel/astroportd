@@ -1,3 +1,15 @@
+## astroportd 2.2.0 — Partage N¹ en chaîne, cascade de Ẑen Voie A, remixes recette et atlas botanique
+
+- **Moteur de partage en cascade et DAG de remix (`crates/astro-economy/src/cascade.rs`)** : arithmétique entière exacte en `DeciZen` (`1 DeciZen = 0,10 Ẑen = 0,01 Ğ1`), signatures BIP-340 indépendantes (`CommonsBlock`, sauts `ShareChain`, contresignature de générique `Credit::attest`), aplatissement récursif du DAG (`flatten_dag`, plancher `remix_min_bps`, fusion des diamants) et filtrage WoT anti-Sybil des relais éligibles à la tranche Diffusion.
+- **Transport NIP-59, liste officielle WoT et remixes « recette » (`src/cascade_share.rs`, `src/sharing.rs`, `src/share_inbox.rs`, `src/media_share.rs`)** : la lignée `ShareChain` circule chiffrée dans les enveloppes NIP-59 (y compris pour les fiches recette sans duplication de blob via `fiche_work_sha`), compteur public facultatif `kind 30005` filtré par la toile des rencontres prouvées (`POST /api/v1/ucloud/media/chain/register`), contresignature co-auteur (`POST .../credit/attest`), sous-titres `.vtt`/`.srt` en recette et prise en charge des communs sur photos, plantes, documents (PDF) et articles.
+- **Paiement Voie A atomique, retombées, merci NIP-59 et ardoise groupée (`crates/astro-duniter`, `src/zen_credit.rs`, `src/cascade_features.rs`)** :
+  - Lot atomique `utility.batch_all` (`Chain::transfer_batch`) sur Duniter v2s (ou promesses en mode île), contrôle préalable du dépôt existentiel Ğ1 (`1 Ğ1`) et de la frontière de plan, reçu Nostr `kind 30852`.
+  - **Mes retombées** (`GET /api/v1/ucloud/media/earnings`) : synthèse créations / relais / œuvres soutenues / derniers soutiens reçus.
+  - **Gratitude chiffrée** : mot de merci facultatif (signé ou anonyme) envoyé en NIP-59 aux bénéficiaires distants et notifié en local.
+  - **Ardoise groupée** (`GET/POST /api/v1/ucloud/media/slate`, `POST .../slate/settle`) : empilage rapide `♡ +0,50 Ẑ`, fusion de tous les bénéficiaires et règlement en un seul lot atomique.
+- **Atlas botanique collaboratif et ergonomie web (`m-media.js`, `m-media-cascade.js`, `m-plant.js`, `m-photos.js`, `m-files.js`, traductions `en`/`es`)** : bouton *Publier en commun* en un geste depuis Photos et Fichiers, détection automatique de la fiche parente dans Fiche plante (sans notes ni GPS fin), onglet *Atlas du cercle* (`GET /api/v1/ucloud/plants/atlas`, maille UMAP `0,01°` et carte SVG hors ligne), budget des écrans à la demande : 920 Ko bruts, 360 Ko compressés (< 12 Ko par écran).
+- Guide régénéré (version 2.2.0).
+
 ## astroportd 2.1.1 — vidéos à soi partageables, navigateur des agents sur serveur, conception du partage en chaîne
 
 - **Créer la fiche d'une vidéo** déposée sans fiche (Médiathèque › Créer la fiche), avec le choix d'une licence (CC BY, BY-SA, BY-NC, BY-NC-SA, CC0) : la vidéo se corrige puis se partage avec les amis (étiquette de licence comprise).

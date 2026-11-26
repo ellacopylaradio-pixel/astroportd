@@ -150,6 +150,27 @@ impl Fiche {
             self.dangers = if self.dangers.trim().is_empty() { why.to_owned() } else { format!("{why}\n\n{}", self.dangers.trim()) };
         }
     }
+
+    /// Extrait les données botaniques partageables vers la base commune (`PlantData` d'une fiche `.media.json`).
+    /// Retire volontairement les notes personnelles (`notes`) et les propositions brutes ; la localisation est limitée à la
+    /// maille UMAP arrondie (`0,01°`), jamais un GPS fin. Rend `None` si aucune espèce n'est retenue.
+    pub fn to_commons_plant_data(&self, umap: Option<String>, observed_at: Option<i64>) -> Option<astro_economy::cascade::PlantData> {
+        let sp = self.species.as_ref().filter(|s| !s.scientific.trim().is_empty())?;
+        Some(astro_economy::cascade::PlantData {
+            scientific: sp.scientific.trim().to_owned(),
+            common: sp.common.clone(),
+            family: sp.family.trim().to_owned(),
+            gbif: sp.gbif.clone(),
+            umap: umap.map(|u| u.trim().to_owned()).filter(|u| !u.is_empty()),
+            observed_at,
+            description: self.description.trim().to_owned(),
+            edible: self.edible.trim().to_owned(),
+            preparation: self.preparation.trim().to_owned(),
+            medicinal: self.medicinal.trim().to_owned(),
+            dangers: self.dangers.trim().to_owned(),
+            wiki_source_url: self.source.as_ref().map(|s| s.url.clone()).filter(|u| !u.is_empty()),
+        })
+    }
 }
 
 /// Nom du fichier de la fiche d'une photo d'empreinte `sha`.
@@ -408,7 +429,7 @@ pub async fn save<B: BlobStore>(dav: &Arc<DavState<B>>, owner: &str, f: &Fiche) 
 }
 
 /// Fiche de la photo d'empreinte `sha` et de chemin `photo` (retrouvée par son chemin si la photo a été tournée).
-async fn find(db: &Db, owner: &str, sha: &str, photo: &str) -> Result<Option<Fiche>, String> {
+pub async fn find(db: &Db, owner: &str, sha: &str, photo: &str) -> Result<Option<Fiche>, String> {
     let (o, s, p) = (owner.to_owned(), sha.to_owned(), photo.to_owned());
     let raw: Option<String> = db
         .readers()
@@ -425,7 +446,8 @@ pub async fn view<B: BlobStore>(dav: &Arc<DavState<B>>, uplanet_name: &str, owne
     let fiche = find(&dav.db, owner, &sha, path).await?;
     let exists = fiche.is_some();
     let fiche = fiche.unwrap_or_else(|| Fiche { v: 1, sha: sha.clone(), photo: path.to_owned(), ..Fiche::default() });
-    Ok(json!({ "available": plantnet::api_key(&dav.db, uplanet_name).await.is_some(), "exists": exists, "fiche": fiche }))
+    let parent_fiche = crate::cascade_share::find_parent_fiche_for_photo(dav, owner, path).await;
+    Ok(json!({ "available": plantnet::api_key(&dav.db, uplanet_name).await.is_some(), "exists": exists, "fiche": fiche, "parent_fiche": parent_fiche }))
 }
 
 /// La rubrique « Plantes » est-elle proposée au membre ? Oui si la coopérative a une clé Pl@ntNet, ou s'il a déjà des fiches.
@@ -631,6 +653,30 @@ mod tests {
         let s = "Une phrase assez longue pour compter. ".repeat(100);
         let c = clip(&s, 200);
         assert!(c.chars().count() <= 200 && c.ends_with('.'), "{c}");
+    }
+
+    #[test]
+    fn commons_export_keeps_botanical_knowledge_and_drops_private_notes() {
+        let empty = Fiche::default();
+        assert!(empty.to_commons_plant_data(Some("_43.61_1.44".into()), Some(10)).is_none(), "sans espèce : rien");
+        let f = Fiche {
+            species: Some(Species {
+                scientific: "Urtica dioica".into(),
+                common: vec!["Grande ortie".into()],
+                family: "Urticaceae".into(),
+                gbif: Some("5361880".into()),
+            }),
+            edible: "Jeunes pousses cuites.".into(),
+            notes: "Derrière mon cabanon au 12 rue des Lilas".into(),
+            source: Some(Source { title: "Ortie".into(), url: "https://fr.wikipedia.org/wiki/Urtica_dioica".into(), license: "CC BY-SA".into() }),
+            ..Fiche::default()
+        };
+        let p = f.to_commons_plant_data(Some("_43.61_1.44".into()), Some(1_790_000_000)).unwrap();
+        assert_eq!(p.scientific, "Urtica dioica");
+        assert_eq!(p.umap.as_deref(), Some("_43.61_1.44"));
+        assert_eq!(p.wiki_source_url.as_deref(), Some("https://fr.wikipedia.org/wiki/Urtica_dioica"));
+        let serialized = serde_json::to_string(&p).unwrap();
+        assert!(!serialized.contains("cabanon"), "les notes privées ne sortent jamais vers le commun");
     }
 
     /// Essai réel, à la main : `cargo test -p astroportd --lib plant_fiche::tests::real -- --ignored --nocapture`.

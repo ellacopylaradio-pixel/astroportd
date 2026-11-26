@@ -2,6 +2,8 @@
 //!
 //! La structure ne porte que les champs que ce domaine utilise ; elle est assemblée par `StationUi::into_router`.
 
+use rusqlite::OptionalExtension;
+
 use super::*;
 
 /// État du domaine « ucloud ».
@@ -19,6 +21,7 @@ pub struct UcloudBackend<B: BlobStore> {
     pub(super) organize: Option<Arc<crate::organize::OrganizeService<B>>>,
     pub(super) send_fn: Option<SendFn>,
     pub(super) seer: Option<Arc<astro_index::LocalIndexer>>,
+    pub(super) zen_credit: Option<BilletFn>,
 }
 
 impl_auth!(UcloudBackend);
@@ -51,6 +54,28 @@ impl<B: BlobStore> UcloudBackend<B> {
 
     fn pull_service(&self) -> Result<&Arc<crate::webdav_pull::PullService<B>>, ApiError> {
         self.pull.as_ref().ok_or_else(|| ApiError::unavailable("reprise depuis un autre serveur WebDAV non disponible sur cette station"))
+    }
+
+    async fn load_cascade_context(&self, owner: &str, path: &str) -> Result<(astro_economy::cascade::CommonsBlock, astro_economy::cascade::ShareChain), ApiError> {
+        let path = astro_dav::vfs::normalize_path(path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        let fiche = crate::media::read_fiche(&self.dav, owner, &path).await.map_err(ApiError::not_found)?;
+        let commons = crate::media::extract_commons(&fiche).ok_or_else(|| ApiError::bad_request("cette fiche ne porte pas de bloc commons"))?;
+        let chain = match crate::cascade_share::load_chain(&self.dav.db, owner, &commons.content_sha).await {
+            Some(c) => c,
+            None => {
+                let (o, p) = (owner.to_owned(), path.clone());
+                let cid: String = self
+                    .dav
+                    .db
+                    .readers()
+                    .read(move |c| Ok(c.query_row("SELECT cid FROM ucloud_entries WHERE owner_hex = ?1 AND path = ?2 AND type = 'file'", params![o, p], |r| r.get(0)).optional()?.flatten()))
+                    .await
+                    .map_err(db_err)?
+                    .unwrap_or_else(|| "bafkreiroot".into());
+                astro_economy::cascade::ShareChain::new_root(&commons.content_sha, cid, None, &commons.author_pubkey).map_err(|e| ApiError::bad_request(e.to_string()))?
+            }
+        };
+        Ok((commons, chain))
     }
 }
 
@@ -148,6 +173,99 @@ impl<B: BlobStore> UcloudApi for UcloudBackend<B> {
         let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("partage depuis la médiathèque non disponible sur cette station"))?;
         let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
         (f.trace)(who.hex.clone(), path).await.map_err(ApiError::not_found)
+    }
+    async fn media_chain(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("chaîne de partage non disponible sur cette station"))?;
+        let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        (f.chain_info)(who.hex.clone(), path).await.map_err(ApiError::not_found)
+    }
+    async fn media_chain_register(&self, who: &Principal, path: String, register: bool) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("liste officielle non disponible sur cette station"))?;
+        let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        (f.register_official)(who.hex.clone(), path, register).await.map_err(ApiError::bad_request)
+    }
+    async fn media_remix(&self, who: &Principal, body: Value) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("publication vers le commun non disponible sur cette station"))?;
+        (f.publish_remix)(who.hex.clone(), body).await.map_err(ApiError::bad_request)
+    }
+    async fn media_credit_attest(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
+        let f = self.media_friends.as_ref().ok_or_else(|| ApiError::unavailable("contresignature non disponible sur cette station"))?;
+        let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        (f.attest_credit)(who.hex.clone(), path).await.map_err(ApiError::bad_request)
+    }
+    async fn media_pay_preview(&self, who: &Principal, path: String, amount_deci_zen: u64) -> Result<Value, ApiError> {
+        let zc = self.zen_credit.as_ref().ok_or_else(|| ApiError::unavailable("paiement en cascade non activé sur cette station"))?;
+        let (commons, chain) = self.load_cascade_context(&who.hex, &path).await?;
+        let body = who_body(who, json!({ "amount_deci_zen": amount_deci_zen, "commons": commons, "chain": chain }));
+        zc(None, "member_cascade_preview", body).await.map_err(billet_api_error)
+    }
+    async fn media_pay(&self, who: &Principal, path: String, amount_deci_zen: u64, credit_id: String, confirm: bool, note: Option<String>, anonymous: bool) -> Result<Value, ApiError> {
+        let zc = self.zen_credit.as_ref().ok_or_else(|| ApiError::unavailable("paiement en cascade non activé sur cette station"))?;
+        let (commons, chain) = self.load_cascade_context(&who.hex, &path).await?;
+        let title = crate::media::read_fiche(&self.dav, &who.hex, &path).await.ok().and_then(|f| f["title"].as_str().map(str::to_owned)).unwrap_or_default();
+        let body = who_body(who, json!({
+            "amount_deci_zen": amount_deci_zen, "commons": commons, "chain": chain,
+            "credit_id": credit_id, "confirm": confirm, "note": note, "anonymous": anonymous, "title": title,
+        }));
+        zc(None, "member_cascade_pay", body).await.map_err(billet_api_error)
+    }
+    async fn media_earnings(&self, who: &Principal) -> Result<Value, ApiError> {
+        crate::cascade_features::earnings_summary(&self.dav.db, &who.hex).await.map_err(ApiError::bad_request)
+    }
+    async fn media_slate_list(&self, who: &Principal) -> Result<Value, ApiError> {
+        let items = crate::cascade_features::slate_list(&self.dav.db, &who.hex).await.map_err(ApiError::bad_request)?;
+        let total: u64 = items.iter().map(|i| i.amount_deci_zen).sum();
+        Ok(json!({ "items": items, "count": items.len(), "total_deci_zen": total }))
+    }
+    async fn media_slate_update(&self, who: &Principal, body: Value) -> Result<Value, ApiError> {
+        let path = body.get("path").and_then(Value::as_str).ok_or_else(|| ApiError::bad_request("chemin manquant"))?;
+        let path = astro_dav::vfs::normalize_path(path).map_err(|_| ApiError::bad_request("chemin invalide"))?;
+        let items = if body.get("remove").and_then(Value::as_bool) == Some(true) {
+            crate::cascade_features::slate_remove(&self.dav.db, &who.hex, &path).await.map_err(ApiError::bad_request)?
+        } else {
+            let amount = body.get("amount_deci_zen").and_then(Value::as_u64).unwrap_or(5);
+            let add = body.get("add").and_then(Value::as_bool).unwrap_or(true);
+            let fiche = crate::media::read_fiche(&self.dav, &who.hex, &path).await.map_err(ApiError::not_found)?;
+            let commons = crate::media::extract_commons(&fiche).ok_or_else(|| ApiError::bad_request("cette fiche ne porte pas de bloc commons"))?;
+            let title = fiche["title"].as_str().unwrap_or("").to_owned();
+            let entry = crate::cascade_features::SlateEntry {
+                path,
+                work_sha: commons.content_sha,
+                title,
+                amount_deci_zen: amount,
+                note: crate::cascade_features::clean_note(body.get("note").and_then(Value::as_str)),
+                anonymous: body.get("anonymous").and_then(Value::as_bool).unwrap_or(false),
+                added_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0)),
+            };
+            crate::cascade_features::slate_upsert(&self.dav.db, &who.hex, entry, add).await.map_err(ApiError::bad_request)?
+        };
+        let total: u64 = items.iter().map(|i| i.amount_deci_zen).sum();
+        Ok(json!({ "items": items, "count": items.len(), "total_deci_zen": total }))
+    }
+    async fn media_slate_settle(&self, who: &Principal, preview: bool, credit_id: Option<String>, confirm: bool) -> Result<Value, ApiError> {
+        let zc = self.zen_credit.as_ref().ok_or_else(|| ApiError::unavailable("paiement en cascade non activé sur cette station"))?;
+        let entries = crate::cascade_features::slate_list(&self.dav.db, &who.hex).await.map_err(ApiError::bad_request)?;
+        if entries.is_empty() {
+            return Err(ApiError::bad_request("votre ardoise est vide"));
+        }
+        let mut payload_items = Vec::with_capacity(entries.len());
+        for e in &entries {
+            let (commons, chain) = self.load_cascade_context(&who.hex, &e.path).await?;
+            payload_items.push(json!({
+                "commons": commons, "chain": chain, "title": e.title,
+                "amount_deci_zen": e.amount_deci_zen, "note": e.note, "anonymous": e.anonymous,
+            }));
+        }
+        let op = if preview { "member_slate_preview" } else { "member_slate_pay" };
+        let body = who_body(who, json!({ "items": payload_items, "credit_id": credit_id, "confirm": confirm }));
+        let res = zc(None, op, body).await.map_err(billet_api_error)?;
+        if !preview && res["ok"].as_bool() == Some(true) {
+            let _ = crate::cascade_features::slate_clear(&self.dav.db, &who.hex).await;
+        }
+        Ok(res)
+    }
+    async fn plants_atlas(&self, who: &Principal) -> Result<Value, ApiError> {
+        crate::cascade_features::plants_atlas(&self.dav, &who.hex).await.map_err(ApiError::bad_request)
     }
     async fn ucloud_list(&self, who: &Principal, path: String) -> Result<Value, ApiError> {
         let path = astro_dav::vfs::normalize_path(&path).map_err(|_| ApiError::bad_request("chemin invalide"))?;

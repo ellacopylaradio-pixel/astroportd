@@ -1321,6 +1321,17 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
                 Box::pin(async move { astroportd::funds::PrimalSource::primal_of(&*sp, &a).await })
             }));
         }
+        let thank_outbox = mesh_outbox.clone();
+        zc = zc.with_cascade_hooks(
+            media_share_keys.clone(),
+            publish_fn(&event_publisher),
+            Arc::new(move |to: String, wrap: astro_nostr_proto::Event| {
+                let o = thank_outbox.clone();
+                Box::pin(async move {
+                    let _ = astro_facecloud::Outbox::send(&*o, &to, wrap).await;
+                })
+            }),
+        );
         let svc = Arc::new(zc);
         // Dons OpenCollective → Ẑen (l'`oc2uplanet.sh` du legacy) : la station liste, le Capitaine confirme.
         let oc = Arc::new(astroportd::oc_emission::OcEmission::new(db.clone(), uplanet_name.to_string(), svc.clone(), activity.clone()));
@@ -1340,7 +1351,7 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
     ui = ui.with_site(site.clone());
     let (fm_list, fm_request) = (friends_media.clone(), friends_media.clone());
     let media_share = Arc::new(astroportd::media_share::MediaShare::new(dav.clone(), media_share_keys, publish_fn(&event_publisher)));
-    let (ms_set, ms_trace) = (media_share.clone(), media_share);
+    let (ms_set, ms_trace, ms_chain, ms_reg, ms_remix, ms_attest) = (media_share.clone(), media_share.clone(), media_share.clone(), media_share.clone(), media_share.clone(), media_share);
     ui = ui.with_media_friends(astroportd::ui_backend::MediaFriendsFns {
         list: Arc::new(move |owner: String, force: bool| {
             let f = fm_list.clone();
@@ -1357,6 +1368,25 @@ pub async fn run_until(mut a: ServeArgs, shutdown: impl std::future::Future<Outp
         trace: Arc::new(move |owner: String, path: String| {
             let m = ms_trace.clone();
             Box::pin(async move { m.trace(&owner, &path).await })
+        }),
+        chain_info: Arc::new(move |owner: String, path: String| {
+            let m = ms_chain.clone();
+            Box::pin(async move { m.chain_info(&owner, &path).await })
+        }),
+        register_official: Arc::new(move |owner: String, path: String, register: bool| {
+            let m = ms_reg.clone();
+            Box::pin(async move { m.register_official(&owner, &path, register).await })
+        }),
+        publish_remix: Arc::new(move |owner: String, body: serde_json::Value| {
+            let m = ms_remix.clone();
+            Box::pin(async move {
+                let req: astroportd::cascade_share::PublishRemixRequest = serde_json::from_value(body).map_err(|e| format!("requête invalide : {e}"))?;
+                m.publish_remix(&owner, req).await
+            })
+        }),
+        attest_credit: Arc::new(move |owner: String, path: String| {
+            let m = ms_attest.clone();
+            Box::pin(async move { m.attest_credit(&owner, &path).await })
         }),
     });
     let ui = ui::wire(ui, &db, &event_publisher, &uplanet_name, &sharing, &backup, &constellation);
